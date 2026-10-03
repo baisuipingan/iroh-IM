@@ -278,13 +278,28 @@ export const timeline = {
    * 重建视图时（`rebuildCardsForRoom`）要把当前算出来的可用性一起带回来，
    * 否则重建出来的卡片会退回"未知"文案。
    */
-  pushFileCard({ meta, direction, state = 'invited', done = 0, total = 0, error = '', avail }) {
-    if (this.seen.has(`file:${meta.file_id}`)) return;
-    this.seen.add(`file:${meta.file_id}`);
+  pushFileCard({ room = '', meta, direction, state = 'invited', done = 0, total = 0, error = '', avail }) {
+    const key = `file:${room}:${meta.file_id}`;
+    if (this.seen.has(key)) {
+      const existing = this._fileCardEl(meta.file_id, room);
+      if (!existing) return;
+      this.updateFileCard({
+        room,
+        file_id: meta.file_id,
+        state,
+        done,
+        total,
+        error,
+        avail,
+      });
+      return existing;
+    }
+    this.seen.add(key);
 
     const el = document.createElement('div');
     el.className = 'msg msg--file';
     el.dataset.fileId = meta.file_id;
+    if (room) el.dataset.room = room;
     // 记下方向：按钮要按方向给（接收卡片不能出现"重新发送"）
     el.dataset.dir = direction || '';
     // ⚠️ 重建视图时（rebuildCardsForRoom）要把 avail 落到 dataset 上，
@@ -335,24 +350,26 @@ export const timeline = {
     return el;
   },
 
-  /**
-   * 按 `file_id` 找卡片，**对 id 做转义**（P3-15）。
-   * `file_id` 来自对端，不能直接拼进 CSS 选择器。
-   */
-  _fileCardEl(file_id) {
-    const esc = window.CSS && CSS.escape ? CSS.escape(String(file_id)) : String(file_id).replace(/["\\]/g, '\\$&');
-    return $('tl-inner').querySelector(`[data-file-id="${esc}"]`);
+  /** 按 file_id 和当前房间查找卡片，不把对端输入拼进选择器。 */
+  _fileCardEl(file_id, room = this.room) {
+    return [...$('tl-inner').querySelectorAll('.msg--file')].find(
+      (el) => el.dataset.fileId === String(file_id) && (!room || el.dataset.room === room),
+    );
   },
 
   /** 更新卡片状态/进度 */
-  updateFileCard({ file_id, state, done, total, bytes, error, peers, peersDone, peersFailed, avail }) {
+  updateFileCard({ room, file_id, state, done, total, bytes, error, peers, peersDone, peersFailed, avail }) {
     // ⚠️ `file_id` 是**对端自选**的字符串（只过签名、不看格式）。
     //    直接拼进选择器的话，一个 `a"]` 就能让 querySelector 抛 SyntaxError，
     //    而 bus 对监听器有 try/catch 包着 → **异常被吞、进度从此不再更新**（P3-15）。
     //    `CSS.escape` 是标准做法；配合 Rust 侧 validate_meta 的字符集限制，双保险。
     const el = this._fileCardEl(file_id);
     if (!el) return;
-    if (avail) el.dataset.avail = avail;
+    if (room && el.dataset.room && el.dataset.room !== room) return;
+    if (avail !== undefined) {
+      if (avail) el.dataset.avail = avail;
+      else delete el.dataset.avail;
+    }
     const st = el.querySelector('.filecard__state');
     if (st)
       st.textContent = this._fileStateText(state, error, {
@@ -375,6 +392,8 @@ export const timeline = {
         (el.querySelector('.filecard__body') || el.querySelector('.imgcard'))?.appendChild(e);
       }
       e.textContent = error;
+    } else if (error === '') {
+      el.querySelector('.filecard__err')?.remove();
     }
     const m = el.querySelector('.filecard__meta');
     if (m && total) m.title = `${done}/${total} 块${bytes ? `（${U.humanSize(bytes)}）` : ''}`;
@@ -565,9 +584,9 @@ export const timeline = {
 
   /** 把一张文件卡片从时间线上摘掉（用于"移除已失效的接收记录"） */
   removeFileCard(file_id) {
-    const el = this._fileCardEl(file_id);
+    const el = this._fileCardEl(file_id, this.room);
     if (el) el.remove();
-    this.seen.delete(`file:${file_id}`);
+    this.seen.delete(`file:${this.room}:${file_id}`);
   },
 
   /**

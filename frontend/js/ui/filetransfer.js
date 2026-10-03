@@ -639,6 +639,32 @@ export const fileTransfer = {
       this._refreshArchived();
       return;
     }
+    // 用户点了历史卡片后会进入 asking。重发的 Invite 必须更新这张已有卡片，
+    // 不能再次发 FILE_CARD 后被时间线的 file_id 去重静默丢掉。
+    if (cur && cur.state === 'asking') {
+      cur.meta = meta;
+      cur.room = room;
+      cur.state = 'invited';
+      cur.done = 0;
+      cur.bytes = 0;
+      cur.total = Math.ceil(meta.size / meta.chunk_size);
+      cur.error = '';
+      cur.avail = 'live';
+      cur.fromProof = false;
+      quarantined.delete(meta.file_id);
+      rememberInvite(room, meta);
+      bus.emit(EV.FILE_CARD_UPDATE, {
+        room,
+        file_id: meta.file_id,
+        state: 'invited',
+        done: 0,
+        total: cur.total,
+        bytes: 0,
+        error: '',
+        avail: '',
+      });
+      return;
+    }
     transfers.set(meta.file_id, {
       meta,
       room,

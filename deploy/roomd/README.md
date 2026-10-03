@@ -59,6 +59,12 @@ ssh root@<host> 'docker compose -f /opt/iroh/roomd/docker-compose.yml logs | gre
 
 `data/identity.key`（hex）是它的身份，**丢了 EndpointId 就变**，前端配置也得跟着改。备份它。
 
+## 历史访问边界
+
+历史 ALPN 没有应用层身份认证：知道 roomd EndpointId、relay 地址和房间名的客户端都可以请求对应历史。请求大小、连接并发和处理时长有资源上限，但这些限制**不是访问控制**；`relay_token` 也不是历史服务的用户白名单。不要把私密房间历史托管到不受信任的 roomd。
+
+每个房间内存最多保留 5000 条或 16 MiB（先达到者生效），单个 JSONL 文件上限为 64 MiB，超出后会压缩为内存保留的最近记录。
+
 ## 消息可信度
 
 所有消息都用作者的 ed25519 私钥签名，接收方用 EndpointId（就是公钥）验签。

@@ -10,7 +10,7 @@ const ROOM: &str = "attack-room";
 use iroh_web::filetransfer::{CtrlBody, FileCtrl, FileMeta, SignedCtrl};
 use iroh_web::room::{ChatMessage, HistoryStore};
 
-fn message(key: &SecretKey, nickname: &str, text: &str, ts: u64) -> ChatMessage {
+fn message(key: &SecretKey, nickname: &str, text: &str, ts: u64, room: &str) -> ChatMessage {
     ChatMessage {
         id: String::new(),
         from: key.public().to_string(),
@@ -20,7 +20,7 @@ fn message(key: &SecretKey, nickname: &str, text: &str, ts: u64) -> ChatMessage 
         sig: String::new(),
         file: None,
     }
-    .sign(key, ROOM)
+    .sign(key, room)
 }
 
 fn main() {
@@ -36,7 +36,7 @@ fn main() {
 
     // ── 攻击 1：改昵称+正文，签名仍然有效（分隔符歧义）──────────────
     println!("\n【攻击 1】分隔符歧义：昵称 Alice + 正文 A|B → 昵称 Alice|A + 正文 B");
-    let original = message(&author, "Alice", "A|B", 123);
+    let original = message(&author, "Alice", "A|B", 123, ROOM);
     check!("原始消息本身验签通过", original.verify(ROOM));
     let mut modified = original.clone();
     modified.nickname = "Alice|A".to_string();
@@ -50,9 +50,9 @@ fn main() {
     cloned.id = "replacement-id".to_string();
     check!("改 id 后**验签失败**", !cloned.verify(ROOM));
     let memory = HistoryStore::new(None);
-    memory.append("room", original.clone());
-    memory.append("room", cloned);
-    check!("历史里只有 1 条（重放被去重挡下）", memory.count("room") == 1);
+    memory.append(ROOM, original.clone());
+    memory.append(ROOM, cloned);
+    check!("历史里只有 1 条（重放被去重挡下）", memory.count(ROOM) == 1);
 
     // ── 攻击 3：房间名落盘冲突 ────────────────────────────────────
     println!("\n【攻击 3】房间名映射不可逆：team_a / 研发群 / 产品群 是否互相混");
@@ -60,9 +60,9 @@ fn main() {
     let _ = std::fs::remove_dir_all(&root);
     {
         let persisted = HistoryStore::new(Some(root.clone()));
-        persisted.append("team_a", message(&author, "Alice", "underscore-only", 1));
-        persisted.append("研发群", message(&author, "Alice", "engineering-only", 2));
-        persisted.append("产品群", message(&author, "Alice", "product-only", 3));
+        persisted.append("team_a", message(&author, "Alice", "underscore-only", 1, "team_a"));
+        persisted.append("研发群", message(&author, "Alice", "engineering-only", 2, "研发群"));
+        persisted.append("产品群", message(&author, "Alice", "product-only", 3, "产品群"));
     }
     let loaded = HistoryStore::new(Some(root.clone()));
     loaded.load_from_disk();
@@ -100,7 +100,7 @@ fn main() {
     for index in 0..51u32 {
         paged.append(
             "burst",
-            message(&author, "Alice", &format!("burst-{index}"), 123),
+            message(&author, "Alice", &format!("burst-{index}"), 123, "burst"),
         );
     }
     let latest = paged.recent_before("burst", None, 50);

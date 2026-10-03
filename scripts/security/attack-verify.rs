@@ -3,11 +3,14 @@
 //! 每一段都对照 /tmp/iroh-review-native.rs 的原始攻击：
 //! 原来 `assert!` 的是"攻击成功"，这里 `assert!` 的是"攻击被挡住"。
 
-use iroh::{PublicKey, SecretKey};
+use iroh::SecretKey;
+
+/// v4：签名载荷绑定房间，测试统一用这个房间名
+const ROOM: &str = "attack-room";
 use iroh_web::filetransfer::{CtrlBody, FileCtrl, FileMeta, SignedCtrl};
 use iroh_web::room::{ChatMessage, HistoryStore};
 
-fn message(key: &SecretKey, nickname: &str, text: &str, ts: u64) -> ChatMessage {
+fn message(key: &SecretKey, nickname: &str, text: &str, ts: u64, room: &str) -> ChatMessage {
     ChatMessage {
         id: String::new(),
         from: key.public().to_string(),
@@ -17,7 +20,7 @@ fn message(key: &SecretKey, nickname: &str, text: &str, ts: u64) -> ChatMessage 
         sig: String::new(),
         file: None,
     }
-    .sign(key)
+    .sign(key, room)
 }
 
 fn main() {
@@ -33,23 +36,23 @@ fn main() {
 
     // ── 攻击 1：改昵称+正文，签名仍然有效（分隔符歧义）──────────────
     println!("\n【攻击 1】分隔符歧义：昵称 Alice + 正文 A|B → 昵称 Alice|A + 正文 B");
-    let original = message(&author, "Alice", "A|B", 123);
-    check!("原始消息本身验签通过", original.verify());
+    let original = message(&author, "Alice", "A|B", 123, ROOM);
+    check!("原始消息本身验签通过", original.verify(ROOM));
     let mut modified = original.clone();
     modified.nickname = "Alice|A".to_string();
     modified.text = "B".to_string();
-    check!("规范化串**不再相同**（歧义已消除）", original.canonical() != modified.canonical());
-    check!("改过的消息**验签失败**（攻击被挡住）", !modified.verify());
+    check!("规范化串**不再相同**（歧义已消除）", original.canonical(ROOM) != modified.canonical(ROOM));
+    check!("改过的消息**验签失败**（攻击被挡住）", !modified.verify(ROOM));
 
     // ── 攻击 2：改 id 重放 ────────────────────────────────────────
     println!("\n【攻击 2】改 id 重放：同一条签名消息换个 id 塞两次");
     let mut cloned = original.clone();
     cloned.id = "replacement-id".to_string();
-    check!("改 id 后**验签失败**", !cloned.verify());
+    check!("改 id 后**验签失败**", !cloned.verify(ROOM));
     let memory = HistoryStore::new(None);
-    memory.append("room", original.clone());
-    memory.append("room", cloned);
-    check!("历史里只有 1 条（重放被去重挡下）", memory.count("room") == 1);
+    memory.append(ROOM, original.clone());
+    memory.append(ROOM, cloned);
+    check!("历史里只有 1 条（重放被去重挡下）", memory.count(ROOM) == 1);
 
     // ── 攻击 3：房间名落盘冲突 ────────────────────────────────────
     println!("\n【攻击 3】房间名映射不可逆：team_a / 研发群 / 产品群 是否互相混");
@@ -57,9 +60,9 @@ fn main() {
     let _ = std::fs::remove_dir_all(&root);
     {
         let persisted = HistoryStore::new(Some(root.clone()));
-        persisted.append("team_a", message(&author, "Alice", "underscore-only", 1));
-        persisted.append("研发群", message(&author, "Alice", "engineering-only", 2));
-        persisted.append("产品群", message(&author, "Alice", "product-only", 3));
+        persisted.append("team_a", message(&author, "Alice", "underscore-only", 1, "team_a"));
+        persisted.append("研发群", message(&author, "Alice", "engineering-only", 2, "研发群"));
+        persisted.append("产品群", message(&author, "Alice", "product-only", 3, "产品群"));
     }
     let loaded = HistoryStore::new(Some(root.clone()));
     loaded.load_from_disk();
@@ -83,13 +86,13 @@ fn main() {
         sender_relay: "https://relay.invalid".to_string(),
         ts: 1,
     };
-    let mut control = SignedCtrl::sign(&author, &FileCtrl::Invite(metadata), 1);
-    check!("原始邀约验签通过", control.verify().is_some());
+    let mut control = SignedCtrl::sign(&author, &FileCtrl::Invite(metadata), 1, ROOM);
+    check!("原始邀约验签通过", control.verify(ROOM).is_some());
     if let CtrlBody::Invite(m) = &mut control.body {
         m.sender = SecretKey::generate().public().to_string();
         m.ts = 999_999;
     }
-    check!("改 sender / ts 后**验签失败**（攻击被挡住）", control.verify().is_none());
+    check!("改 sender / ts 后**验签失败**（攻击被挡住）", control.verify(ROOM).is_none());
 
     // ── 攻击 5：同一毫秒 51 条消息翻页漏最后一条 ──────────────────
     println!("\n【攻击 5】同一毫秒 51 条消息，翻页是否会漏掉第 51 条");
@@ -97,7 +100,7 @@ fn main() {
     for index in 0..51u32 {
         paged.append(
             "burst",
-            message(&author, "Alice", &format!("burst-{index}"), 123),
+            message(&author, "Alice", &format!("burst-{index}"), 123, "burst"),
         );
     }
     let latest = paged.recent_before("burst", None, 50);
@@ -111,21 +114,21 @@ fn main() {
     // ── 攻击 6：Presence 文件清单分隔符歧义 ───────────────────────
     println!("\n【攻击 6】心跳里的文件清单：[\"x,y\"] 与 [\"x\",\"y\"] 是否同一载荷");
     use iroh_web::room::Presence;
-    let a = Presence::signed(&author, "n", vec!["x,y".into()], 1);
-    let b = Presence::signed(&author, "n", vec!["x".into(), "y".into()], 1);
-    check!("两种清单的规范化串**不同**", a.canonical() != b.canonical());
+    let a = Presence::signed(&author, "n", vec!["x,y".into()], 1, ROOM);
+    let b = Presence::signed(&author, "n", vec!["x".into(), "y".into()], 1, ROOM);
+    check!("两种清单的规范化串**不同**", a.canonical(ROOM) != b.canonical(ROOM));
 
     // ── 攻击 7：改 Leave / FileQuery 字段 ─────────────────────────
     println!("\n【攻击 7】改离开声明 / 可用性质询的字段");
     use iroh_web::room::{FileQuery, LeaveMsg};
-    let leave = LeaveMsg::signed(&author);
+    let leave = LeaveMsg::signed(&author, ROOM);
     let mut l = leave.clone();
     l.ts += 1;
-    check!("改 Leave.ts 后**验签失败**", !l.verify());
-    let q = FileQuery::signed(&author, "fid", "want");
+    check!("改 Leave.ts 后**验签失败**", !l.verify(ROOM));
+    let q = FileQuery::signed(&author, "fid", "want", ROOM);
     let mut qq = q.clone();
     qq.want = "someone-else".into();
-    check!("改 FileQuery.want 后**验签失败**", !qq.verify());
+    check!("改 FileQuery.want 后**验签失败**", !qq.verify(ROOM));
 
     println!("\n总计 PASS={pass} FAIL={fail}");
     if fail > 0 { std::process::exit(1); }

@@ -36,6 +36,9 @@
 
 let wasm = null; // wasm 模块（含 RoomNode / JsHasher）
 let node = null; // RoomNode 实例
+let currentRoom = ''; // Rust 当前实际订阅的房间；文件清单必须按它隔离
+let roomJoinGeneration = 0;
+let roomSwitching = false;
 let build = 'v1'; // wasm 构建号，用于破缓存
 /** 测试模式：开启后把每次写入的块序号也回传（只回序号，不回数据） */
 let testMode = false;
@@ -155,7 +158,7 @@ function handleNodeEvent(ev) {
       // 那些"已过期"的卡片也会跟着翻回可接收。
       const fid = ev.file_id ?? ev.fileId;
       const t = outFiles.get(fid);
-      if (t) {
+      if (!roomSwitching && t && ev.room === currentRoom && t.room === ev.room) {
         // ⚠️ 必须带 t.room：重发也要落在文件原本所属的房间。
         //    不带的话会用节点当前房间 —— 切过房间就会把重发发到别处。
         node.invite_file(JSON.stringify(t.meta), t.room || '').catch(() => {});
@@ -254,10 +257,17 @@ function evictOutFiles() {
 
 /** 把"当前还能发出的文件"同步给 Rust —— 心跳会广播它，别人据此判断
  *  历史里那个文件此刻能不能收。淘汰掉的自然就从清单里消失了。 */
-function syncAvailableFiles() {
+function syncAvailableFiles(room = currentRoom) {
+  if (roomSwitching) return;
   try {
-    // 最新在前：`outFiles` 是插入序，倒过来就是"最近发的优先"
-    node.set_available_files([...outFiles.keys()].reverse().slice(0, OUT_HB_MAX));
+    // 最新在前：`outFiles` 是插入序，倒过来就是"最近发的优先"。
+    // 关键是只广播当前房间的文件，切房后不能把旧房间的 file_id 泄露出去。
+    const ids = [...outFiles.entries()]
+      .filter(([, entry]) => entry.room === room)
+      .map(([id]) => id)
+      .reverse()
+      .slice(0, OUT_HB_MAX);
+    node.set_available_files(ids);
   } catch {
     /* 节点还没起来：起来后 join 那一步会补一次 */
   }
@@ -839,16 +849,50 @@ self.onmessage = async (e) => {
           value = null;
           break;
         case 'join':
-          await node.join(args[0], args[1]);
-          // Rust 侧 join 会把"可发送文件"清空（换房间了），这里补一次。
-          // 同一份 outFiles 在换房间后依然有效（它们还在内存里）。
-          syncAvailableFiles();
+          {
+            const generation = ++roomJoinGeneration;
+            const joiningRoom = String(args[0] || '');
+            roomSwitching = true;
+            try {
+              await node.join(joiningRoom, args[1]);
+              if (generation === roomJoinGeneration) {
+                currentRoom = joiningRoom;
+                roomSwitching = false;
+                // Rust 侧 join 会清空本地文件清单；只补回新房间所属文件。
+                syncAvailableFiles();
+              }
+            } catch (error) {
+              if (generation === roomJoinGeneration) {
+                currentRoom = '';
+                roomSwitching = false;
+                syncAvailableFiles();
+              }
+              throw error;
+            }
+          }
           value = null;
           break;
         case 'leaveRoom':
           // 切房间时**先广播"我离开了"再退订**（在 net.js 的 joinRoom 里调用）。
           // 这是唯一能可靠发出离开声明的时机，别人不用等 25~45 秒的心跳超时。
-          await node.leave_room();
+          {
+            const generation = ++roomJoinGeneration;
+            roomSwitching = true;
+            try {
+              await node.leave_room();
+              if (generation === roomJoinGeneration) {
+                currentRoom = '';
+                roomSwitching = false;
+                syncAvailableFiles();
+              }
+            } catch (error) {
+              if (generation === roomJoinGeneration) {
+                roomSwitching = false;
+                syncAvailableFiles();
+              }
+              throw error;
+            }
+          }
           value = null;
           break;
         case 'queryFile':

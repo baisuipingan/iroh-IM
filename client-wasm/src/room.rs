@@ -34,7 +34,7 @@ use n0_future::{
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::filetransfer::{
@@ -797,7 +797,29 @@ pub fn snapshot_get(snaps: &Snapshots, room: &str) -> Option<RoomSnapshot> {
     if s.members.is_empty() {
         return None;
     }
-    Some(s.clone())
+    let mut members = Vec::new();
+    let mut used_bytes = 0usize;
+    for member in s.members.iter().rev() {
+        if members.len() >= HISTORY_SNAPSHOT_MAX_MEMBERS {
+            break;
+        }
+        let member_bytes = serde_json::to_vec(member)
+            .map(|bytes| bytes.len())
+            .unwrap_or(usize::MAX);
+        if member_bytes > HISTORY_SNAPSHOT_MEMBER_MAX_BYTES {
+            continue;
+        }
+        if used_bytes.saturating_add(member_bytes) > HISTORY_SNAPSHOT_MAX_BYTES {
+            break;
+        }
+        used_bytes += member_bytes;
+        members.push(member.clone());
+    }
+    if members.is_empty() {
+        return None;
+    }
+    members.reverse();
+    Some(RoomSnapshot { at: s.at, members })
 }
 
 // ---------------------------------------------------------------------------
@@ -856,14 +878,107 @@ fn room_hash(room: &str) -> String {
 
 /// 每个房间在**内存**里保留的最大条数。
 ///
-/// 注意它与磁盘是两回事：磁盘是只追加的完整日志（没有保留策略），
-/// 这里限制的是常驻节点的内存占用。
+/// 它与下面的字节上限一起生效，避免单条大消息把条数上限变成假上限。
 pub const MAX_MEM_HISTORY: usize = 5000;
+/// 每个房间在内存里保留的最大序列化字节数。
+pub const MAX_MEM_HISTORY_BYTES: usize = 16 * 1024 * 1024;
+/// 每个房间的历史文件硬上限。超过后会用内存保留内容原子重写。
+pub const MAX_HISTORY_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// 单条 JSONL 记录的读取上限，避免异常文件的一行无界增长。
+const MAX_HISTORY_LINE_BYTES: usize = MAX_MESSAGE_SIZE;
+const MAX_HISTORY_HEADER_BYTES: usize = 4096;
+/// 历史请求的输入上限。
+const MAX_HISTORY_REQUEST_BYTES: usize = 64 * 1024;
+/// 历史请求中房间名和游标 id 的字段上限。
+const MAX_HISTORY_ROOM_BYTES: usize = 256;
+const MAX_HISTORY_CURSOR_ID_BYTES: usize = 256;
+/// 历史服务最多同时处理的连接数。
+const MAX_HISTORY_CONCURRENT: usize = 64;
+const HISTORY_PAGE_MAX: usize = 1000;
+const HISTORY_SNAPSHOT_MAX_BYTES: usize = 256 * 1024;
+const HISTORY_SNAPSHOT_MAX_MEMBERS: usize = 128;
+const HISTORY_SNAPSHOT_MEMBER_MAX_BYTES: usize = 2 * 1024;
+const HISTORY_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+const HISTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const HISTORY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+const HISTORY_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn serialized_message_bytes(msg: &ChatMessage) -> usize {
+    serde_json::to_vec(msg)
+        .map(|line| line.len().saturating_add(1))
+        .unwrap_or(usize::MAX)
+}
+
+/// 按条数和序列化字节数双重裁剪，始终优先保留最新消息。
+fn cap_history_in_place(list: &mut Vec<ChatMessage>, max_count: usize, max_bytes: usize) {
+    if list.is_empty() {
+        return;
+    }
+    let mut used_bytes = 0usize;
+    let mut keep_from = list.len();
+    for (index, msg) in list.iter().enumerate().rev() {
+        let count = list.len() - index;
+        let bytes = serialized_message_bytes(msg);
+        if count > max_count
+            || (used_bytes.saturating_add(bytes) > max_bytes && keep_from < list.len())
+        {
+            break;
+        }
+        used_bytes = used_bytes.saturating_add(bytes);
+        keep_from = index;
+    }
+    if keep_from > 0 {
+        list.drain(0..keep_from);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_history_file_atomic(
+    path: &std::path::Path,
+    room: &str,
+    messages: &[ChatMessage],
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let temp = path.with_extension("jsonl.tmp");
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temp)?;
+        let header =
+            serde_json::to_string(&RoomHeader::new(room)).map_err(std::io::Error::other)?;
+        writeln!(file, "{header}")?;
+        for message in messages {
+            let line = serde_json::to_string(message).map_err(std::io::Error::other)?;
+            writeln!(file, "{line}")?;
+        }
+        file.sync_all()?;
+        std::fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+fn valid_history_room(room: &str) -> bool {
+    !room.is_empty()
+        && room.len() <= MAX_HISTORY_ROOM_BYTES
+        && !room.chars().any(char::is_control)
+}
+
+fn valid_history_request(request: &HistoryRequest) -> bool {
+    valid_history_room(&request.room)
+        && request.before.as_ref().is_none_or(|(_, id)| {
+            !id.is_empty()
+                && id.len() <= MAX_HISTORY_CURSOR_ID_BYTES
+                && !id.chars().any(char::is_control)
+        })
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct HistoryStore {
     dir: Option<std::path::PathBuf>,
     mem: Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>,
+    append_lock: Arc<Mutex<()>>,
 }
 
 impl HistoryStore {
@@ -871,6 +986,7 @@ impl HistoryStore {
         Self {
             dir,
             mem: Arc::new(Mutex::new(HashMap::new())),
+            append_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -887,6 +1003,7 @@ impl HistoryStore {
     /// 历史是**持久化**的：一旦写进去，以后每次重启都会加载出来。
     /// 所以这里做一次兜底校验，代价可以忽略（ed25519 验签 ~50µs）。
     pub fn append(&self, room: &str, msg: ChatMessage) -> bool {
+        let _append_guard = self.append_lock.lock().unwrap();
         // ⚠️ 兜底：签名无效 / id 与载荷不符的消息**一律不进历史**。
         //    返回 false 让调用方能察觉（便于测试与排查）。
         if !msg.verify(room) {
@@ -897,6 +1014,15 @@ impl HistoryStore {
             );
             return false;
         }
+        let Ok(encoded) = serde_json::to_vec(&msg) else {
+            warn!("拒绝写入历史：消息序列化失败 room={room}");
+            return false;
+        };
+        if encoded.len() > MAX_HISTORY_LINE_BYTES {
+            warn!("拒绝写入历史：消息超过 {MAX_HISTORY_LINE_BYTES} 字节 room={room}");
+            return false;
+        }
+        let message_bytes = encoded.len() as u64 + 1;
         {
             let mut map = self.mem.lock().unwrap();
             let list = map.entry(room.to_string()).or_default();
@@ -909,11 +1035,7 @@ impl HistoryStore {
             //    依赖插入顺序，而 `recent_before` 又按 (ts, id) 过滤 ——
             //    页边界落在这两条之间时可能重复或漏掉一条（复检 P3-3）。
             list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
-            // 内存里只保留最近的 MAX_MEM_HISTORY 条（磁盘仍是完整追加日志）
-            if list.len() > MAX_MEM_HISTORY {
-                let drop = list.len() - MAX_MEM_HISTORY;
-                list.drain(0..drop);
-            }
+            cap_history_in_place(list, MAX_MEM_HISTORY, MAX_MEM_HISTORY_BYTES);
         }
         // 落盘只在原生做：wasm 下发没有 std::fs，
         // 靠 `if let Some(dir)` 判断是"运行时守规矩"，这里加编译期保护更稳。
@@ -921,38 +1043,33 @@ impl HistoryStore {
         if let Some(dir) = &self.dir {
             if std::fs::create_dir_all(dir).is_ok() {
                 let path = dir.join(format!("{}.jsonl", room_hash(room)));
-                if let Ok(line) = serde_json::to_string(&msg) {
-                    use std::io::Write;
-                    let mut f = match std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&path)
-                    {
-                        Ok(f) => f,
-                        Err(e) => {
-                            // 内存已经写进去了，只是这次没落盘 —— 不算失败，
-                            // 但必须留痕（否则表现为"重启后消息莫名少了"）。
-                            warn!("打开历史文件失败 {}: {e}", path.display());
-                            return true;
-                        }
-                    };
-                    // ⚠️ 只在**文件为空**时写头部 —— 追加时绝不能重复写，
-                    //    否则每条消息后面都跟一个头部，加载时会被当成消息解析失败。
-                    //    用 `metadata().len() == 0` 判断"这是刚创建的空文件"。
-                    if f.metadata().map(|m| m.len() == 0).unwrap_or(false) {
-                        match serde_json::to_string(&RoomHeader::new(room)) {
-                            Ok(h) => {
-                                let _ = writeln!(f, "{h}");
-                            }
-                            Err(e) => {
-                                // 头部写不进去就别写这条消息了 —— 没有头部的文件
-                                // 加载时会被整份跳过（比丢一条消息更糟）。
-                                warn!("序列化历史文件头失败，本次不落盘: {e}");
-                                return true;
-                            }
-                        }
+                let header = serde_json::to_vec(&RoomHeader::new(room)).unwrap_or_default();
+                let file_bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+                let projected_bytes = file_bytes
+                    .saturating_add(message_bytes)
+                    .saturating_add(if file_bytes == 0 { header.len() as u64 + 1 } else { 0 });
+                if projected_bytes > MAX_HISTORY_FILE_BYTES {
+                    let retained = self.mem.lock().unwrap().get(room).cloned().unwrap_or_default();
+                    if let Err(error) = write_history_file_atomic(&path, room, &retained) {
+                        warn!("压缩历史文件失败 {}: {error}", path.display());
                     }
-                    let _ = writeln!(f, "{line}");
+                } else {
+                    use std::io::Write;
+                    let result = (|| -> std::io::Result<()> {
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&path)?;
+                        if file.metadata()?.len() == 0 {
+                            file.write_all(&header)?;
+                            file.write_all(b"\n")?;
+                        }
+                        file.write_all(&encoded)?;
+                        file.write_all(b"\n")
+                    })();
+                    if let Err(error) = result {
+                        warn!("写入历史文件失败 {}: {error}", path.display());
+                    }
                 }
             }
         }
@@ -962,7 +1079,7 @@ impl HistoryStore {
     pub fn recent(&self, room: &str, limit: usize) -> Vec<ChatMessage> {
         let map = self.mem.lock().unwrap();
         let mut list = map.get(room).cloned().unwrap_or_default();
-        list.sort_by_key(|m| m.ts);
+        list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
         let n = list.len();
         if n > limit {
             list.split_off(n - limit)
@@ -1002,6 +1119,39 @@ impl HistoryStore {
         }
     }
 
+    pub fn recent_before_bounded(
+        &self,
+        room: &str,
+        before: Option<(u64, String)>,
+        limit: usize,
+        max_bytes: usize,
+    ) -> Vec<ChatMessage> {
+        let map = self.mem.lock().unwrap();
+        let Some(list) = map.get(room) else {
+            return Vec::new();
+        };
+        let mut selected = Vec::new();
+        let mut used_bytes = 0usize;
+        for msg in list.iter().rev() {
+            if let Some((before_ts, before_id)) = &before {
+                if (msg.ts, &msg.id) >= (*before_ts, before_id) {
+                    continue;
+                }
+            }
+            if selected.len() >= limit {
+                break;
+            }
+            let message_bytes = serde_json::to_vec(msg).map(|line| line.len() + 1).unwrap_or(0);
+            if !selected.is_empty() && used_bytes.saturating_add(message_bytes) > max_bytes {
+                break;
+            }
+            used_bytes = used_bytes.saturating_add(message_bytes);
+            selected.push(msg.clone());
+        }
+        selected.reverse();
+        selected
+    }
+
     pub fn count(&self, room: &str) -> usize {
         self.mem.lock().unwrap().get(room).map(|v| v.len()).unwrap_or(0)
     }
@@ -1009,21 +1159,44 @@ impl HistoryStore {
     /// 启动时从磁盘载入（仅原生；浏览器没有文件系统）。
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_from_disk(&self) {
+        use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+
         let Some(dir) = &self.dir else { return };
         let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let _append_guard = self.append_lock.lock().unwrap();
         let mut map = self.mem.lock().unwrap();
-        for e in entries.flatten() {
-            let path = e.path();
+        let mut compact = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
                 continue;
             }
-            // ⚠️ 房间名**从文件头里读**，不靠文件名反推。
-            //    文件名只是 `blake3(room)` 的哈希（不可逆），强行还原就等于
-            //    又做了一遍有损映射 —— 那正是"研发群/产品群 混进同一房间"的成因。
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let mut it = text.lines();
-            let Some(first) = it.next() else { continue };
-            let Ok(hdr) = serde_json::from_str::<RoomHeader>(first) else {
+            let file_bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            if file_bytes > MAX_HISTORY_FILE_BYTES {
+                warn!(
+                    "历史文件 {} 超过 {MAX_HISTORY_FILE_BYTES} 字节，将只载入并保留最近消息",
+                    path.display()
+                );
+            }
+            let Ok(file) = std::fs::File::open(&path) else { continue };
+            let mut reader = BufReader::new(file);
+            let mut header_line = Vec::new();
+            let header_read = reader
+                .by_ref()
+                .take(MAX_HISTORY_HEADER_BYTES as u64 + 1)
+                .read_until(b'\n', &mut header_line);
+            if header_read.is_err()
+                || header_line.len() > MAX_HISTORY_HEADER_BYTES
+                || !header_line.ends_with(b"\n")
+            {
+                warn!("历史文件 {} 的头部过大或不完整，跳过", path.display());
+                continue;
+            }
+            header_line.pop();
+            if header_line.ends_with(b"\r") {
+                header_line.pop();
+            }
+            let Ok(header) = serde_json::from_slice::<RoomHeader>(&header_line) else {
                 warn!(
                     "历史文件 {} 没有可识别的头部，跳过（不猜房间名）",
                     path.display()
@@ -1037,61 +1210,104 @@ impl HistoryStore {
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            if stem != hdr.hash {
+            if stem != header.hash {
                 warn!(
                     "历史文件 {} 的文件名与头部房间不匹配（{} vs {}），跳过",
-                    path.display(), stem, hdr.hash
+                    path.display(), stem, header.hash
                 );
                 continue;
             }
-            // 头部自校验：marker 与哈希都要对得上才算数
-            if !hdr.matches(&hdr.room.clone()) {
+            // 头部自校验：marker 与哈希都要对得上才算数。
+            if !header.matches(&header.room) {
                 warn!("历史文件 {} 的头部自校验失败，跳过", path.display());
                 continue;
             }
-            let room = hdr.room.clone();
-            let list = map.entry(room.clone()).or_default();
-            let mut skipped = 0usize;
-            for line in it {
-                if let Ok(m) = serde_json::from_str::<ChatMessage>(line) {
-                    // ⚠️ **落盘的历史也必须验签**（缺陷 F8）。
-                    //
-                    // 写路径有兜底校验（`append`），但读路径原来把每一行可解析的
-                    // 都收进来 —— 于是任何改动过 `.jsonl` 的事情（有 shell 权限的人、
-                    // 备份恢复、早期有 bug 的构建）都会在重启后变成
-                    // "看起来已签名"的聊天记录，而客户端从不重新验签、无法察觉。
-                    // 签名机制的意义就是在持久化边界上也要成立。
-                    if m.verify(&room) {
-                        list.push(m);
-                    } else {
-                        skipped += 1;
+            if !valid_history_room(&header.room) {
+                warn!("历史文件 {} 的房间名超出限制，跳过", path.display());
+                continue;
+            }
+            let room = header.room;
+            let header_end = match reader.stream_position() {
+                Ok(position) => position,
+                Err(error) => {
+                    warn!("读取历史文件位置失败 {}: {error}", path.display());
+                    continue;
+                }
+            };
+            if file_bytes > MAX_HISTORY_FILE_BYTES {
+                let start = file_bytes - MAX_HISTORY_FILE_BYTES;
+                if reader.seek(SeekFrom::Start(start)).is_err() {
+                    warn!("定位历史文件尾部失败 {}", path.display());
+                    continue;
+                }
+                if start > header_end {
+                    let mut partial_line = Vec::new();
+                    if reader.read_until(b'\n', &mut partial_line).is_err() {
+                        continue;
                     }
                 }
             }
+            let list = map.entry(room.clone()).or_default();
+            let mut skipped = 0usize;
+            let mut bounded_reader = reader.take(MAX_HISTORY_FILE_BYTES);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                let Ok(read) = bounded_reader.read_until(b'\n', &mut line) else {
+                    skipped += 1;
+                    break;
+                };
+                if read == 0 {
+                    break;
+                }
+                if line.len() > MAX_HISTORY_LINE_BYTES {
+                    skipped += 1;
+                    continue;
+                }
+                if line.ends_with(b"\n") {
+                    line.pop();
+                }
+                if line.ends_with(b"\r") {
+                    line.pop();
+                }
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(message) = serde_json::from_slice::<ChatMessage>(&line) {
+                    if message.verify(&room) {
+                        list.push(message);
+                    } else {
+                        skipped += 1;
+                    }
+                } else {
+                    skipped += 1;
+                }
+            }
             if skipped > 0 {
-                // ⚠️ 这一条在**协议升级后会大量出现**（v3 及更早的消息在 v4 下验不过）。
-                //    所以日志要把"该怎么办"写清楚，否则运维只会看到"消息莫名少了"。
                 warn!(
-                    "历史文件 {} 里有 {skipped} 条验签失败的记录，已丢弃。\
-                     如果这是协议升级（v3 → v4）之后第一次启动，属预期现象：\
-                     旧历史的签名载荷不含房间标识，无法通过校验 —— 请清空历史目录\
-                     （保留 identity.key）后重新开始。",
+                    "历史文件 {} 里有 {skipped} 条无效或验签失败的记录，已丢弃",
                     path.display()
                 );
             }
-            // ⚠️ 加载时也要裁剪（复检 P3-1）。
-            //    只在 `append` 里裁是个假上限：磁盘是**只追加、从不压缩**的，
-            //    重启时会把整个文件读进内存 —— 内存占用于是正比于"历史上写过的总字节"，
-            //    与"最多 5000 条"完全无关。
-            if list.len() > MAX_MEM_HISTORY {
-                let drop = list.len() - MAX_MEM_HISTORY;
-                list.drain(0..drop);
+            list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
+            let before = list.len();
+            cap_history_in_place(list, MAX_MEM_HISTORY, MAX_MEM_HISTORY_BYTES);
+            if before != list.len() {
                 warn!(
-                    "房间 {room} 的历史超过 {MAX_MEM_HISTORY} 条，内存只保留最近的（磁盘未动）"
+                    "房间 {room} 的历史超过内存上限（{MAX_MEM_HISTORY} 条 / {MAX_MEM_HISTORY_BYTES} 字节），只保留最近消息"
                 );
             }
-            list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
+            if file_bytes > MAX_HISTORY_FILE_BYTES {
+                compact.push((path.clone(), room.clone()));
+            }
             info!("已载入房间 {} 的历史 {} 条", room, list.len());
+        }
+        drop(map);
+        for (path, room) in compact {
+            let messages = self.mem.lock().unwrap().get(&room).cloned().unwrap_or_default();
+            if let Err(error) = write_history_file_atomic(&path, &room, &messages) {
+                warn!("压缩历史文件失败 {}: {error}", path.display());
+            }
         }
     }
 
@@ -1142,6 +1358,7 @@ pub struct HistoryService {
     store: HistoryStore,
     join_tx: Sender<String>,
     snaps: Snapshots,
+    permits: Arc<Semaphore>,
 }
 
 impl HistoryService {
@@ -1152,6 +1369,7 @@ impl HistoryService {
             store,
             join_tx,
             snaps,
+            permits: Arc::new(Semaphore::new(MAX_HISTORY_CONCURRENT)),
         }
     }
 }
@@ -1161,35 +1379,88 @@ impl ProtocolHandler for HistoryService {
         &self,
         connection: iroh::endpoint::Connection,
     ) -> std::result::Result<(), AcceptError> {
-        let (mut send, mut recv) = connection.accept_bi().await?;
-        let req_bytes = read_all(&mut recv)
-            .await
-            .map_err(|e| AcceptError::from_err(std::io::Error::other(e.to_string())))?;
+        let Ok(_permit) = self.permits.clone().try_acquire_owned() else {
+            connection.close(0u8.into(), b"history busy");
+            return Ok(());
+        };
+        let accepted = n0_future::time::timeout(HISTORY_ACCEPT_TIMEOUT, connection.accept_bi()).await;
+        let (mut send, mut recv) = match accepted {
+            Ok(Ok(streams)) => streams,
+            Ok(Err(error)) => return Err(AcceptError::from_err(error)),
+            Err(_) => {
+                connection.close(0u8.into(), b"history accept timeout");
+                return Ok(());
+            }
+        };
+        let request = n0_future::time::timeout(
+            HISTORY_REQUEST_TIMEOUT,
+            read_all_bounded(&mut recv, MAX_HISTORY_REQUEST_BYTES),
+        )
+        .await;
+        let req_bytes = match request {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(error)) => {
+                warn!("拒绝历史请求: {error}");
+                connection.close(0u8.into(), b"invalid history request");
+                return Ok(());
+            }
+            Err(_) => {
+                connection.close(0u8.into(), b"history request timeout");
+                return Ok(());
+            }
+        };
         let req: HistoryRequest = match serde_json::from_slice(&req_bytes) {
             Ok(r) => r,
             Err(e) => {
                 warn!("历史请求解析失败: {e}");
+                connection.close(0u8.into(), b"invalid history request");
                 return Ok(());
             }
         };
+        if !valid_history_request(&req) {
+            warn!("拒绝无效历史请求（字段超出限制或包含控制字符）");
+            connection.close(0u8.into(), b"invalid history request");
+            return Ok(());
+        }
         debug!("历史请求 room={} limit={} 现有={}", req.room, req.limit, self.store.count(&req.room));
 
         // 第一次见到这个房间 → 让 controller 去订阅（常驻节点自动看住每个被访问的房间）
         let _ = self.join_tx.try_send(req.room.clone());
 
+        let snapshot = snapshot_get(&self.snaps, &req.room);
+        let message_budget = if snapshot.is_some() {
+            HISTORY_RESPONSE_MAX_BYTES
+                .saturating_sub(HISTORY_SNAPSHOT_MAX_BYTES + 4096)
+        } else {
+            HISTORY_RESPONSE_MAX_BYTES
+        };
         let resp = HistoryResponse {
             room: req.room.clone(),
-            messages: cap_history_by_bytes(
-                self.store.recent_before(&req.room, req.before, req.limit.min(1000)),
-                HISTORY_RESPONSE_MAX_BYTES,
+            messages: self.store.recent_before_bounded(
+                &req.room,
+                req.before,
+                req.limit.min(HISTORY_PAGE_MAX),
+                message_budget,
             ),
             // 顺带把房间快照给客户端 —— 他进房就能看到"屋里都有谁、谁能提供哪些文件"
-            snapshot: snapshot_get(&self.snaps, &req.room),
+            snapshot,
         };
         let body = serde_json::to_vec(&resp).map_err(AcceptError::from_err)?;
-        send.write_all(&body).await.map_err(AcceptError::from_err)?;
+        match n0_future::time::timeout(HISTORY_RESPONSE_TIMEOUT, send.write_all(&body)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(AcceptError::from_err(error)),
+            Err(_) => {
+                connection.close(0u8.into(), b"history response timeout");
+                return Ok(());
+            }
+        }
         send.finish()?;
-        connection.closed().await;
+        if n0_future::time::timeout(HISTORY_CLOSE_TIMEOUT, connection.closed())
+            .await
+            .is_err()
+        {
+            connection.close(0u8.into(), b"history close timeout");
+        }
         Ok(())
     }
 }
@@ -2525,22 +2796,29 @@ async fn broadcast_presence_now(key: &SecretKey, inner: &Arc<Mutex<Inner>>) {
     }
 }
 
-/// 读到流结束（带回读缓冲）。
-async fn read_all(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+/// 读到流结束（带回读缓冲和调用方指定的硬上限）。
+async fn read_all_bounded(
+    recv: &mut iroh::endpoint::RecvStream,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
         match recv.read(&mut chunk).await? {
             Some(0) | None => break,
             Some(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > 8 * 1024 * 1024 {
+                if buf.len().saturating_add(n) > max_bytes {
                     anyhow::bail!("报文过大");
                 }
+                buf.extend_from_slice(&chunk[..n]);
             }
         }
     }
     Ok(buf)
+}
+
+async fn read_all(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+    read_all_bounded(recv, 8 * 1024 * 1024).await
 }
 
 pub fn topic_id(room: &str) -> iroh_gossip::proto::TopicId {
@@ -2850,6 +3128,136 @@ mod security_tests {
         // 极端：单条就超预算，也必须留下这一条（不能返回空页）
         let one = cap_history_by_bytes(vec![msgs[0].clone()], 1);
         assert_eq!(one.len(), 1, "单条超预算也要留下，否则这一页永远是空的");
+    }
+
+    #[test]
+    fn 历史内存同时受条数与字节上限约束() {
+        let store = HistoryStore::new(None);
+        let key = kp();
+        for index in 0..45 {
+            let message = ChatMessage {
+                id: String::new(),
+                from: key.public().to_string(),
+                nickname: "n".into(),
+                text: format!("{index:02}{}", "x".repeat(400 * 1024)),
+                ts: index,
+                sig: String::new(),
+                file: None,
+            }
+            .sign(&key, ROOM);
+            assert!(store.append(ROOM, message));
+        }
+
+        let retained = store.recent(ROOM, MAX_MEM_HISTORY);
+        let retained_bytes = retained.iter().map(serialized_message_bytes).sum::<usize>();
+        assert!(retained.len() < 45, "字节上限应先于消息条数上限生效");
+        assert!(retained_bytes <= MAX_MEM_HISTORY_BYTES);
+        assert!(retained.last().unwrap().text.starts_with("44"));
+    }
+
+    #[test]
+    fn 历史请求分页在克隆前受字节预算约束() {
+        let store = HistoryStore::new(None);
+        let key = kp();
+        for index in 0..10 {
+            let message = ChatMessage {
+                id: String::new(),
+                from: key.public().to_string(),
+                nickname: "n".into(),
+                text: format!("{index:02}{}", "x".repeat(100 * 1024)),
+                ts: index,
+                sig: String::new(),
+                file: None,
+            }
+            .sign(&key, ROOM);
+            assert!(store.append(ROOM, message));
+        }
+
+        let page = store.recent_before_bounded(ROOM, None, 1000, 250 * 1024);
+        let page_bytes = page.iter().map(serialized_message_bytes).sum::<usize>();
+        assert_eq!(page.len(), 2);
+        assert!(page_bytes <= 250 * 1024);
+        assert_eq!(&page.last().unwrap().text.as_bytes()[..2], b"09");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn 超过磁盘预算后原子压缩到保留历史() {
+        let dir = std::env::temp_dir().join(format!(
+            "iroh-history-rotation-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = HistoryStore::new(Some(dir.clone()));
+        let first = msg("n", "first");
+        let second = msg("n", "second");
+        assert!(store.append(ROOM, first));
+        let path = dir.join(format!("{}.jsonl", room_hash(ROOM)));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(MAX_HISTORY_FILE_BYTES + 1).unwrap();
+        assert!(store.append(ROOM, second));
+        assert!(std::fs::metadata(&path).unwrap().len() < MAX_HISTORY_FILE_BYTES);
+
+        let loaded = HistoryStore::new(Some(dir.clone()));
+        loaded.load_from_disk();
+        assert_eq!(loaded.count(ROOM), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn 历史请求字段限制拒绝控制字符与过长游标() {
+        let valid = HistoryRequest {
+            room: "room".into(),
+            limit: usize::MAX,
+            before: Some((1, "id".into())),
+        };
+        assert!(valid_history_request(&valid));
+
+        let mut invalid_room = valid_history_request_fixture();
+        invalid_room.room.push('\n');
+        assert!(!valid_history_request(&invalid_room));
+
+        let mut invalid_cursor = valid_history_request_fixture();
+        invalid_cursor.before = Some((1, "x".repeat(MAX_HISTORY_CURSOR_ID_BYTES + 1)));
+        assert!(!valid_history_request(&invalid_cursor));
+    }
+
+    #[test]
+    fn 房间快照按成员数与字节预算裁剪() {
+        let snapshots = new_snapshots();
+        for index in 0..200 {
+            snapshot_upsert(
+                &snapshots,
+                ROOM,
+                MemberSnapshot {
+                    id: format!("peer-{index}"),
+                    nickname: "n".into(),
+                    last_seen_ms: now_ms(),
+                    files: vec![format!("file-{index}"); MAX_FILES_IN_HB],
+                    epoch: index,
+                },
+            );
+        }
+
+        let snapshot = snapshot_get(&snapshots, ROOM).unwrap();
+        let member_bytes = snapshot
+            .members
+            .iter()
+            .map(|member| serde_json::to_vec(member).unwrap().len())
+            .sum::<usize>();
+        assert!(snapshot.members.len() <= HISTORY_SNAPSHOT_MAX_MEMBERS);
+        assert!(member_bytes <= HISTORY_SNAPSHOT_MAX_BYTES);
+    }
+
+    fn valid_history_request_fixture() -> HistoryRequest {
+        HistoryRequest {
+            room: "room".into(),
+            limit: 50,
+            before: None,
+        }
     }
 
     // ── F8：落盘历史也要验签 ───────────────────────────────────────
