@@ -591,7 +591,7 @@
 | F9  | ✅ 已修 | 同步 `Cargo.lock` + 三处构建加 `--locked` |
 | F10 | ✅ 已修 | 改读 `https_bind_addr`；QUIC 端口只在开了 QAD 时放行；顺带把端口解析换成可移植的 `sed -E`（原来的 BRE `\+` 只在 GNU sed 上有效） |
 | F11 | ✅ 已修 | `relay-docker.toml` 补上完整可用配置；端口口径统一为 **15443**（与前端/install.sh/文档一致） |
-| F12 | ✅ 已修 | 抢占判断提到覆盖 `_room` 之前；被抢占时不写 `_room`、不发 `REJOINED`；`main.js` 忽略房间不匹配的 `REJOINED`；重进失败改为 `_scheduleRetry()` |
+| F12 | ✅ 已修（含上线时补的**单飞**） | 抢占判断提到覆盖 `_room` 之前；被抢占时不写 `_room`、不发 `REJOINED`；`main.js` 忽略房间不匹配的 `REJOINED`；重进失败改为 `_scheduleRetry()`。**上线过程中发现并修掉了本报告写的「更彻底」那一条**：所有 join 现在只走 `joinRoom()` 一个入口，并对同房间做**单飞**（同一房间只允许一条 join 在飞）—— 否则主线程 `openRoom` 与网络层自动重进会并发发两条 `join`，在 Rust 侧互相 `g.joined = None` 拆掉对方的 gossip 订阅，双双报「连接常驻节点超时」 |
 | F13 | ✅ 已修 | `restoreInvites(room)` 按房间过滤，且**不再删别的房间的记录** |
 | F14 | ✅ 已修 | `[img]` 白名单（只放 `data:image/*` 与 `blob:`）+ `referrerpolicy=no-referrer` |
 | F15 | ⏸ 未修 | 重发邀约复活已有卡片（`seen` 去重）—— 需要改 `pushFileCard` 的去重语义，风险高于收益，留待后续 |
@@ -663,3 +663,49 @@ python3 scripts/check-site-modules.py dist/site     exit 0
 
 第 2、3 步之间存在一个混跑窗口：先升级的那一侧发出的消息会被另一侧静默丢弃。
 自建小规模场景通常可接受；要完全避免就挑没人使用时做。
+
+---
+
+## 第五部分：上线记录（2026-10-03 晚，实际部署）
+
+服务器 `root@189.24.68.147:15601`（同机还跑着十几个无关服务，全程只动 `/opt/iroh/roomd` 与 `/opt/iroh-build`）。
+
+### 做了什么
+
+| 步骤 | 结果 |
+|---|---|
+| `build-wasm.sh release` | ✅ 新 wasm 3.6MB；**源码哈希本地 = 远端**（rsync 没有静默失败）；新特征串在产物里、旧产物里没有 |
+| `build-wasm.sh native` | ✅ `dist/roomd` + `dist/relay-probe`（本次起 native 模式同时产出 roomd，见 F3） |
+| roomd 部署 | ✅ 旧二进制备份为 `roomd.bak-20261003-111619`；`install -m 755` + `docker compose up -d --build`；**再 `docker cp` 出来验证容器里确实是新代码** |
+| 身份 | ✅ `identity.key` md5 未变，EndpointId 仍是 `5bcc4ea3bb…`（前端 `anchor.id` 无需改动） |
+| 历史 | ✅ v3 历史按预期验不过（日志给出可执行的升级提示）；已**轮换**为 `history-v3-20261003-111705`（不是删除，可回滚） |
+| 前端部署 | ✅ `deploy-web.sh` 发布成功；线上 11 个文件与本地 `dist/site` **逐文件 sha256 一致** |
+
+### 验证（真实链路）
+
+- **原生端到端**：`roomtest` 进房 → 发消息 → 退出 → 再进房读回 **历史 1 条** ⇒
+  证明新 roomd 接受并存储了 v4 消息、新客户端也能验签读回。
+- **浏览器端到端**（本地同一份产物 + 生产中继/锚点）：`file-history` **17/17**、
+  `review-frontend` **19/19**、`dm-removed` 14/14、`stale` 4/4、`offline-room` 4/4、
+  `leave-cancel` 1/1、`refresh`（新房名）4/4。
+- 线上文件与本地逐字节一致 ⇒ 浏览器测试的结论适用于线上。
+
+### 两个上线过程中的发现（都不是本次改动引入的）
+
+1. **`refresh-test.py` 复用固定房名 `rf9` + 固定身份时会失败**（R2 进不了房）。
+   实测：换全新房名 **4/4 通过**；`lobby` 连进两次都是 5 秒成功；把 `node:degraded`
+   处理器临时中和后**照样失败** ⇒ 与本次改动无关，是该测试自身「固定房名 + 固定身份 +
+   反复跑」的卫生问题（测试文件里原本就写了「连续跑必现」）。
+   另外发现失败残留的标签页会带着**同一身份**继续留在房间里，建议测试结束/失败时清干净。
+2. **锚点对单个房间的 gossip 邻居状态会被「反复进/退房」累积**：累积到一定程度后，
+   新客户端进**那一间**会 join 超时（20s×4 后失败）；`docker compose restart roomd` 后
+   同一间房 5 秒进得去。生产房间（`lobby`）不受影响。
+   F2 的房间上限 + 空闲回收已经把「房间数量」这一维钉死，但 **topic 内部的邻居状态**
+   属于 iroh-gossip，需要另行处理（可选：长期无消息时让锚点退出并重订阅该 topic）。
+   两个发现都已记录，未做未经测试的改动。
+
+### 顺手修掉的部署脚本问题
+
+`deploy-web.sh` 原来用 `npx --yes wrangler@4` —— 本机 npm 不通时直接 ECONNRESET（这次就撞上了），
+且每次都拉「最新 4.x」、工具链没固定。改为优先用已装好的 wrangler（`WRANGLER=` 可覆盖），
+找不到才报错退出（对应复检 P2-22）。
