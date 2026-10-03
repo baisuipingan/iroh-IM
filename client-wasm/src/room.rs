@@ -855,7 +855,11 @@ impl HistoryStore {
                 return true; // 已存在（重复消息），不算失败
             }
             list.push(msg.clone());
-            list.sort_by_key(|m| m.ts);
+            // ⚠️ 排序键必须与分页契约一致（(ts, id)）。
+            //    只按 ts 排的话，同一毫秒的两条消息在内存里的先后
+            //    依赖插入顺序，而 `recent_before` 又按 (ts, id) 过滤 ——
+            //    页边界落在这两条之间时可能重复或漏掉一条（复检 P3-3）。
+            list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
             if list.len() > 5000 {
                 let drop = list.len() - 5000;
                 list.drain(0..drop);
@@ -997,10 +1001,28 @@ impl HistoryStore {
             }
             let room = hdr.room.clone();
             let list = map.entry(room.clone()).or_default();
+            let mut skipped = 0usize;
             for line in it {
                 if let Ok(m) = serde_json::from_str::<ChatMessage>(line) {
-                    list.push(m);
+                    // ⚠️ **落盘的历史也必须验签**（缺陷 F8）。
+                    //
+                    // 写路径有兜底校验（`append`），但读路径原来把每一行可解析的
+                    // 都收进来 —— 于是任何改动过 `.jsonl` 的事情（有 shell 权限的人、
+                    // 备份恢复、早期有 bug 的构建）都会在重启后变成
+                    // "看起来已签名"的聊天记录，而客户端从不重新验签、无法察觉。
+                    // 签名机制的意义就是在持久化边界上也要成立。
+                    if m.verify() {
+                        list.push(m);
+                    } else {
+                        skipped += 1;
+                    }
                 }
+            }
+            if skipped > 0 {
+                warn!(
+                    "历史文件 {} 里有 {skipped} 条验签失败的记录，已丢弃",
+                    path.display()
+                );
             }
             list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
             info!("已载入房间 {} 的历史 {} 条", room, list.len());
@@ -1013,6 +1035,40 @@ impl HistoryStore {
 }
 
 
+
+/// 历史响应的**字节预算**（序列化后的 body 上限）。
+///
+/// ## 为什么不能只按条数限制（缺陷 F4）
+///
+/// 服务端原来按条数取上限（`limit.min(1000)`），而单条消息最大
+/// `MAX_MESSAGE_SIZE` = 512KB —— 最坏情况 1000 × 512KB ≈ **512MB**，
+/// 而收发的 `read_all` 在 **8MB** 就报错（"报文过大"）。
+/// 结果：房间里只要累积约 17 条接近上限的大消息，
+/// 之后**所有客户端在这个房间的翻页都会失败**（任何包含它们的页都读不回来），
+/// 常驻节点还要先把这 512MB 序列化进内存。
+///
+/// 1MB 的预算：正常聊天一页几十条远不到，又留足了余量。
+pub const HISTORY_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+
+/// 按字节预算裁剪历史页：**保留最新的一批**，从最旧的开始丢。
+///
+/// 抽成纯函数便于测试（缺陷 F4）：边界条件是"必须至少留 1 条"——
+/// 否则一条超大消息就能让这一页变成空的，客户端翻页会永远卡在同一处。
+pub fn cap_history_by_bytes(mut msgs: Vec<ChatMessage>, max_bytes: usize) -> Vec<ChatMessage> {
+    let mut budget = max_bytes;
+    let mut keep_from = msgs.len();
+    for (i, m) in msgs.iter().enumerate().rev() {
+        // +1 是行分隔/数组逗号的粗略开销
+        let n = serde_json::to_vec(m).map(|v| v.len()).unwrap_or(0) + 1;
+        // 至少留一条：即使它自己就超预算（否则这一页会空，翻页无法推进）
+        if n > budget && keep_from < msgs.len() {
+            break;
+        }
+        budget = budget.saturating_sub(n);
+        keep_from = i;
+    }
+    msgs.split_off(keep_from)
+}
 
 /// 历史服务（常驻节点侧）：收到请求 → 返回该房间最近 N 条；顺带通知订阅该房间。
 #[derive(Clone, Debug)]
@@ -1057,7 +1113,10 @@ impl ProtocolHandler for HistoryService {
 
         let resp = HistoryResponse {
             room: req.room.clone(),
-            messages: self.store.recent_before(&req.room, req.before, req.limit.min(1000)),
+            messages: cap_history_by_bytes(
+                self.store.recent_before(&req.room, req.before, req.limit.min(1000)),
+                HISTORY_RESPONSE_MAX_BYTES,
+            ),
             // 顺带把房间快照给客户端 —— 他进房就能看到"屋里都有谁、谁能提供哪些文件"
             snapshot: snapshot_get(&self.snaps, &req.room),
         };
@@ -1925,7 +1984,21 @@ impl RoomNode {
         send.finish()?;
         let body = read_all(&mut recv).await?;
         conn.close(0u8.into(), b"done");
-        let resp: HistoryResponse = serde_json::from_slice(&body).context("历史响应解析失败")?;
+        let mut resp: HistoryResponse =
+            serde_json::from_slice(&body).context("历史响应解析失败")?;
+        // ⚠️ 历史消息**必须逐条验签**（缺陷 F8）。
+        //
+        // 常驻节点是转发者，而签名机制的意义正是"转发者无法伪造作者身份"。
+        // 原来客户端直接 `from_slice` 就返回，等于把这条性质丢在读路径上：
+        // 一个被改过的 `.jsonl`（或一个被替换的锚点）能凭空造出
+        // "某人在某个房间说过的话"，而客户端完全无法察觉。
+        // 顺带也把"新旧协议混跑"的历史挡在 UI 之外（v2 消息在这里验不过）。
+        let before = resp.messages.len();
+        resp.messages.retain(|m| m.verify());
+        let dropped = before - resp.messages.len();
+        if dropped > 0 {
+            warn!("历史响应里有 {dropped} 条验签失败的消息，已丢弃（共 {before} 条）");
+        }
         Ok(resp)
     }
 
@@ -2659,6 +2732,62 @@ mod security_tests {
             ctrl_event(replayed, &me, "room-a", old).is_none(),
             "过期的 Accept 必须被丢弃（防重放放大）"
         );
+    }
+
+    // ── F4：历史页必须按字节裁剪，且至少留一条 ────────────────────
+    #[test]
+    fn 历史页按字节裁剪且至少留一条() {
+        let k = kp();
+        let mut msgs = Vec::new();
+        for i in 0..50 {
+            let mut m = ChatMessage {
+                id: String::new(),
+                from: k.public().to_string(),
+                nickname: "n".into(),
+                text: "x".repeat(1000),
+                ts: 1_700_000_000_000 + i,
+                sig: String::new(),
+                file: None,
+            };
+            m = m.sign(&k);
+            msgs.push(m);
+        }
+        // 预算很小 → 只能留少数几条，且必须是**最新**的那些
+        let capped = cap_history_by_bytes(msgs.clone(), 2000);
+        assert!(capped.len() < msgs.len(), "预算不足时必须裁剪");
+        assert!(!capped.is_empty(), "至少要留一条，否则翻页无法推进");
+        assert_eq!(
+            capped.last().unwrap().ts,
+            msgs.last().unwrap().ts,
+            "保留的必须是最新的一批（老的丢掉）"
+        );
+
+        // 预算充足 → 一条都不动
+        let all = cap_history_by_bytes(msgs.clone(), 10 * 1024 * 1024);
+        assert_eq!(all.len(), msgs.len());
+
+        // 极端：单条就超预算，也必须留下这一条（不能返回空页）
+        let one = cap_history_by_bytes(vec![msgs[0].clone()], 1);
+        assert_eq!(one.len(), 1, "单条超预算也要留下，否则这一页永远是空的");
+    }
+
+    // ── F8：落盘历史也要验签 ───────────────────────────────────────
+    #[test]
+    fn 历史读路径只认验签通过的记录() {
+        // 直接验证"验签是筛子"这一性质：改一个字段就应当被筛掉
+        let mut m = ChatMessage {
+            id: String::new(),
+            from: kp().public().to_string(),
+            nickname: "n".into(),
+            text: "hello".into(),
+            ts: 1_700_000_000_000,
+            sig: String::new(),
+            file: None,
+        }
+        .sign(&kp());
+        assert!(m.verify(), "正常消息应当通过");
+        m.text = "hello!".into(); // 篡改正文（id 及其签名随之失效）
+        assert!(!m.verify(), "被改过的历史记录必须被筛掉");
     }
 
     // ── Presence：文件清单不能被分隔符歧义篡改 ─────────────────────

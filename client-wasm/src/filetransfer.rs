@@ -461,6 +461,44 @@ impl SignedCtrl {
 // 位图（断点续传：记录哪些块已经有了）
 // ---------------------------------------------------------------------------
 
+/// 收到一块数据时的**准入判定**（纯逻辑，便于回归测试）。
+///
+/// 返回 `Err(原因)` = 必须拒收这一块。规则与理由：
+///
+/// 1. **序号越界** → 拒。越界序号会让写入方按 `seq * chunk_size` 定位到
+///    目标文件之外的位置。
+/// 2. **已经收到的块（位图已置位）= 重复块** → 拒。
+///    ⚠️ 这一条必须发生在**写盘之前**：否则发送方可以在哈希校验完成之后
+///    再补发一块内容不同的"同序号块"，把落盘内容改掉而哈希照样通过
+///    （复检 P3-19：被校验的内容 ≠ 盘上的内容）。
+/// 3. **整收时要求严格连续**（`seq == next_seq`）：数据面是单条顺序 QUIC 流、
+///    发送方也是按 `need` 升序发，不连续说明流本身有问题；增量哈希也需要按序喂。
+/// 4. ⚠️ **续传时绝不能要求连续**：续传本轮只发"缺哪些补哪些"
+///    （`need = missing_chunks(have, n)`），第一个到来的块序号就是第一个缺失块
+///    （比如 32），而 `next_seq` 是从 0 开始的。
+///    这里曾经写成"无条件要求 `seq == next_seq`"，导致**浏览器端断点续传必然失败**
+///    （第一块就报"块乱序：期望 seq=0，收到 32"）。
+///    原生 `BytesSink` 没有顺序要求，所以这个缺陷只在浏览器路径上、单测看不出来 ——
+///    这也是它必须有独立纯函数 + 回归测试的原因。
+pub fn check_chunk_admission(
+    seq: u32,
+    total_chunks: usize,
+    resumed_blocks: u32,
+    next_seq: u32,
+    already_have: bool,
+) -> std::result::Result<(), String> {
+    if seq as usize >= total_chunks {
+        return Err(format!("块序号越界：seq={seq}，总块数={total_chunks}"));
+    }
+    if already_have {
+        return Err(format!("重复块 seq={seq}（该块已收过，拒绝覆盖已校验内容）"));
+    }
+    if resumed_blocks == 0 && seq != next_seq {
+        return Err(format!("块序号不连续：期望 seq={next_seq}，收到 {seq}"));
+    }
+    Ok(())
+}
+
 /// 一个文件有多少块。
 pub fn chunk_count(size: u64, chunk_size: u32) -> usize {
     if chunk_size == 0 {
@@ -599,6 +637,8 @@ pub struct FileService {
     pending: Arc<Mutex<HashMap<String, Pending>>>,
     /// 在途的入站流数量（见 [`MAX_CONCURRENT_ACCEPTS`]）。
     inflight: Arc<std::sync::atomic::AtomicUsize>,
+    /// 登记代次计数器（见 [`Pending::gen`]）。
+    gen_counter: Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[derive(Clone, Debug)]
@@ -617,6 +657,34 @@ pub struct Pending {
     pub expect_sender: String,
     /// 邀约里的完整元信息 —— 用来核对 header 报的 size/name/chunk_size。
     pub meta: FileMeta,
+    /// 登记代次。清理时用它确认"要摘掉的还是当初那一条"：
+    /// 用户续传会在 `cancel` 之后重新 `expect` 一条新记录，
+    /// 若旧数据流的清理守卫无条件按 file_id 删除，就会把**新的**那条误删，
+    /// 于是续传的数据流到达时被判"接收方未准备好"（复检 P3-20）。
+    pub gen: u64,
+}
+
+/// 在途 `Pending` 条目的清理守卫。
+///
+/// `Drop` 时把**自己那一条**（按 `gen` 比对）从表里摘掉 ——
+/// 这样任何提前 `return`（身份不符、头部不符、越界块、长度不符、读失败、超时）
+/// 都不会在表里留下一条"接收端已消失"的陈旧记录。
+/// 旧实现只在**正常完成**那一处删除，其余 6 条退出路径全都漏了（复检 P3-20）。
+struct PendingGuard {
+    map: Arc<Mutex<HashMap<String, Pending>>>,
+    file_id: String,
+    gen: u64,
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut m) = self.map.lock() {
+            // 只在"还是我这一代"时才删 —— 见 `Pending::gen` 的说明
+            if m.get(&self.file_id).map(|p| p.gen) == Some(self.gen) {
+                m.remove(&self.file_id);
+            }
+        }
+    }
 }
 
 impl FileService {
@@ -664,6 +732,10 @@ impl FileService {
         }
         let (chunk_tx, chunk_rx) = async_channel::bounded(64); // 有界：形成背压
         let (ack_tx, ack_rx) = async_channel::bounded(1);
+        let gen = self
+            .gen_counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
         self.pending.lock().unwrap().insert(
             file_id.to_string(),
             Pending {
@@ -673,6 +745,7 @@ impl FileService {
                 cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 expect_sender: meta.sender.clone(),
                 meta,
+                gen,
             },
         );
         Ok((chunk_rx, ack_tx))
@@ -841,10 +914,24 @@ impl ProtocolHandler for FileService {
         //   1. 连接的真实对端 == 邀约里的 sender（且 sender 已核对等于签名者）
         //   2. header 的 file_id / size / name / chunk_size 与邀约一致
         // ═══════════════════════════════════════════════════════════════
+        // ⚠️ 从这里开始，无论走哪条路径退出，都要把自己这条登记摘掉（复检 P3-20）。
+        //    旧实现只在"正常收完"那一处 remove，其余 6 条退出路径全都漏了 ——
+        //    于是表里会留一条"接收端已消失"的陈旧记录：发送方重试同一 file_id 时
+        //    会命中它，`tx.send` 失败 → 卡在等回执处最长 600 秒。
+        let _pending_guard = PendingGuard {
+            map: self.pending.clone(),
+            file_id: header.file_id.clone(),
+            gen: pending.gen,
+        };
+
         let remote = connection.remote_id();
-        if !pending.expect_sender.is_empty() && remote.to_string() != pending.expect_sender {
+        // ⚠️ **失败关闭**：期望发送方为空 = 这条登记没有授权信息，
+        //    一律拒绝（复检 P3-21）。旧写法是 `!empty && 不等` ——
+        //    空值直接**跳过**身份校验，等于把授权关掉了。
+        //    `validate_meta` 现在也要求 sender 非空，这里是授权表这一侧的兜底。
+        if pending.expect_sender.is_empty() || remote.to_string() != pending.expect_sender {
             warn!(
-                "拒绝文件流：连接对端 {remote} 不是期望的发送方 {}（file_id={}）",
+                "拒绝文件流：连接对端 {remote} 不是期望的发送方 {:?}（file_id={}）",
                 pending.expect_sender, header.file_id
             );
             deny(&mut send, &mut recv, "发送方身份不匹配，已拒绝").await;
@@ -992,7 +1079,8 @@ impl ProtocolHandler for FileService {
         let _ = write_json_frame(&mut send, FRAME_DONE, &ack).await;
         let _ = send.finish();
         connection.closed().await;
-        self.pending.lock().unwrap().remove(&header.file_id);
+        // 表项由 `_pending_guard` 在函数返回时摘掉（按代次比对，
+        // 不会误删用户续传时新建的那一条）
         Ok(())
     }
 }
@@ -1515,5 +1603,44 @@ mod auth_tests {
         // 计数是 Arc 共享的：clone 出去看到的必须是同一个数
         let c = svc.clone();
         assert_eq!(c.inflight(), 0);
+    }
+    // ── 收块准入：续传必须能跳跃，重复块必须在写盘前被拒 ─────────────
+    //
+    // 这一组对应一个**只在浏览器路径上出现**的真实回归：把"增量哈希必须按序"
+    // 和"块序号必须连续"混成一件事之后，续传时本轮第一个块（例如 seq=32）
+    // 会被判成"块乱序：期望 seq=0"，于是断点续传**必然失败**。
+    // 原生 BytesSink 没有顺序要求，所以单测当时看不出来。
+    #[test]
+    fn 续传时块序号允许跳跃() {
+        // 已拥有前 32 块，本轮第一个到达的就是 32
+        assert!(
+            check_chunk_admission(32, 64, 32, 0, false).is_ok(),
+            "续传本轮只补缺失块，序号天然跳跃，不能要求连续"
+        );
+        // 最后一块
+        assert!(check_chunk_admission(63, 64, 32, 31, false).is_ok());
+    }
+
+    #[test]
+    fn 整收时块序号必须连续() {
+        assert!(check_chunk_admission(0, 8, 0, 0, false).is_ok());
+        assert!(check_chunk_admission(1, 8, 0, 1, false).is_ok());
+        assert!(
+            check_chunk_admission(3, 8, 0, 1, false).is_err(),
+            "整收时跳跃说明流本身有问题，必须拒"
+        );
+    }
+
+    #[test]
+    fn 重复块在写盘前就被拒() {
+        // 两条路径都要拒：整收里重发，和续传里补发已拥有的块
+        assert!(check_chunk_admission(0, 8, 0, 1, true).is_err());
+        assert!(check_chunk_admission(5, 8, 4, 0, true).is_err());
+    }
+
+    #[test]
+    fn 越界块序号被拒() {
+        assert!(check_chunk_admission(8, 8, 0, 0, false).is_err());
+        assert!(check_chunk_admission(0, 0, 0, 0, false).is_err());
     }
 }

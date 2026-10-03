@@ -604,6 +604,39 @@ impl ChunkSink for JsChunkSink {
                 );
             }
 
+            // ② 顺序与重复检查 —— **必须在调 JS 写盘之前**。
+            //
+            //    ⚠️ 这里有两个坑，都是"顺序规则"与"增量哈希"绑在一起造成的：
+            //
+            //    (a) **续传时绝不能用 `next_seq` 要求连续。**
+            //        续传本轮只发"缺哪些补哪些"（见 `send_file` 里
+            //        `need = missing_chunks(have, n)`），所以本次流的第一个块
+            //        序号就是第一个缺失块（例如 32）；而 `next_seq` 从 0 起，
+            //        于是旧代码会在**第一块**就报"块乱序：期望 seq=0，收到 32"
+            //        —— 浏览器端断点续传**必然失败**。
+            //        原生 `BytesSink` 只按 `seq * chunk_size` 写、没有顺序要求，
+            //        所以这个缺陷**只在浏览器路径上**，单测看不出来。
+            //        续传本就算不出整文件哈希（缺前缀字节），因此这里不做顺序
+            //        要求、也不喂 hasher；整文件校验由 JS 侧回读完成（F5）。
+            //
+            //    (b) **重复块必须判失败，且要在写盘之前拦。**
+            //        旧代码把 `seq < next_seq` 当"重发"容忍，可那时**已经写进磁盘**了：
+            //        于是发送方能在哈希完成后再补发一块内容不同的"同序号块"，
+            //        把落盘内容改掉而哈希照样通过（P3-19）。
+            let mut st = self.have.lock().unwrap();
+            // 判定逻辑抽在 `check_chunk_admission` 里（可被单测覆盖）
+            let already_have = (seq as usize) < st.bitmap.len() * 8
+                && crate::filetransfer::bitmap_get(&st.bitmap, seq as usize);
+            if let Err(why) = crate::filetransfer::check_chunk_admission(
+                seq,
+                total_chunks,
+                st.resumed_blocks,
+                st.next_seq,
+                already_have,
+            ) {
+                anyhow::bail!("{why}");
+            }
+
             let u8arr = js_sys::Uint8Array::from(bytes);
             let args = js_sys::Array::new();
             args.push(&JsValue::from_f64(seq as f64));
@@ -615,26 +648,16 @@ impl ChunkSink for JsChunkSink {
             JsFuture::from(js_sys::Promise::resolve(&ret))
                 .await
                 .map_err(|e| anyhow::anyhow!("JS 写入 Promise 失败: {e:?}"))?;
-            // 只有真正写成功才记进位图
-            let mut st = self.have.lock().unwrap();
+
+            // ③ 只有真正写成功才记进位图 / 喂哈希
             if (seq as usize) < st.bitmap.len() * 8 {
                 crate::filetransfer::bitmap_set(&mut st.bitmap[..], seq as usize);
             }
-            // ② 增量哈希：只接受**连续到达**的块。
-            //    断点续传时本次流里是"缺哪些补哪些"，所以续传的块**不参与**本轮
-            //    哈希 —— 那种情况下 `hashed` 不会等于整个文件大小，
-            //    `finish()` 会据此走"只校验已收部分"的分支并提示。
-            if seq == st.next_seq {
+            // 增量哈希只在整收路径上做（续传缺前缀，算不出整文件哈希 —— 见 F5）
+            if st.resumed_blocks == 0 {
                 st.hasher.update(bytes);
                 st.hashed += bytes.len() as u64;
                 st.next_seq += 1;
-            } else if seq < st.next_seq {
-                // 重复块（重发场景），忽略哈希输入但不算错
-            } else {
-                anyhow::bail!(
-                    "块乱序：期望 seq={}，收到 {seq}（哈希必须按序计算）",
-                    st.next_seq
-                );
             }
             Ok(())
         })
