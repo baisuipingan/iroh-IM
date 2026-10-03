@@ -112,7 +112,29 @@ export HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT"
 export HTTP_PROXY="http://127.0.0.1:$PROXY_PORT"
 export NO_PROXY="127.0.0.1,localhost"
 
-npx --yes wrangler@4 deploy
+# ⚠️ 不用 `npx --yes wrangler@4 deploy`（复检 P2-22）：
+#    1) 每次部署都去 npm 拉"当前最新的 4.x"—— 工具链没固定，行为可能随版本变；
+#    2) 本机 npm registry 时常不通，`npx --yes` 会直接 ECONNRESET 失败（实测）。
+#    改为**优先用已经装好的那个 wrangler**（可用 WRANGLER 环境变量覆盖）。
+resolve_wrangler() {
+  if [[ -n "${WRANGLER:-}" && -x "${WRANGLER}" ]]; then echo "$WRANGLER"; return; fi
+  if [[ -x "$ROOT/node_modules/.bin/wrangler" ]]; then echo "$ROOT/node_modules/.bin/wrangler"; return; fi
+  # npx 缓存里已装好的 4.x：挑第一个大版本为 4 的
+  local c
+  for c in "$HOME"/.npm/_npx/*/node_modules/.bin/wrangler; do
+    [[ -x "$c" ]] || continue
+    local pkg="${c%/node_modules/.bin/wrangler}/node_modules/wrangler/package.json"
+    if [[ -f "$pkg" ]] && grep -q '"version": *"4\.' "$pkg"; then echo "$c"; return; fi
+  done
+}
+WRANGLER_BIN="$(resolve_wrangler)"
+if [[ -z "$WRANGLER_BIN" ]]; then
+  echo "!! 找不到可用的 wrangler（本机 npm 也不通）。先装一个再部署：" >&2
+  echo "   npm i -g wrangler@4     # 或 export WRANGLER=/path/to/wrangler" >&2
+  exit 1
+fi
+echo "    使用 wrangler: $WRANGLER_BIN"
+"$WRANGLER_BIN" deploy
 
 echo
 echo "==> 完成。自定义域名：https://im.editor.vip"

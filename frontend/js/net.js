@@ -136,6 +136,15 @@ export const net = {
    */
   _desiredRoom: '',
 
+  /**
+   * 在飞的 `join`（单飞用）：`{ room, promise }` 或 null。
+   *
+   * 同一个房间的 join 只能有一条在飞 —— 两条并发 join 会在 Rust 侧
+   * 互相 `g.joined = None` 拆掉对方的 gossip 订阅，双双报
+   * "连接常驻节点超时"（见 `joinRoom` 的说明）。
+   */
+  _inflightJoin: null,
+
   /** 供 UI 查询：能不能发消息 */
   get canSend() {
     return this.ready && this.phase === 'online';
@@ -236,31 +245,21 @@ export const net = {
       // 恢复时以它为准；它没被设过才退回 `_room`（上次成功进过的）。
       const wantRoom = this._desiredRoom || this._room;
       if (wantRoom) {
-        // 占位：让任何在等的用户进房请求作废（代次更大）
-        const autoGen = ++this._joinGen;
+        // ⚠️ 重进**必须走 `joinRoom`**（唯一入口）。它自带：
+        //    · 单飞：与主线程的 openRoom 撞上时只发一条 join（否则两边互相拆订阅）
+        //    · 代次与 superseded 语义：被更新的操作取代时不写 `_room`、不发 REJOINED
+        //    （缺陷 F12：原来这里自己发 join，补偿分支还是不可能执行到的死代码。）
         const wantNick = this._nick;
         try {
-          // ⚠️ 先记下"恢复前"的房间意图，再 await（缺陷 F12）。
-          //
-          //    原来的写法是 `await join(...)` 之后**无条件** `this._room = wantRoom`，
-          //    再判断 `autoGen !== this._joinGen && this._room !== wantRoom` ——
-          //    而 `this._room` 上一行刚被赋成 `wantRoom`，所以那个条件**恒为 false**，
-          //    注释承诺的"那就把最终房间还回去"是**不可能执行到的死代码**。
-          //    后果：慢的自动重进会把用户刚切的房间**回滚**掉，
-          //    然后还带着过期的 `wantRoom` 发出 `REJOINED`，
-          //    主线程（main.js）又盲信它 → 界面显示 C、底层可能在 B。
-          const want = this._desiredRoom || this._room;
-          if (want !== wantRoom) return; // 进房前就已经被更新的意图取代，不必进
-          await this.client.call('join', wantRoom, wantNick);
-          // 被抢占：**不写 `_room`、不发 `REJOINED`**，让更新的那次操作自己收尾。
-          if (autoGen !== this._joinGen) {
-            console.debug('[net] 重连恢复被更新的进房操作取代，放弃本次结果', wantRoom);
-            return;
-          }
-          this._room = wantRoom; // 这次成功了，记为"上次进过的房间"
+          await this.joinRoom(wantRoom, wantNick);
           // 事件带**这次操作的 room 快照**，不是可变的 this._room
           bus.emit(EV.REJOINED, wantRoom);
         } catch (e) {
+          // 被更新的操作取代：不是失败，别报错、也别重试（那会跟新操作抢）
+          if (e?.superseded) {
+            console.debug('[net] 重连恢复被更新的进房操作取代，放弃本次结果', wantRoom);
+            return;
+          }
           // ⚠️ 重进失败不能只弹一句提示就完事：`main.js` 在断线时把
           //    `pendingRoom` 交给了网络层（判定 netWillHandle），这里若不再重试，
           //    就再也没有人去进那个房间，界面会永久停在"有房间名但不是成员"的状态。
@@ -444,8 +443,37 @@ export const net = {
    */
   async joinRoom(room, nickname) {
     if (!this.ready) throw new Error('还没连上中继');
-    const myGen = ++this._joinGen;
 
+    // ═══════════════════════════════════════════════════════════════
+    // ⚠️ **单飞**：同一个房间已经有 join 在飞，就直接复用那一条。
+    //
+    // 为什么必须有：主线程的 `openRoom`（autostart / 点会话）与网络层的
+    // 自动重进（`_goOnline`）会各自发一次 `join`。而 Rust 侧的 `join` 开头是
+    // `g.joined = None`（丢掉上一个 Joined 会 abort 掉它的 gossip 任务）——
+    // 两次并发 join 于是**互相拆掉对方的订阅**，两边都连不上常驻节点，
+    // 报 "连接常驻节点超时"（实测：浏览器里带着 localStorage 的旧房间启动时复现，
+    // 清掉存储就正常；`refresh-test` 的 R2 就是这样卡住的）。
+    //
+    // 单飞之后，同房间的第二次调用只是**等**第一次的结果，不会再发一条 join。
+    // ═══════════════════════════════════════════════════════════════
+    if (this._inflightJoin && this._inflightJoin.room === room) {
+      return this._inflightJoin.promise;
+    }
+
+    const myGen = ++this._joinGen;
+    const run = this._joinRoomOnce(room, nickname, myGen);
+    this._inflightJoin = { room, promise: run };
+    try {
+      return await run;
+    } finally {
+      if (this._inflightJoin && this._inflightJoin.promise === run) {
+        this._inflightJoin = null;
+      }
+    }
+  },
+
+  /** `joinRoom` 的真正实现（由单飞包装调用，不要直接调它）。 */
+  async _joinRoomOnce(room, nickname, myGen) {
     // ⚠️ 换房间时：**先广播"我离开了"，再进新房间**。
     //
     // 这是整套设计里唯一一个"离开声明"能**可靠**发出去的时机 ——
