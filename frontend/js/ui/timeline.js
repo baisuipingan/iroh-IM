@@ -291,6 +291,9 @@ export const timeline = {
     //    后续的 updateFileCard 才会沿用同一个值而不是退回"检查中…"。
     if (avail) el.dataset.avail = avail;
     const totalChunks = total || Math.ceil(meta.size / meta.chunk_size);
+    // 初始进度：重建卡片时要能画回原来的百分比（复检 P3-6）。
+    // 取整到 1 位小数，避免 done/total 极小时出现 33.333333%。
+    const pct = totalChunks ? Math.round(((done || 0) / totalChunks) * 100) : state === 'done' ? 100 : 0;
     // 图片用缩略图卡片，普通文件用文件卡片 —— 视觉上和微信一致：
     // 图片消息看起来就是一张图，而不是"名字叫 xxx.png 的文件"
     const img = U.isImageName(meta.name.split('.').pop() || '') || (meta.mime || '').startsWith('image/');
@@ -306,7 +309,7 @@ export const timeline = {
           </svg>
           <span class="imgcard__name">${U.esc(meta.name)}</span>
         </div>
-        <div class="imgcard__bar"><i style="width:0%"></i></div>
+        <div class="imgcard__bar"><i style="width:${pct}%"></i></div>
         <div class="imgcard__foot">
           <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '' }))}</span>
           <span class="filecard__size">${U.humanSize(meta.size)}</span>
@@ -321,7 +324,7 @@ export const timeline = {
           <div class="filecard__meta">${U.humanSize(meta.size)} · ${
             direction === 'send' ? '我发送' : '对方发送'
           } · <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '' }))}</span></div>
-          <div class="filecard__bar"><i style="width:0%"></i></div>
+          <div class="filecard__bar"><i style="width:${pct}%"></i></div>
           ${error ? `<div class="filecard__err">${U.esc(error)}</div>` : ''}
         </div>
         <div class="filecard__actions"></div>
@@ -733,6 +736,9 @@ export const timeline = {
     el.scrollTop = el.scrollHeight;
     this.atBottom = true;
     this.unreadAnchor = null;
+    // ⚠️ 顺带把"以下为新消息"分隔线摘掉（复检 P3-8）：
+    //    原来只清了锚点，那条线会**一直留在会话中间**直到切房间。
+    $('tl-inner').querySelector('.tl-unread-divider')?.remove();
     $('jump-btn').classList.remove('is-on');
   },
 
@@ -754,13 +760,18 @@ export const timeline = {
           hint.style.display = 'none';
         }, 1500);
       } else {
+        const cursorBefore = this.oldestCursor;
         this.prependPage(list);
         hint.style.display = 'none';
-        // ⚠️ 只有"不足一页"才说明到底了。刚好满页时服务端可能还有更多，
-        //    之前用 `list.length < PAGE` 判断是对的，但漏了一种情况：
-        //    这一页里全是已经渲染过的消息（seen 去重后一条新的都没有），
-        //    此时游标没有前进，再触发会死循环拿同一页。
-        if (list.length < PAGE) this.reachStart = true;
+        // ⚠️ 只有"不足一页"才说明到底了。刚好满页时服务端可能还有更多。
+        //
+        // 但还有第二种"到底了"：这一页**全是被去重掉的老消息**
+        // （锚点视图与本地游标不一致时会发生），此时游标没有前进 ——
+        // 再滚一次还是同一页，用户就永远卡在顶部转圈（复检 P3-9）。
+        // 判据直接看**游标有没有前进**，而不是看这页几条。
+        if (list.length < PAGE || this.oldestCursor === cursorBefore) {
+          this.reachStart = true;
+        }
       }
     } catch (e) {
       hint.textContent = `加载失败：${e?.message ?? e}（滚动可重试）`;

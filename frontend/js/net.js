@@ -357,6 +357,17 @@ export const net = {
       case 'peerDown':
         bus.emit(EV.PEER_DOWN, { id: ev.id });
         break;
+      // ⚠️ Worker 的 wasm 事件流断了（复检 P3-10）：**入站通道整体失效** ——
+      //    再也收不到消息/心跳/邀约，但发送仍然可用、状态还显示"在线"。
+      //    这种"静默半死"必须让用户看见，并主动重连（重连会重建节点与事件流）。
+      case 'node:degraded': {
+        this.ready = false;
+        this.phase = 'reconnecting';
+        bus.emit(EV.NODE_STATE, { ok: false, text: '连接已中断，正在重连' });
+        bus.emit(EV.TIP, `与中继的连接已中断（${ev.reason || '事件流结束'}），正在重连`);
+        this._scheduleRetry();
+        break;
+      }
       case 'fileInvite':
         bus.emit(EV.FILE_INVITE, { room: ev.room, meta: ev.meta });
         break;

@@ -19,13 +19,20 @@ export const bus = {
     return () => handlers.get(event)?.delete(fn);   // 返回取消函数
   },
 
-  /** 发布（同步派发；单个监听器抛错不影响其它监听器） */
-  emit(event, payload) {
+  /**
+   * 发布（同步派发；单个监听器抛错不影响其它监听器）。
+   *
+   * ⚠️ 透传**全部**参数：`main.js` 的 `EV.TIP` 监听器签名是 `(text, opts)`，
+   *    而原来只转发 `payload`，于是调用方传的第二个参数
+   *    （`{ sticky }` / `{ bad }`）**永远是 undefined** —— 一个"说了但没做"的接口
+   *    （复检 P3-16）。
+   */
+  emit(event, ...args) {
     const set = handlers.get(event);
     if (!set) return;
     for (const fn of [...set]) {
       try {
-        fn(payload);
+        fn(...args);
       } catch (e) {
         console.error(`[bus] "${event}" 监听器异常`, e);
       }

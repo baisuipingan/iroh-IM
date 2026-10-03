@@ -822,6 +822,12 @@ fn room_hash(room: &str) -> String {
     hex::encode(&blake3::hash(room.as_bytes()).as_bytes()[..16])
 }
 
+/// 每个房间在**内存**里保留的最大条数。
+///
+/// 注意它与磁盘是两回事：磁盘是只追加的完整日志（没有保留策略），
+/// 这里限制的是常驻节点的内存占用。
+pub const MAX_MEM_HISTORY: usize = 5000;
+
 #[derive(Clone, Debug, Default)]
 pub struct HistoryStore {
     dir: Option<std::path::PathBuf>,
@@ -871,8 +877,9 @@ impl HistoryStore {
             //    依赖插入顺序，而 `recent_before` 又按 (ts, id) 过滤 ——
             //    页边界落在这两条之间时可能重复或漏掉一条（复检 P3-3）。
             list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
-            if list.len() > 5000 {
-                let drop = list.len() - 5000;
+            // 内存里只保留最近的 MAX_MEM_HISTORY 条（磁盘仍是完整追加日志）
+            if list.len() > MAX_MEM_HISTORY {
+                let drop = list.len() - MAX_MEM_HISTORY;
                 list.drain(0..drop);
             }
         }
@@ -1033,6 +1040,17 @@ impl HistoryStore {
                 warn!(
                     "历史文件 {} 里有 {skipped} 条验签失败的记录，已丢弃",
                     path.display()
+                );
+            }
+            // ⚠️ 加载时也要裁剪（复检 P3-1）。
+            //    只在 `append` 里裁是个假上限：磁盘是**只追加、从不压缩**的，
+            //    重启时会把整个文件读进内存 —— 内存占用于是正比于"历史上写过的总字节"，
+            //    与"最多 5000 条"完全无关。
+            if list.len() > MAX_MEM_HISTORY {
+                let drop = list.len() - MAX_MEM_HISTORY;
+                list.drain(0..drop);
+                warn!(
+                    "房间 {room} 的历史超过 {MAX_MEM_HISTORY} 条，内存只保留最近的（磁盘未动）"
                 );
             }
             list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));

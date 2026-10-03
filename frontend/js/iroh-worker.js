@@ -87,10 +87,22 @@ async function boot(cfg) {
   // 这样两边职责清晰：Worker 只管"搬运"，主线程管"语义"）
   const reader = node.events().getReader();
   (async () => {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      handleNodeEvent(value);
+    // ⚠️ 这个循环**必须有错误处理**（复检 P3-10）。
+    //    没有 try/catch 时，流里任何一次错误都会让这个 IIFE 以
+    //    "unhandled rejection" 结束 —— 之后**再也没有**任何
+    //    message / presence / fileInvite 到达界面，而状态仍显示"在线"、
+    //    发送路径（另一条 RPC 通道）照常工作。即"收不到但发得出、
+    //    且毫无提示"的静默故障，最难排查。
+    //    现在：报错交给主线程（net.js 会弹提示 + 可触发重连），并退出循环。
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        handleNodeEvent(value);
+      }
+      push('node:degraded', { reason: '事件流已结束' });
+    } catch (e) {
+      push('node:degraded', { reason: String(e?.message ?? e) });
     }
   })();
 

@@ -693,6 +693,12 @@ export const fileTransfer = {
         room,
         meta: t.meta,
         direction: t.direction,
+        // ⚠️ 进度与失败原因也要带上（复检 P3-6）：
+        //    不带的话，切走再切回时 90% 的卡片会显示空进度条，
+        //    失败的卡片会丢掉"失败：<原因>"那行字。
+        done: t.done || 0,
+        total: t.total || 0,
+        error: t.error || '',
         state: t.state,
         avail: t.avail,
       });
