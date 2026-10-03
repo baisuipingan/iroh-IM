@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically sync iroh-relay TLS certificate
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

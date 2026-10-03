@@ -1,0 +1,22 @@
+# iroh 聊天室 · 前端站点
+#
+# 为什么用 Worker + Static Assets 而不是 Pages：
+#   Pages 没有 CLI 绑定自定义域名的命令（要去 dashboard 点），
+#   而 Worker 的 `routes: [{ custom_domain = true }]` 能让 wrangler
+#   **自动创建 DNS 记录 + 签发证书**，一条命令从零到可访问。
+#   本站是纯静态资源，不需要任何 Worker 逻辑，assets 就够了。
+#
+# 部署：bash scripts/deploy-web.sh
+# 预览：npx wrangler dev（本地起一个等价环境）
+
+name = "iroh-chatroom"
+compatibility_date = "2026-10-01"
+
+# 只走自定义域名，不额外暴露 <name>.<subdomain>.workers.dev
+workers_dev = false
+
+# 纯静态：直接把 dist/site 当站点资源发布（不需要 main 入口脚本）
+assets = { directory = "dist/site" }
+
+# custom_domain = true → wrangler 自动建 DNS + 证书，不用去控制台手动加解析
+routes = [{ pattern = "im.editor.vip", custom_domain = true }]

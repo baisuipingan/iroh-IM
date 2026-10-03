@@ -1,0 +1,27 @@
+# iroh 中继配置（Docker 版 / 纯中继不打洞）
+#
+# ⚠️ 这个文件会被 docker-compose.yml **挂载成容器里的正式配置**
+#    （`./relay-docker.toml:/etc/iroh-relay/relay.toml:ro`）。
+#    它以前只有注释、一个配置项都没有 —— 照文档手动部署的人把目录一拷、
+#    `docker compose up -d`，中继就会在"没有任何配置"的状态下启动，
+#    而文档同时让你放行 15443，于是端口开着、服务是错的（复检缺陷 F11）。
+#    所以这里必须是**可直接使用的完整配置**，并与 docs/relay-deploy-minimal.md §2.3 保持一致。
+#
+# 新机器建议直接用 deploy/install/install.sh（会自动生成同样的配置）；
+# 本文件用于手工部署/理解配置含义。
+#
+# 端口口径：**15443**。它与三处保持一致：frontend/relay-config.json（客户端实际连的）、
+# deploy/install/install.sh 的 DEFAULT_PORT、docs/relay-deploy-minimal.md §2.4。
+
+enable_relay = true
+http_bind_addr = "127.0.0.1:0"           # 0 = 系统随便给个空闲口（不占 80/3340）
+enable_quic_addr_discovery = false       # ★ 不打洞 → 不开 QAD → 不占 UDP 端口
+enable_metrics = false                   # 不用就不开
+access = "everyone"                      # 收紧见 docs/relay-deploy-minimal.md §5
+
+[tls]
+https_bind_addr = "0.0.0.0:15443"        # 唯一对外端口
+cert_mode = "Reloading"                  # 中继周期性重读证书 → 续期后免重启
+cert_dir = "/etc/iroh-relay/certs"       # ★ 期望的文件名是 default.crt / default.key（实测）
+
+# 不要写 [limits] —— 自建的目的就是摆脱限速；要防的是白嫖（→ 鉴权），不是带宽。

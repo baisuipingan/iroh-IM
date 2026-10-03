@@ -1,0 +1,34 @@
+# iroh 中继（Docker 版）· 新服务器最精简部署
+#
+# 设计前提（2026-09-29 实测确认）：
+#   - 客户端纯走中继、不打洞 → 关掉 QAD → **不需要 7842/udp**，只暴露 15443/tcp
+#   - 必须 network_mode: host：默认 bridge+端口发布会让 relay 看到全是 docker-gateway 的源 IP，
+#     且 Docker 会写 iptables 的 DOCKER 链绕过 ufw
+#   - 镜像 tag 必须带 v
+#   - 证书用 Reloading 模式：中继自动重读，**续期后不用重启**（期望文件名 default.crt/default.key）
+#
+# 用法：
+#   1) cp .env.example .env 并按你的域名改 CERT_SRC_DIR
+#   2) ./cert-sync.sh          # 首次把证书按 default.crt/default.key 放进 ./certs
+#   3) docker compose up -d
+#   4) ufw allow 15443/tcp
+#   5) cron 里加一条：0 */6 * * * /opt/iroh/relay/cert-sync.sh
+#
+# 证书来源支持三种（见 .env）：
+#   - 1Panel：/opt/1panel/www/sites/<域名>/ssl
+#   - acme.sh：/root/.acme.sh/<域名>_ecc
+#   - 中继自己签：把 relay-docker.toml 换成 cert_mode = "LetsEncrypt"（需要 80 空闲 + 邮箱）
+#
+# 端口口径：15443（与 frontend/relay-config.json、install.sh 的 DEFAULT_PORT 一致）。
+
+services:
+  iroh-relay:
+    image: n0computer/iroh-relay:${IROH_RELAY_VERSION:-v1.3.0}
+    container_name: ${CONTAINER_NAME:-iroh-relay}
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./relay-docker.toml:/etc/iroh-relay/relay.toml:ro
+      # 证书目录：由 cert-sync.sh 按 default.crt/default.key 放好，Reloading 会自动重读
+      - ./certs:/etc/iroh-relay/certs:ro
+    command: ["--config-path", "/etc/iroh-relay/relay.toml"]

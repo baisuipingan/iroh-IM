@@ -1,0 +1,41 @@
+# iroh 聊天室 · 忽略规则
+#
+# ⚠️ 这个文件必须在**第一次 `git init` / `git add` 之前**存在。
+#    没有它的话，`git add -A` 会把这些一起收进仓库：
+#      - `.relay-token`（密钥，虽然它会随页面下发，但没必要再进版本历史）
+#      - 约 14MB 的原生产物（dist/relay-probe、dist/roomtest、deploy/roomd/roomd）
+#      - 构建缓存（client-wasm/target/、__pycache__/）
+#      - 前端产物（frontend/pkg/，由 build-wasm.sh 生成）
+#    一旦提交进历史，密钥就永远留在历史里了（复检 P3-14）。
+
+# ---- 密钥 / 本地配置 ----
+.relay-token
+.env
+deploy/relay/.env
+
+# ---- 构建产物 ----
+client-wasm/target/
+frontend/pkg/
+dist/
+# roomd 二进制由 `build-wasm.sh native` 生成，用完即弃（部署时 scp 到服务器）
+deploy/roomd/roomd
+# 22MB 的第三方诊断二进制：源码包 tools/iroh-doctor.tar.gz（1MB）已保留，
+# 需要时解开即可 —— 没必要把 22MB 二进制放进版本历史
+tools/iroh-doctor
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- 云端工具缓存 ----
+.wrangler/
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# ---- 说明 ----
+# docs/*.png 是审查用的截图，**有意保留**（它们是文档的一部分）。
+# 若要压缩仓库体积，可以单独移出 docs/ 再用 git rm。

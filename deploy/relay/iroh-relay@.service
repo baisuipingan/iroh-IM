@@ -1,0 +1,21 @@
+[Unit]
+Description=iroh relay (%i)
+Documentation=https://docs.iroh.computer/concepts/relays
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iroh-relay
+Group=iroh-relay
+ExecStart=/usr/local/bin/iroh-relay --config-path=/etc/iroh-relay/relay-%i.toml
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

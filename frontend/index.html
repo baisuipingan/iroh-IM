@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>iroh 聊天室</title>
+
+  <!-- 三层样式：令牌 → 布局 → 组件 -->
+  <link rel="stylesheet" href="./css/tokens.css" />
+  <link rel="stylesheet" href="./css/layout.css" />
+  <link rel="stylesheet" href="./css/components.css" />
+</head>
+<body>
+<!--
+  结构说明：
+    .app 三栏 grid
+      .rail            最左图标栏
+      .panel           列表（会话 / 成员 / 状态 / 设置，四选一）
+      .chat            对话区
+        .chat-head     顶栏
+        .blank         未进房时的空状态
+        .timeline      唯一可滚动区域（.timeline-inner 装内容）
+        .jump-btn      回到最新
+        .composer      底部输入
+  每个可滚动祖先都有 min-height:0（见 css/layout.css 的注释）。
+-->
+<div class="app">
+
+  <!-- ==================== 最左图标栏 ==================== -->
+  <nav class="rail">
+    <div class="rail__me" id="rail-me" title="我的身份"><span id="rail-initial">·</span><span class="rail__badge" id="rail-badge"></span></div>
+
+    <button class="rail-btn is-active" id="tab-chats" title="聊天">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.3 9.3 0 0 1-3.3-.6L3 21l1.8-5a8 8 0 0 1-.8-3.6 8.4 8.4 0 0 1 9-8.4 8.4 8.4 0 0 1 8 7.5Z"/>
+      </svg>
+    </button>
+
+    <button class="rail-btn" id="tab-people" title="在线成员">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M16 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20"/>
+        <circle cx="9" cy="7.5" r="3.5"/>
+        <path d="M22 20v-1.5a4 4 0 0 0-3-3.87"/>
+        <path d="M16.5 4.1a4 4 0 0 1 0 7.8"/>
+      </svg>
+    </button>
+
+    <button class="rail-btn" id="tab-status" title="连接状态">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>
+      </svg>
+    </button>
+
+    <button class="rail-btn" id="tab-settings" title="设置">
+      <!-- 齿轮：一个带"齿"的外轮廓 + 中心圆，避免看起来像太阳 -->
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3.2l1.5 2.1a6.9 6.9 0 0 1 2.1.9l2.5-.6 1.1 1.9-1.8 1.8a6.9 6.9 0 0 1 0 2.4l1.8 1.8-1.1 1.9-2.5-.6a6.9 6.9 0 0 1-2.1.9L12 20.8l-1.5-2.1a6.9 6.9 0 0 1-2.1-.9l-2.5.6-1.1-1.9 1.8-1.8a6.9 6.9 0 0 1 0-2.4L4.8 10.5l1.1-1.9 2.5.6a6.9 6.9 0 0 1 2.1-.9z"/>
+        <circle cx="12" cy="12" r="2.6"/>
+      </svg>
+    </button>
+
+    <div class="rail__spacer"></div>
+
+    <button class="rail-btn" id="btn-probe" title="重新探测中继">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>
+      </svg>
+    </button>
+  </nav>
+
+  <!-- 移动端：面板是覆盖层，点这层把它关掉 -->
+  <div class="panel-scrim" id="panel-scrim"></div>
+
+  <!-- ==================== 列表 ==================== -->
+  <aside class="panel" id="panel">
+    <div class="panel-head">
+      <div class="search">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+        </svg>
+        <input id="filter" placeholder="搜索" />
+      </div>
+      <button class="icon-btn" id="btn-new" title="新建房间">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="btn-theme" title="切换深色 / 浅色">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></svg>
+      </button>
+    </div>
+    <div class="panel-scroll" id="panel-body"></div>
+  </aside>
+
+  <!-- ==================== 对话 ==================== -->
+  <main class="chat">
+    <header class="chat-head">
+      <div class="chat-head__title" id="room-title" title="点击可改备注名">未进入房间</div>
+      <div class="chat-head__spacer"></div>
+      <span class="pill" id="node-pill">
+        <i class="pill__dot"></i><span class="pill__text">启动中</span>
+      </span>
+    </header>
+
+    <div class="blank" id="blank">
+      选择一个房间开始聊天<br />
+      <small>或点列表右上角的 + 新建一个房间</small>
+    </div>
+
+    <div class="timeline" id="timeline" style="display:none">
+      <div class="timeline-inner" id="tl-inner"><div class="tl-hint" id="tl-hint"></div></div>
+    </div>
+
+    <button class="jump-btn" id="jump-btn">回到最新</button>
+
+    <footer class="composer" id="composer" style="display:none">
+      <div class="emoji-pop" id="emoji-pop"></div>
+
+      <!-- 拖拽到窗口任意位置时的提示层 -->
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone__inner">
+          <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16"/>
+          </svg>
+          <div class="dropzone__text">松开即可添加到待发送</div>
+        </div>
+      </div>
+
+      <div class="composer__box">
+        <!-- 待发送区：粘贴/拖拽/选择的文件先落在这里，可逐个移除（微信模式） -->
+        <div class="pending" id="pending"></div>
+
+        <textarea class="composer__input" id="input" rows="1"
+                  placeholder="输入消息，Enter 发送 · Shift+Enter 换行"></textarea>
+
+        <div class="composer__tools">
+          <button class="tool-btn" id="tb-emoji" title="表情">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/>
+            </svg>
+          </button>
+          <button class="tool-btn" id="tb-file" title="发送文件">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l2 2.5h7.8A2.5 2.5 0 0 1 21 10v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17Z"/>
+            </svg>
+          </button>
+          <button class="tool-btn" id="tb-shot" title="发送图片">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4.5" width="18" height="15" rx="2.5"/>
+              <circle cx="8.5" cy="10" r="1.8"/>
+              <path d="m4 17 4.5-4.5a2 2 0 0 1 2.8 0L15 16l2-2a2 2 0 0 1 2.8 0L21 15.2"/>
+            </svg>
+          </button>
+          <button class="tool-btn" id="tb-voice" title="语音（还没做）">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/>
+            </svg>
+          </button>
+          <div class="composer__spacer"></div>
+          <span class="composer__tip" id="composer-tip"></span>
+          <button class="btn-primary" id="send" disabled>发送</button>
+        </div>
+      </div>
+      <input type="file" id="file" multiple style="display:none" />
+      <input type="file" id="file-img" accept="image/*" multiple style="display:none" />
+    </footer>
+  </main>
+</div>
+
+<!-- 通用对话框 -->
+<div class="modal" id="modal">
+  <div class="dialog">
+    <h3 class="dialog__title" id="dlg-title">标题</h3>
+    <div class="dialog__body" id="dlg-body"></div>
+    <div class="dialog__actions">
+      <button class="btn-ghost" id="dlg-cancel">取消</button>
+      <button class="btn-primary" id="dlg-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>

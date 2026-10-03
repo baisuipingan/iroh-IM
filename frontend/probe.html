@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>iroh 中继诊断页</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; color: #1a1a1a; background: #f7f7f5; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: #6b6b6b; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid #e6e6e2; border-radius: 12px; padding: 16px 18px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #d8d8d2; background: #fff; cursor: pointer; }
+  button:hover { border-color: #b9b9b2; }
+  button.primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, textarea { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid #d8d8d2; width: 100%; }
+  label { display: block; font-size: 12px; color: #6b6b6b; margin: 8px 0 3px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #f0f0ec; }
+  th { color: #6b6b6b; font-weight: 500; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+  .ok { background: #e7f5ec; color: #14682f; }
+  .bad { background: #fdecec; color: #96201d; }
+  .wait { background: #f2f1ec; color: #6b6b6b; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  #log { max-height: 300px; overflow: auto; background: #fbfbf9; border: 1px solid #efefe9; border-radius: 8px; padding: 10px; }
+  #log div { padding: 1px 0; }
+  .muted { color: #8a8a84; font-size: 12.5px; }
+  .id-box { display: flex; gap: 8px; align-items: center; }
+  .id-box .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #fbfbf9; border: 1px solid #efefe9; padding: 6px 8px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>iroh 中继诊断页</h1>
+  <div class="sub">浏览器节点永久 relay-only：所有流量经自建中继，端到端加密，中继看不到内容。</div>
+
+  <div class="card">
+    <h2>1 · 中继探测 <span id="probe-state" class="pill wait">未开始</span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <button id="btn-probe">探测全部中继</button>
+      <span class="muted" id="probe-note"></span>
+    </div>
+    <table>
+      <thead><tr><th>中继</th><th>RTT（中位数）</th><th>状态</th></tr></thead>
+      <tbody id="relay-rows"><tr><td colspan="3" class="muted">尚未探测</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>2 · 启动节点 <span id="node-state" class="pill wait">未启动</span></h2>
+    <div class="id-box" style="margin:10px 0">
+      <span class="muted" style="min-width:64px">我的 ID</span>
+      <span class="mono" id="my-id">—</span>
+      <button id="btn-copy">复制</button>
+    </div>
+    <div class="row"><button id="btn-start" class="primary">启动 iroh 节点</button><button id="btn-stop" disabled>关闭</button></div>
+  </div>
+
+  <div class="card">
+    <h2>3 · 中继连接状态</h2>
+    <table>
+      <thead><tr><th>中继</th><th>连接</th><th>最近错误</th></tr></thead>
+      <tbody id="status-rows"><tr><td colspan="3" class="muted">启动节点后显示</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>4 · 发消息</h2>
+    <label>对端 ID</label>
+    <input id="peer-id" class="mono" placeholder="对方的 64 位 hex ID" />
+    <label>对端当前所在中继（必须填对，中继之间不互转）</label>
+    <input id="peer-relay" class="mono" value="" />
+    <label>消息</label>
+    <div class="row"><input id="msg" placeholder="输入内容后点发送" /><button id="btn-send" disabled>发送</button></div>
+  </div>
+
+  <div class="card">
+    <h2>事件日志</h2>
+    <div id="log"></div>
+  </div>
+</div>
+<script type="module" src="./probe-main.js"></script>
+</body>
+</html>

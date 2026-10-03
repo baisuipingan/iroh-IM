@@ -1,0 +1,4 @@
+[[relay_nodes]]
+url = "http://189.24.68.147:3340"
+[[relay_nodes]]
+url = "http://189.24.68.147:3341"

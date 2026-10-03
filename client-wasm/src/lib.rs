@@ -1,0 +1,20 @@
+//! iroh-web：自建中继舰队上的浏览器/原生 iroh 端点。
+//!
+//! - `node`：点对点的诊断用节点（relay-probe 用）
+//! - `room`：群聊房间（iroh-gossip，topic = 房间；消息 ed25519 签名；历史走常驻节点）
+//! - `filetransfer`：P2P 文件传输协议（控制面走 gossip，数据面走独立 QUIC 流）
+//! - `transfer_orchestrator`：传输编排（`ChunkSource`/`ChunkSink` 抽象，浏览器与原生共用）
+//! - `wasm_api`（feature = wasm）：暴露给浏览器 JS
+//! - `bin/roomd`（feature = cli）：常驻节点，做历史 / 在线状态 / 房间锚点
+
+pub mod filetransfer;
+pub mod transfer_orchestrator;
+pub mod node;
+pub mod room;
+pub mod sigfmt;
+
+#[cfg(feature = "wasm")]
+mod wasm_api;
+
+#[cfg(feature = "wasm")]
+pub use wasm_api::{RoomNode, WebNode};

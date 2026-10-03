@@ -1,0 +1,158 @@
+/* ============================================================================
+ * 布局（Layout）
+ *
+ * 这里是整个"滚不动 / 输入框跑出屏幕"问题的根因所在。
+ *
+ * 规则：在一个 flex / grid 链条里，只要某一环要"内部滚动"，那么从根到这个
+ * 可滚动元素之间的**每一环**都必须能收缩 —— 即 min-height: 0（纵向）
+ * 和 min-width: 0（横向）。
+ *
+ * 因为 flex/grid 子项默认 min-height: auto，意思是"不许小于内容高度"，
+ * 于是消息一多就把容器撑高、超出视口，而 body 又是 overflow: hidden，
+ * 最终表现为：不能滚、底部输入框被推到屏幕外。
+ * ==========================================================================*/
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  overflow: hidden;                 /* 只允许内部区域滚动 */
+  background: var(--bg-app);
+  color: var(--fg);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
+        'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background .18s var(--ease), color .18s var(--ease);
+}
+
+/* ---------- 外壳：三栏 ---------- */
+.app {
+  height: 100%;
+  min-height: 0;                    /* ← 关键 1 */
+  display: grid;
+  grid-template-columns: var(--rail-w) var(--panel-w) minmax(0, 1fr);
+  /*                                           ↑ 关键 2：minmax(0,1fr)
+     用 1fr 时，列的最小宽度是 auto（= 内容宽度），长消息会把列撑宽；
+     minmax(0,1fr) 才允许它收缩。 */
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.rail,
+.panel,
+.chat {
+  min-height: 0;                    /* ← 关键 3：每栏都可压缩 */
+  min-width: 0;
+}
+
+/* ---------- 最左图标栏 ---------- */
+.rail {
+  background: var(--bg-rail);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px 0 14px;
+  gap: 6px;
+}
+
+/* ---------- 左二列表 ---------- */
+.panel {
+  background: var(--bg-panel);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-scroll {
+  flex: 1 1 0;                      /* basis 0 才肯收缩 */
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ---------- 右侧对话 ---------- */
+.chat {
+  background: var(--bg-app);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;                 /* 兜底：任何溢出都在内部消化 */
+  position: relative;
+}
+
+.chat-head { flex: none; height: var(--head-h); }
+
+/* 消息区：唯一允许纵向滚动的区域 */
+.timeline {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;      /* 滚到头不要带动外层 */
+  scroll-behavior: auto;             /* 自己控制滚动时机，别用平滑 */
+}
+
+.composer { flex: none; }
+
+/* ---------- 移动端 ----------
+ *
+ * 窄屏改成"单栏 + 抽屉"：列表是覆盖在聊天之上的抽屉，选中房间后收起。
+ * 之前面板 `is-open` 加上了就再没人摘掉，而聊天区在它底下一格 ——
+ * 结果是手机上选完房间整个聊天区被完全遮住，且没有任何返回手段。
+ */
+.panel-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-pop) - 1);
+  background: var(--scrim);
+}
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+
+  .panel {
+    position: absolute;
+    top: 0; bottom: 0; left: var(--rail-w);
+    width: min(var(--panel-w), calc(100vw - var(--rail-w)));
+    z-index: var(--z-pop);
+    transform: translateX(-100%);
+    transition: transform .18s var(--ease);
+    box-shadow: 2px 0 12px rgba(0, 0, 0, .2);
+    visibility: hidden;   /* transform 移出屏幕后仍可点，这里彻底关掉 */
+  }
+  .panel.is-open { transform: none; visibility: visible; }
+  .panel-scrim.is-on { display: block; }
+
+  /* 手机上没有 hover，"点自己进房间"这个入口要点得到 */
+  .row::after {
+    content: '›';
+    margin-left: auto;
+    padding-left: 8px;
+    color: var(--fg-faint);
+    font-size: 18px;
+    align-self: center;
+  }
+
+  /* 触屏上按钮太小不好点 */
+  .rail-btn { width: 44px; height: 44px; }
+  .tool-btn { width: 36px; height: 36px; }
+  .pending__x { opacity: 1; width: 22px; height: 22px; font-size: 15px; }
+  .pending__item { height: 64px; }
+  .pending__item.is-img { width: 64px; }
+  .pending__item img { width: 64px; height: 64px; }
+
+  .msg { max-width: 86%; }
+  .msg--file { max-width: 94%; }
+  .filecard { min-width: 0; max-width: 100%; }
+  .imgcard { width: min(220px, 58vw); }
+
+  .emoji-pop {
+    left: 8px; right: 8px;
+    width: auto;
+    bottom: 96px;
+  }
+
+  .composer { padding: 0 10px 10px; }
+  .timeline-inner { padding: 12px 12px 6px; }
+}

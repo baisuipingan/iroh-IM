@@ -1,0 +1,191 @@
+/* ============================================================================
+ * store.js · 本地持久化
+ *
+ * 统一收口 localStorage，键名集中在这里，避免散落各处拼字符串。
+ * 版本前缀方便以后做数据迁移。
+ * ==========================================================================*/
+
+const NS = 'iroh.';
+
+const KEYS = {
+  secretKey: `${NS}secret-key`,
+  nick: `${NS}nickname`,
+  theme: `${NS}theme`,
+  rooms: `${NS}rooms`,
+  lastRoom: `${NS}last-room`,
+  avatarColor: `${NS}avatar-color`,
+  prefs: `${NS}prefs`,
+  /** room -> {text, nick, ts, mine}：会话列表里显示的最后一条消息预览 */
+  previews: `${NS}previews`,
+  /** room -> 未读数 */
+  unread: `${NS}unread`,
+};
+
+function readJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+function writeJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* 配额满等情况静默忽略 */
+  }
+}
+
+export const store = {
+  keys: KEYS,
+
+  /* ---------- 身份 ---------- */
+  /** 读取身份私钥；没有就生成一个（32 字节 hex） */
+  identity() {
+    let hex = localStorage.getItem(KEYS.secretKey);
+    if (!/^[0-9a-f]{64}$/.test(hex || '')) {
+      const buf = new Uint8Array(32);
+      crypto.getRandomValues(buf);
+      hex = [...buf].map((b) => b.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem(KEYS.secretKey, hex);
+    }
+    return hex;
+  },
+  resetIdentity() {
+    localStorage.removeItem(KEYS.secretKey);
+  },
+
+  /* ---------- 昵称 ---------- */
+  nick(fallback) {
+    const v = localStorage.getItem(KEYS.nick);
+    return v || fallback || '';
+  },
+  setNick(v) {
+    localStorage.setItem(KEYS.nick, v);
+  },
+
+  /* ---------- 主题 ---------- */
+  theme() {
+    return localStorage.getItem(KEYS.theme) || 'dark';
+  },
+  setTheme(v) {
+    localStorage.setItem(KEYS.theme, v);
+  },
+
+  /* ---------- 房间列表 ---------- */
+  rooms() {
+    const list = readJSON(KEYS.rooms, []);
+    return Array.isArray(list) ? list : [];
+  },
+  saveRooms(list) {
+    writeJSON(KEYS.rooms, list.slice(0, 40));
+  },
+  /** 降序：置顶优先，其次最近活跃 */
+  roomsSorted() {
+    return store
+      .rooms()
+      .slice()
+      .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.last || 0) - (a.last || 0));
+  },
+  room(name) {
+    return store.rooms().find((r) => r.name === name);
+  },
+  /** 更新或插入一个房间 */
+  upsertRoom(name, patch = {}) {
+    const list = store.rooms();
+    const i = list.findIndex((r) => r.name === name);
+    if (i >= 0) Object.assign(list[i], patch);
+    else list.unshift({ name, last: Date.now(), ...patch });
+    store.saveRooms(list);
+    return store.room(name);
+  },
+  removeRoom(name) {
+    store.saveRooms(store.rooms().filter((r) => r.name !== name));
+  },
+
+  lastRoom() {
+    return localStorage.getItem(KEYS.lastRoom) || '';
+  },
+  setLastRoom(name) {
+    localStorage.setItem(KEYS.lastRoom, name);
+  },
+
+  /* ---------- 会话预览 / 未读 ----------
+   *
+   * 为什么要落盘：预览和未读原本只存在内存的 Map 里，刷新页面就全没了 ——
+   * 表现是"明明有人发过消息，列表却显示'还没有消息'，未读红点也消失"。
+   * 这类"看起来像假数据"的问题，根因就是状态没持久化。
+   */
+
+  /** @returns {Record<string, {text:string,nick:string,ts:number,mine:boolean}>} */
+  previews() {
+    const o = readJSON(KEYS.previews, {});
+    return o && typeof o === 'object' ? o : {};
+  },
+  setPreview(room, preview) {
+    const all = store.previews();
+    all[room] = preview;
+    // 只保留最近活跃的 40 个房间，和房间列表的上限一致，避免 localStorage 无限膨胀
+    const keys = Object.keys(all);
+    if (keys.length > 40) {
+      keys
+        .sort((a, b) => (all[b]?.ts || 0) - (all[a]?.ts || 0))
+        .slice(40)
+        .forEach((k) => delete all[k]);
+    }
+    writeJSON(KEYS.previews, all);
+  },
+  clearPreviews() {
+    localStorage.removeItem(KEYS.previews);
+  },
+
+  /** @returns {Record<string, number>} */
+  unread() {
+    const o = readJSON(KEYS.unread, {});
+    return o && typeof o === 'object' ? o : {};
+  },
+  setUnread(room, n) {
+    const all = store.unread();
+    if (n > 0) all[room] = n;
+    else delete all[room];
+    writeJSON(KEYS.unread, all);
+  },
+  clearUnread() {
+    localStorage.removeItem(KEYS.unread);
+  },
+
+  /** localStorage 实际占用（设置页"数据用量"用，别写死数字骗人） */
+  usage() {
+    let bytes = 0;
+    const detail = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(NS)) continue;
+      // UTF-16：字符数 × 2
+      const size = (localStorage.getItem(k) || '').length * 2;
+      bytes += size;
+      detail[k.slice(NS.length)] = size;
+    }
+    return { bytes, detail };
+  },
+
+  /* ---------- 偏好 ---------- */
+  prefs() {
+    return readJSON(KEYS.prefs, {});
+  },
+  setPref(k, v) {
+    const p = store.prefs();
+    p[k] = v;
+    writeJSON(KEYS.prefs, p);
+  },
+
+  clearLocal() {
+    localStorage.removeItem(KEYS.rooms);
+    localStorage.removeItem(KEYS.lastRoom);
+    localStorage.removeItem(KEYS.prefs);
+    store.clearPreviews();
+    store.clearUnread();
+  },
+};

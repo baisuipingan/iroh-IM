@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-29T09:20:00Z",
+  "note": "中继名单 + 常驻节点地址。relay_token 会随页面下发，所以它只能挡住「扫端口/直连 relay URL 的陌生人」，不能当作强凭证；要更强控制请换 HTTP callout。",
+  "relays": [
+    {
+      "id": "hk-1",
+      "url": "https://iroh1.editor.vip:15443",
+      "quic_port": 7842,
+      "region": "HK",
+      "enabled": true,
+      "weight": 1.0
+    },
+    {
+      "id": "eu-1",
+      "url": "https://iroh2.editor.vip:15443",
+      "quic_port": 7842,
+      "region": "EU",
+      "enabled": true,
+      "weight": 1.0
+    },
+    {
+      "id": "fr-1",
+      "url": "https://iroh3.editor.vip:15443",
+      "quic_port": 7842,
+      "region": "FR",
+      "enabled": true,
+      "weight": 1.0
+    }
+  ],
+  "anchor": {
+    "id": "5bcc4ea3bb56f17041390a9f171bb03a16f107f95ecb93097f80a985845aaab6",
+    "relay": "https://iroh1.editor.vip:15443",
+    "note": "常驻节点：提供历史消息与在线状态。id 由 roomd 启动时打印，部署后填这里。"
+  },
+  "relay_token": "44d51ffb6ddab961c6c8cdfe802e0752e0dee3b5cb486916"
+}

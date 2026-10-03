@@ -1,0 +1,13 @@
+enable_relay = true
+http_bind_addr = "127.0.0.1:3340"
+enable_quic_addr_discovery = true
+enable_metrics = true
+metrics_bind_addr = "127.0.0.1:9097"
+access = "everyone"
+
+[tls]
+https_bind_addr = "0.0.0.0:15443"   # 与 frontend/relay-config.json 一致
+quic_bind_addr = "0.0.0.0:7842"
+cert_mode = "Manual"
+manual_cert_path = "/etc/iroh-relay/certs/fullchain.pem"
+manual_key_path = "/etc/iroh-relay/certs/privkey.pem"

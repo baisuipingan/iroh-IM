@@ -1,0 +1,28 @@
+# roomd · 常驻节点（房间锚点：历史消息 + 在线状态）
+#
+# 与中继的关系：它是**客户端**，不监听端口、不开防火墙，自己连中继。
+# 所以用默认 bridge 网络即可，不需要 network_mode: host。
+#
+# 部署：
+#   1) 把编译好的 roomd 二进制放到本目录（build-wasm.sh 的 native 产物）
+#   2) docker compose up -d --build
+#   3) docker compose logs | grep ROOMD_ENDPOINT_ID   → 把它写进前端 relay-config.json 的 anchor.id
+
+services:
+  roomd:
+    build: .
+    image: roomd:local
+    container_name: roomd
+    restart: unless-stopped
+    volumes:
+      - ./data:/data          # 身份 + 历史都在这里，务必保留
+    environment:
+      # 用哪几台中继（逗号分隔）
+      - ROOMD_RELAYS=${ROOMD_RELAYS:-https://iroh1.editor.vip:15443,https://iroh2.editor.vip:15443,https://iroh3.editor.vip:15443}
+      # 启动时自动订阅的房间（其余房间在第一次有人要历史时自动订阅）
+      - ROOMD_ROOMS=${ROOMD_ROOMS:-lobby}
+      - ROOMD_NICKNAME=${ROOMD_NICKNAME:-常驻节点}
+      # 中继开启鉴权后必须提供（否则会被中继拒：The relay denied our authentication）
+      - ROOMD_RELAY_TOKEN=${ROOMD_RELAY_TOKEN:-}
+      # 不要硬编码，否则会覆盖 .env 里的 RUST_LOG（排查时看不到 iroh 内部日志）
+      - RUST_LOG=${RUST_LOG:-info}

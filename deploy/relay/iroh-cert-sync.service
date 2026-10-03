@@ -1,0 +1,7 @@
+[Unit]
+Description=Sync TLS certificate into iroh-relay and restart if changed
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/iroh-relay/sync-cert.sh /root/.acme.sh/iroh1.editor.vip_ecc/fullchain.cer /root/.acme.sh/iroh1.editor.vip_ecc/iroh1.editor.vip.key iroh-relay@a

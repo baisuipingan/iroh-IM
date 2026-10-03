@@ -1,0 +1,84 @@
+/* ============================================================================
+ * 设计令牌（Design Tokens）
+ * 只有这里定义"长什么样"，组件层只引用变量。换主题 = 换一组令牌。
+ * ==========================================================================*/
+
+:root {
+  /* 尺寸 */
+  --rail-w: 56px;
+  --panel-w: 268px;
+  --head-h: 52px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  /* 字号 */
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-md: 13.5px;
+  --fs-lg: 15px;
+
+  /* 语义色（两个主题共用） */
+  --c-brand: #07c160;      /* 微信绿 */
+  --c-brand-hover: #06ad56;
+  --c-danger: #fa5151;
+
+  /* 层级 */
+  --z-pop: 60;
+  --z-dialog: 100;
+
+  /* 动效 */
+  --ease: cubic-bezier(.2, .8, .3, 1);
+}
+
+/* ---------- 深色（默认） ---------- */
+html[data-theme='dark'] {
+  --bg-app: #191919;
+  --bg-rail: #1a1a1a;
+  --bg-panel: #202020;
+  --bg-head: #1f1f1f;
+  --bg-card: #2a2a2a;
+  --bg-bubble: #2c2c2c;
+  --bg-bubble-me: #3a8a63;
+  --text-on-bubble-me: #ffffff;
+  --bg-hover: #262626;
+  --bg-active: #1f4a3d;
+  --bg-active-hover: #235742;
+
+  --fg: #e6e6e6;
+  --fg-dim: #8c8c8c;
+  --fg-faint: #6a6a6a;
+  --fg-on-rail: #a8a8a8;
+  --line: #2b2b2b;
+  --line-strong: #141414;
+  --scroll-thumb: #3a3a3a;
+  --fg-on-rail-hover: #ffffff;
+  --scrim: rgba(0, 0, 0, .45);
+  color-scheme: dark;
+}
+
+/* ---------- 浅色 ---------- */
+html[data-theme='light'] {
+  --bg-app: #f5f5f5;
+  --bg-rail: #2e2e2e;
+  --bg-panel: #f2f2f2;
+  --bg-head: #ededed;
+  --bg-card: #ffffff;
+  --bg-bubble: #ffffff;
+  --bg-bubble-me: #95ec69;
+  --text-on-bubble-me: #1a1a1a;
+  --bg-hover: #e8e8e8;
+  --bg-active: #d9d9d9;
+  --bg-active-hover: #cfcfcf;
+
+  --fg: #1a1a1a;
+  --fg-dim: #7a7a7a;
+  --fg-faint: #a0a0a0;
+  --fg-on-rail: #c4c4c4;
+  --line: #dedede;
+  --line-strong: #dcdcdc;
+  --scroll-thumb: #c8c8c8;
+  --fg-on-rail-hover: #ffffff;
+  --scrim: rgba(0, 0, 0, .35);
+  color-scheme: light;
+}
