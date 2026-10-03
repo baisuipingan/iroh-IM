@@ -553,9 +553,16 @@ export const net = {
    * 广播一条**可用性质询**：我点了某张卡但联系不上发送方，公开问一句。
    * 他若还持有该文件会重播心跳认领；**沉默即视为过期**。
    */
-  async queryFile(fileId, want) {
+  /**
+   * 广播"你还能提供这个文件吗"。
+   *
+   * ⚠️ `room` 必填：质询只能发进**卡片所属的那个房间**（F7）。
+   *    这里原来只有两个参数，`args[2]` 会是 undefined，
+   *    Rust 侧的房间校验必然失败（而且错误信息里会出现 "undefined"）。
+   */
+  async queryFile(fileId, want, room) {
     if (!this.client) return;
-    await this.client.call('queryFile', fileId, want);
+    await this.client.call('queryFile', fileId, want, room);
   },
 
 

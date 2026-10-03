@@ -144,8 +144,12 @@ function setupLeaveCancel() {
     for (const [file_id, t] of transfers) {
       if (t.direction !== 'recv') continue;
       if (t.state !== 'active' && t.state !== 'invited') continue;
-      // 不等响应：页面正在卸载，能发出去就发
-      net.client.call('reject', file_id, '对方刷新或关闭了页面').catch(() => {});
+      // 不等响应：页面正在卸载，能发出去就发。
+      // ⚠️ 必须带房间：Reject 现在要过"房间没变"的校验（F7），
+      //    漏了参数会把 room 传成 undefined，消息直接发不出去。
+      net.client
+        .call('reject', file_id, '对方刷新或关闭了页面', t.room)
+        .catch(() => {});
     }
   };
   window.addEventListener('pagehide', leave);
