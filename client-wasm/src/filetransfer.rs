@@ -260,7 +260,7 @@ impl FileCtrl {
     ///    这不是冗余：文件流的授权完全建立在"我接受的那个邀约来自
     ///    真正的发送方"之上，而 `sender` 是接收侧登记期待发送者时用的字段。
     ///    它不参与签名，就等于可以被改（改成别人的 id 也不影响验签）。
-    fn canonical(&self, from: &str, ts: u64) -> String {
+    fn canonical(&self, from: &str, ts: u64, room: &str) -> String {
         use crate::sigfmt::encode_fields;
         let ts_s = ts.to_string();
         match self {
@@ -268,7 +268,11 @@ impl FileCtrl {
                 let size = m.size.to_string();
                 let chunk = m.chunk_size.to_string();
                 encode_fields(&[
-                    "f2",
+                    "f3",
+                    // ⚠️ 房间进载荷（v4，缺陷 F6）：否则 A 房间的邀约可以被
+                    //    搬进 B 房间，让 B 的人点开一张"来自别的房间"的卡片。
+                    "room",
+                    room,
                     "invite",
                     "from",
                     from,
@@ -298,7 +302,9 @@ impl FileCtrl {
                 have,
                 receiver_relay,
             } => encode_fields(&[
-                "f2",
+                "f3",
+                "room",
+                room,
                 "accept",
                 "from",
                 from,
@@ -312,7 +318,9 @@ impl FileCtrl {
                 receiver_relay.as_str(),
             ]),
             FileCtrl::Reject { file_id, reason } => encode_fields(&[
-                "f2",
+                "f3",
+                "room",
+                room,
                 "reject",
                 "from",
                 from,
@@ -326,7 +334,9 @@ impl FileCtrl {
             FileCtrl::Done { file_id, ok, reason } => {
                 let ok_s = if *ok { "1" } else { "0" };
                 encode_fields(&[
-                    "f2",
+                    "f3",
+                    "room",
+                    room,
                     "done",
                     "from",
                     from,
@@ -428,9 +438,9 @@ impl From<&CtrlBody> for FileCtrl {
 }
 
 impl SignedCtrl {
-    pub fn sign(key: &SecretKey, ctrl: &FileCtrl, ts: u64) -> Self {
+    pub fn sign(key: &SecretKey, ctrl: &FileCtrl, ts: u64, room: &str) -> Self {
         let from = key.public().to_string();
-        let canon = ctrl.canonical(&from, ts);
+        let canon = ctrl.canonical(&from, ts, room);
         let sig = key.sign(canon.as_bytes());
         Self {
             from,
@@ -441,12 +451,12 @@ impl SignedCtrl {
     }
 
     /// 验签并还原。失败返回 None（调用方应丢弃）。
-    pub fn verify(&self) -> Option<FileCtrl> {
+    pub fn verify(&self, room: &str) -> Option<FileCtrl> {
         let pk = PublicKey::from_str(&self.from).ok()?;
         let raw = hex_decode(&self.sig).ok()?;
         let arr = <[u8; 64]>::try_from(raw.as_slice()).ok()?;
         let ctrl: FileCtrl = (&self.body).into();
-        let canon = ctrl.canonical(&self.from, self.ts);
+        let canon = ctrl.canonical(&self.from, self.ts, room);
         if pk
             .verify(canon.as_bytes(), &Signature::from_bytes(&arr))
             .is_err()
@@ -1360,6 +1370,9 @@ mod tests {
 mod auth_tests {
     use super::*;
 
+    /// v4：签名载荷绑定房间
+    const ROOM: &str = "test-room";
+
     fn meta() -> FileMeta {
         FileMeta {
             file_id: "abc123".into(),
@@ -1450,15 +1463,15 @@ mod auth_tests {
         let k = SecretKey::from_bytes(&[9u8; 32]);
         let mut m = meta();
         m.sender = k.public().to_string();
-        let signed = SignedCtrl::sign(&k, &FileCtrl::Invite(m.clone()), 100);
-        assert!(signed.verify().is_some());
+        let signed = SignedCtrl::sign(&k, &FileCtrl::Invite(m.clone()), 100, ROOM);
+        assert!(signed.verify(ROOM).is_some());
 
         // 改 sender 后必须验不过（sender 已进签名载荷）
         let mut body = signed.clone();
         if let crate::filetransfer::CtrlBody::Invite(ref mut im) = body.body {
             im.sender = "别人的EndpointId".into();
         }
-        assert!(body.verify().is_none(), "改 sender 竟然还能验签通过");
+        assert!(body.verify(ROOM).is_none(), "改 sender 竟然还能验签通过");
     }
 
     #[test]
@@ -1466,8 +1479,8 @@ mod auth_tests {
         let k = SecretKey::from_bytes(&[11u8; 32]);
         let mut m = meta();
         m.name = "a|b.pdf".into();
-        let signed = SignedCtrl::sign(&k, &FileCtrl::Invite(m), 100);
-        assert!(signed.verify().is_some());
+        let signed = SignedCtrl::sign(&k, &FileCtrl::Invite(m), 100, ROOM);
+        assert!(signed.verify(ROOM).is_some());
     }
 
     // ── F17：邀约元信息必须逐项校验（失败关闭）────────────────────
@@ -1642,5 +1655,18 @@ mod auth_tests {
     fn 越界块序号被拒() {
         assert!(check_chunk_admission(8, 8, 0, 0, false).is_err());
         assert!(check_chunk_admission(0, 0, 0, 0, false).is_err());
+    }
+    // ── F6：文件控制消息也绑定房间 ─────────────────────────────────
+    #[test]
+    fn 跨房间重放的邀约验签失败() {
+        let k = SecretKey::from_bytes(&[13u8; 32]);
+        let mut m = meta();
+        m.sender = k.public().to_string();
+        let signed = SignedCtrl::sign(&k, &FileCtrl::Invite(m), 100, ROOM);
+        assert!(signed.verify(ROOM).is_some(), "本房间内应当通过");
+        assert!(
+            signed.verify("another-room").is_none(),
+            "邀约不能被搬进别的房间"
+        );
     }
 }

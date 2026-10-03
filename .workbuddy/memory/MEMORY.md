@@ -32,8 +32,12 @@ EndpointId 现为 `5bcc4ea3bb…`，与 `frontend/pkg/relay-config.json` 的 `an
 - 离开声明只在"主动切房间"时可靠发出；刷新/崩溃走心跳超时兜底（25~45s）
 - 历史落盘：文件名 `blake3(room)`，**原始房间名存 jsonl 首行**（`RoomHeader` 自校验）；
   加载只认文件头，**绝不从文件名反推**（旧的 `sanitize` 会让 `研发群`/`产品群` 互撞）
-- 签名载荷：`sigfmt.rs` 长度前缀编码（无歧义），协议 v3；`ChatMessage.id` 由载荷派生且参与签名
-  —— 改这两处必须升版本号并清旧历史
+- 签名载荷：`sigfmt.rs` 长度前缀编码（无歧义），协议 **v4**；
+  **房间标识进全部签名载荷**（ChatMessage/Presence/Leave/FileQuery/FileCtrl）——
+  否则 A 房间的合法消息能被搬进 B 房间冒充作者（复检 F6）。
+  `ChatMessage.id` 由载荷派生（含 room）且参与签名。
+  **任何签名串改动都必须升版本号 + 清旧历史 + roomd 与前端同时重部署**
+  （混跑期间旧消息会被静默丢弃，只有 `warn!` 日志）
 - 文件流授权：接收侧 `Pending` 记 `expect_sender`，入站须 `remote_id()` 匹配 +
   header 逐项一致 + 块序号/长度合法。**file_id 是公开广播的，不是授权凭据**
 - 接收内容校验在 `JsChunkSink`（增量 BLAKE3）。原生 `BytesSink` 的校验**生产不走**
@@ -44,7 +48,7 @@ EndpointId 现为 `5bcc4ea3bb…`，与 `frontend/pkg/relay-config.json` 的 `an
 
 ```bash
 cd client-wasm && export PATH="$HOME/.cargo/bin:$PATH"
-cargo test --offline --no-default-features --features cli   # 37 个单元测试
+cargo test --offline --no-default-features --features cli   # 61 个测试（56 lib + 4 roomd + 1 doc）
 cargo check --locked --no-default-features --features cli   # 验证 Cargo.lock 同步
 bash scripts/security/run.sh    # 安全回归：attack-verify 17/17 + attack-stream 1/1
 ```

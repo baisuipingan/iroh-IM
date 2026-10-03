@@ -326,7 +326,7 @@ async fn main() -> Result<()> {
                                         let _ = store_c.append(&room_c, m);
                                     }
                                     Wire::Presence { p } => {
-                                        if !p.verify() {
+                                        if !p.verify(&room_c) {
                                             continue;
                                         }
                                         if p.from != endpoint_id {
@@ -347,7 +347,7 @@ async fn main() -> Result<()> {
                                     }
                                     // 对方主动离开（切房间时发的加速声明）→ 立刻从快照摘掉
                                     Wire::Leave { l } => {
-                                        if !l.verify() {
+                                        if !l.verify(&room_c) {
                                             continue;
                                         }
                                         snapshot_drop(&snaps_c, &room_c, &l.from);
@@ -359,7 +359,7 @@ async fn main() -> Result<()> {
                                     Wire::File { c } => {
                                         // 常驻节点不参与文件中转（文件是点对点直连）。
                                         // 只在日志里留个痕，便于排查。
-                                        if let Some(ctrl) = c.verify() {
+                                        if let Some(ctrl) = c.verify(&room_c) {
                                             debug!("[{}] 文件控制：{}", room_c, ctrl.file_id());
                                         }
                                     }
@@ -399,7 +399,7 @@ async fn main() -> Result<()> {
                             .get(&room_p)
                             .map(|s| s.sender.clone());
                         let Some(sender) = sender else { break };
-                        let bytes = encode_presence(&key_p, &nickname_p);
+                        let bytes = encode_presence(&key_p, &nickname_p, &room_p);
                         if bytes.is_empty() {
                             continue;
                         }

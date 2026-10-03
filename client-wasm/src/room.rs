@@ -130,12 +130,19 @@ impl ChatMessage {
     /// **包含 `id`** —— 这一点是 v3 的核心：id 不在签名载荷里的话，
     /// 别人能拿着你的有效签名随便改 id 反复重放。
     /// 没有文件时那几个字段填空串/0（不搞"两种拼法"，验签处要分支就容易出 bug）。
-    pub fn canonical(&self) -> String {
+    pub fn canonical(&self, room: &str) -> String {
         let f = self.file.as_ref();
         let ts = self.ts.to_string();
         let size = f.map(|x| x.size).unwrap_or(0).to_string();
         crate::sigfmt::encode_fields(&[
-            crate::sigfmt::PROTO_V3,
+            crate::sigfmt::PROTO_V4,
+            // ⚠️ **房间标识必须进签名载荷**（v4，缺陷 F6）。
+            //    否则任何能进目标房间 B 的人，都能把他在房间 A 抓到的
+            //    **合法签名消息原样转发进 B** —— 接收方验签通过、id 校验通过，
+            //    于是原作者"在从未进过的房间里说了话"。
+            //    Presence/Leave/FileQuery/FileCtrl 同理（见下）。
+            "room",
+            room,
             "id",
             self.id.as_str(),
             "from",
@@ -162,10 +169,12 @@ impl ChatMessage {
     /// 为什么把 `file_id` 也算进去：文件证明的 `text` 是空的，
     /// 只按 (from, ts, text) 算的话，同一毫秒发的两个文件会撞成同一个 id，
     /// 而历史是"按 id 去重"的 —— 后一条会被静默丢掉。
-    pub fn compute_id(from: &str, ts: u64, text: &str, file_id: &str) -> String {
+    pub fn compute_id(from: &str, ts: u64, text: &str, file_id: &str, room: &str) -> String {
         let ts_s = ts.to_string();
+        // 把 room 一起算进去：id 应当是"被签名的那条完整陈述"的派生值，
+        // 而 v4 起陈述里包含房间（F6）。
         let payload =
-            crate::sigfmt::encode_fields(&["id0", from, ts_s.as_str(), text, file_id]);
+            crate::sigfmt::encode_fields(&["id1", room, from, ts_s.as_str(), text, file_id]);
         let h = blake3::hash(payload.as_bytes());
         hex::encode(&h.as_bytes()[..12])
     }
@@ -175,21 +184,22 @@ impl ChatMessage {
     /// 验签时**必须**一起核对：`verify()` 只证明"签名没被改"，
     /// 而签名载荷里已经包含 id 了，所以这里再比一次就能挡住
     /// "改 id 后重放"（签名仍然有效，但 id 对不上载荷）。
-    pub fn id_matches(&self) -> bool {
+    pub fn id_matches(&self, room: &str) -> bool {
         let f = self.file.as_ref();
         let want = Self::compute_id(
             &self.from,
             self.ts,
             &self.text,
             f.map(|x| x.file_id.as_str()).unwrap_or(""),
+            room,
         );
         // 恒定时间比较不必要：id 不是秘密，只是完整性的一部分。
         self.id == want
     }
 
-    pub fn verify(&self) -> bool {
+    pub fn verify(&self, room: &str) -> bool {
         // id 必须与载荷一致，否则"签名有效"但 id 是被人换过的
-        if !self.id_matches() {
+        if !self.id_matches(room) {
             return false;
         }
         let Ok(pk) = PublicKey::from_str(&self.from) else {
@@ -201,19 +211,19 @@ impl ChatMessage {
         let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else {
             return false;
         };
-        pk.verify(self.canonical().as_bytes(), &Signature::from_bytes(&arr))
+        pk.verify(self.canonical(room).as_bytes(), &Signature::from_bytes(&arr))
             .is_ok()
     }
 
-    pub fn sign(mut self, key: &SecretKey) -> Self {
+    pub fn sign(mut self, key: &SecretKey, room: &str) -> Self {
         // 先按载荷重算 id，保证 id 与签名永远自洽
         let f_id = self
             .file
             .as_ref()
             .map(|x| x.file_id.clone())
             .unwrap_or_default();
-        self.id = Self::compute_id(&self.from, self.ts, &self.text, &f_id);
-        let sig = key.sign(self.canonical().as_bytes());
+        self.id = Self::compute_id(&self.from, self.ts, &self.text, &f_id, room);
+        let sig = key.sign(self.canonical(room).as_bytes());
         self.sig = hex::encode(sig.to_bytes());
         self
     }
@@ -246,7 +256,7 @@ pub struct Presence {
 }
 
 impl Presence {
-    pub fn canonical(&self) -> String {
+    pub fn canonical(&self, room: &str) -> String {
         let ts = self.ts.to_string();
         let epoch = self.epoch.to_string();
         let n = self.files.len().to_string();
@@ -254,7 +264,11 @@ impl Presence {
         // 那样 file_id 里含逗号时会和"两个 id"拼出同一串（歧义）。
         // 另外带上清单长度，让"少一项/多一项"也能被发现。
         let mut out = crate::sigfmt::encode_fields(&[
-            "p3",
+            "p4",
+            // 房间进载荷（F6）：否则 A 房间的合法心跳可以被搬进 B 房间，
+            // 让某人"在 B 房间里在线、并声称持有某些文件"。
+            "room",
+            room,
             "from",
             self.from.as_str(),
             "ts",
@@ -273,7 +287,13 @@ impl Presence {
     }
 
     /// 组装并签名。`files` 会被**排序**，保证同样的集合产生同样的签名串。
-    pub fn signed(key: &SecretKey, nickname: &str, files: Vec<String>, epoch: u64) -> Self {
+    pub fn signed(
+        key: &SecretKey,
+        nickname: &str,
+        files: Vec<String>,
+        epoch: u64,
+        room: &str,
+    ) -> Self {
         let mut files = files;
         files.sort();
         files.dedup();
@@ -285,11 +305,11 @@ impl Presence {
             files,
             epoch,
         };
-        let sig = key.sign(p.canonical().as_bytes());
+        let sig = key.sign(p.canonical(room).as_bytes());
         p.sig = hex::encode(sig.to_bytes());
         p
     }
-    pub fn verify(&self) -> bool {
+    pub fn verify(&self, room: &str) -> bool {
         let Ok(pk) = PublicKey::from_str(&self.from) else {
             return false;
         };
@@ -299,7 +319,7 @@ impl Presence {
         let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else {
             return false;
         };
-        pk.verify(self.canonical().as_bytes(), &Signature::from_bytes(&arr))
+        pk.verify(self.canonical(room).as_bytes(), &Signature::from_bytes(&arr))
             .is_ok()
     }
 }
@@ -324,21 +344,31 @@ pub struct LeaveMsg {
 }
 
 impl LeaveMsg {
-    pub fn canonical(&self) -> String {
+    pub fn canonical(&self, room: &str) -> String {
         let ts = self.ts.to_string();
-        crate::sigfmt::encode_fields(&["l2", "from", self.from.as_str(), "ts", ts.as_str()])
+        // 房间进载荷（F6）：否则 A 房间的"我走了"可以被重放成"他刚离开 B"，
+        // 让 B 房间的人立刻把他摘出成员表、他的文件随之显示过期。
+        crate::sigfmt::encode_fields(&[
+            "l3",
+            "room",
+            room,
+            "from",
+            self.from.as_str(),
+            "ts",
+            ts.as_str(),
+        ])
     }
-    pub fn signed(key: &SecretKey) -> Self {
+    pub fn signed(key: &SecretKey, room: &str) -> Self {
         let mut m = Self {
             from: key.public().to_string(),
             ts: now_ms(),
             sig: String::new(),
         };
-        let sig = key.sign(m.canonical().as_bytes());
+        let sig = key.sign(m.canonical(room).as_bytes());
         m.sig = hex::encode(sig.to_bytes());
         m
     }
-    pub fn verify(&self) -> bool {
+    pub fn verify(&self, room: &str) -> bool {
         let Ok(pk) = PublicKey::from_str(&self.from) else {
             return false;
         };
@@ -348,7 +378,7 @@ impl LeaveMsg {
         let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else {
             return false;
         };
-        pk.verify(self.canonical().as_bytes(), &Signature::from_bytes(&arr))
+        pk.verify(self.canonical(room).as_bytes(), &Signature::from_bytes(&arr))
             .is_ok()
     }
 }
@@ -372,10 +402,12 @@ pub struct FileQuery {
 }
 
 impl FileQuery {
-    pub fn canonical(&self) -> String {
+    pub fn canonical(&self, room: &str) -> String {
         let ts = self.ts.to_string();
         crate::sigfmt::encode_fields(&[
-            "q2",
+            "q3",
+            "room",
+            room,
             "from",
             self.from.as_str(),
             "ts",
@@ -386,7 +418,7 @@ impl FileQuery {
             self.want.as_str(),
         ])
     }
-    pub fn signed(key: &SecretKey, file_id: &str, want: &str) -> Self {
+    pub fn signed(key: &SecretKey, file_id: &str, want: &str, room: &str) -> Self {
         let mut q = Self {
             from: key.public().to_string(),
             ts: now_ms(),
@@ -394,11 +426,11 @@ impl FileQuery {
             want: want.to_string(),
             sig: String::new(),
         };
-        let sig = key.sign(q.canonical().as_bytes());
+        let sig = key.sign(q.canonical(room).as_bytes());
         q.sig = hex::encode(sig.to_bytes());
         q
     }
-    pub fn verify(&self) -> bool {
+    pub fn verify(&self, room: &str) -> bool {
         let Ok(pk) = PublicKey::from_str(&self.from) else {
             return false;
         };
@@ -408,15 +440,15 @@ impl FileQuery {
         let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else {
             return false;
         };
-        pk.verify(self.canonical().as_bytes(), &Signature::from_bytes(&arr))
+        pk.verify(self.canonical(room).as_bytes(), &Signature::from_bytes(&arr))
             .is_ok()
     }
 }
 
 /// 编码一条签名的 presence（常驻节点也要"在线"给别人看）。
-pub fn encode_presence(key: &SecretKey, nickname: &str) -> Vec<u8> {
+pub fn encode_presence(key: &SecretKey, nickname: &str, room: &str) -> Vec<u8> {
     serde_json::to_vec(&Wire::Presence {
-        p: Presence::signed(key, nickname, Vec::new(), 0),
+        p: Presence::signed(key, nickname, Vec::new(), 0, room),
     })
     .unwrap_or_default()
 }
@@ -857,7 +889,7 @@ impl HistoryStore {
     pub fn append(&self, room: &str, msg: ChatMessage) -> bool {
         // ⚠️ 兜底：签名无效 / id 与载荷不符的消息**一律不进历史**。
         //    返回 false 让调用方能察觉（便于测试与排查）。
-        if !msg.verify() {
+        if !msg.verify(room) {
             warn!(
                 "拒绝写入历史：验签失败 room={room} id={} from={}",
                 msg.id,
@@ -1029,7 +1061,7 @@ impl HistoryStore {
                     // 备份恢复、早期有 bug 的构建）都会在重启后变成
                     // "看起来已签名"的聊天记录，而客户端从不重新验签、无法察觉。
                     // 签名机制的意义就是在持久化边界上也要成立。
-                    if m.verify() {
+                    if m.verify(&room) {
                         list.push(m);
                     } else {
                         skipped += 1;
@@ -1037,8 +1069,13 @@ impl HistoryStore {
                 }
             }
             if skipped > 0 {
+                // ⚠️ 这一条在**协议升级后会大量出现**（v3 及更早的消息在 v4 下验不过）。
+                //    所以日志要把"该怎么办"写清楚，否则运维只会看到"消息莫名少了"。
                 warn!(
-                    "历史文件 {} 里有 {skipped} 条验签失败的记录，已丢弃",
+                    "历史文件 {} 里有 {skipped} 条验签失败的记录，已丢弃。\
+                     如果这是协议升级（v3 → v4）之后第一次启动，属预期现象：\
+                     旧历史的签名载荷不含房间标识，无法通过校验 —— 请清空历史目录\
+                     （保留 identity.key）后重新开始。",
                     path.display()
                 );
             }
@@ -1574,8 +1611,10 @@ impl RoomNode {
                             };
                             match wire {
                                 Wire::Message { m } => {
-                                    if !m.verify() {
-                                        warn!("签名无效的消息，丢弃");
+                                    // ⚠️ 必须传**本房间**：v4 起房间进了签名载荷，
+                                    //    这样"从别的房间搬过来的消息"会验签失败（F6）。
+                                    if !m.verify(&room_s) {
+                                        warn!("签名无效的消息，丢弃（或来自其它房间）");
                                         continue;
                                     }
                                     let mine = m.from == me;
@@ -1599,7 +1638,7 @@ impl RoomNode {
                                 }
                                 Wire::File { c } => {
                                     // 文件控制消息：验签后转成 UI 事件（内容走独立数据流）
-                                    if let Some(ctrl) = c.verify() {
+                                    if let Some(ctrl) = c.verify(&room_s) {
                                         // ⚠️ **只用 `if let Some(...)` 跳过非法消息**。
                                         //    这里绝不能出现 `return` —— 它位于消费任务的
                                         //    `async move` 体内，`return` 会结束整个房间的
@@ -1611,7 +1650,7 @@ impl RoomNode {
                                     }
                                 }
                                 Wire::Presence { p } => {
-                                    if !p.verify() {
+                                    if !p.verify(&room_s) {
                                         continue;
                                     }
                                     let changed = {
@@ -1679,7 +1718,7 @@ impl RoomNode {
                                 // 这是"加速器"：立刻把他从成员表摘掉 → 他的文件随之变过期，
                                 // 不用等 25~45 秒的心跳超时。事实仍以心跳为准。
                                 Wire::Leave { l } => {
-                                    if !l.verify() {
+                                    if !l.verify(&room_s) {
                                         continue;
                                     }
                                     let removed = {
@@ -1712,7 +1751,7 @@ impl RoomNode {
                                 // 不需要专门设计一条应答消息 —— 复用同一条软状态通道。
                                 // 若我确实已经没有这个文件了，就**什么都不做**（沉默 = 过期）。
                                 Wire::FileQuery { q } => {
-                                    if !q.verify() {
+                                    if !q.verify(&room_s) {
                                         continue;
                                     }
                                     let should_claim = q.want == me
@@ -1804,7 +1843,8 @@ impl RoomNode {
                     let file_due = !files.is_empty()
                         && now.saturating_sub(last_file) >= FILE_HB_MS;
                     if member_due || file_due {
-                        let p = Presence::signed(&key, &nickname, files, epoch);
+                        // 心跳也要绑定房间（F6）
+                        let p = Presence::signed(&key, &nickname, files, epoch, &room_s);
                         if let Ok(bytes) = serde_json::to_vec(&Wire::Presence { p }) {
                             let _ = sender.lock().await.broadcast(bytes.into()).await;
                         }
@@ -1926,14 +1966,15 @@ impl RoomNode {
     /// ⚠️ 刷新/关页/崩溃走不到这里（前端调不到），那些场景由心跳超时兜底 ——
     /// 这正是"不把离开声明当事实来源"的原因。
     pub async fn leave_room(&self) {
-        let sender = {
+        // 房间名也要取出来：离开声明从 v4 起绑定房间（F6）
+        let (sender, room) = {
             let g = self.inner.lock().unwrap();
             match g.joined.as_ref() {
-                Some(j) => j.sender.clone(),
+                Some(j) => (j.sender.clone(), j.room.clone()),
                 None => return,
             }
         };
-        let l = LeaveMsg::signed(&self.secret_key);
+        let l = LeaveMsg::signed(&self.secret_key, &room);
         if let Ok(bytes) = serde_json::to_vec(&Wire::Leave { l }) {
             let _ = sender.lock().await.broadcast(bytes.into()).await;
         }
@@ -1957,7 +1998,7 @@ impl RoomNode {
         let ts = now_ms();
         let from = self.endpoint.id().to_string();
         let msg = ChatMessage {
-            id: ChatMessage::compute_id(&from, ts, text, ""),
+            id: ChatMessage::compute_id(&from, ts, text, "", &room),
             from,
             nickname,
             text: text.to_string(),
@@ -1966,7 +2007,7 @@ impl RoomNode {
             // 普通文本消息没有文件证明
             file: None,
         }
-        .sign(&self.secret_key);
+        .sign(&self.secret_key, &room);
 
         let bytes = serde_json::to_vec(&Wire::Message { m: msg.clone() })?;
         sender.lock().await.broadcast(bytes.into()).await?;
@@ -2023,7 +2064,8 @@ impl RoomNode {
         // "某人在某个房间说过的话"，而客户端完全无法察觉。
         // 顺带也把"新旧协议混跑"的历史挡在 UI 之外（v2 消息在这里验不过）。
         let before = resp.messages.len();
-        resp.messages.retain(|m| m.verify());
+        // v4：历史消息也必须绑定**本房间**（F6）——顺带把"从别的房间搬来的"挡掉
+        resp.messages.retain(|m| m.verify(room));
         let dropped = before - resp.messages.len();
         if dropped > 0 {
             warn!("历史响应里有 {dropped} 条验签失败的消息，已丢弃（共 {before} 条）");
@@ -2112,7 +2154,7 @@ impl RoomNode {
         if room != expect_room {
             anyhow::bail!("房间已改变（期望 {expect_room}，当前 {room}），消息未发出");
         }
-        let signed = SignedCtrl::sign(&self.secret_key, ctrl, now_ms());
+        let signed = SignedCtrl::sign(&self.secret_key, ctrl, now_ms(), expect_room);
         let bytes = serde_json::to_vec(&Wire::File { c: signed })?;
         sender.lock().await.broadcast(bytes.into()).await?;
         debug!("[{}] 已广播文件控制：{}", room, ctrl.file_id());
@@ -2197,7 +2239,7 @@ impl RoomNode {
         let from = self.endpoint.id().to_string();
         let msg = ChatMessage {
             // id 里带上 file_id，保证同一毫秒发的两个文件不会撞 id
-            id: ChatMessage::compute_id(&from, ts, "", &meta.file_id),
+            id: ChatMessage::compute_id(&from, ts, "", &meta.file_id, &room),
             from,
             nickname,
             text: String::new(),
@@ -2210,7 +2252,7 @@ impl RoomNode {
                 mime: meta.mime.clone(),
             }),
         }
-        .sign(&self.secret_key);
+        .sign(&self.secret_key, &room);
         let bytes = serde_json::to_vec(&Wire::Message { m: msg.clone() })?;
         sender.lock().await.broadcast(bytes.into()).await?;
         let _ = self.store.append(&room, msg);
@@ -2236,7 +2278,7 @@ impl RoomNode {
         if room != expect_room {
             anyhow::bail!("房间已改变（期望 {expect_room}，当前 {room}），质询未发出");
         }
-        let q = FileQuery::signed(&self.secret_key, file_id, want);
+        let q = FileQuery::signed(&self.secret_key, file_id, want, expect_room);
         let bytes = serde_json::to_vec(&Wire::FileQuery { q })?;
         // 与 send_ctrl_in 同理：broadcast 之前最后一刻再核一次
         // （gossip 的锁是 async 的，检查与发送之间足够插进一次 join）
@@ -2464,14 +2506,20 @@ impl RoomNode {
 /// 抽成自由函数是因为 `set_nickname` / `set_available_files` 是**同步**接口
 /// （wasm 导出不能是 async 的任意签名），只能 spawn 一个任务来广播。
 async fn broadcast_presence_now(key: &SecretKey, inner: &Arc<Mutex<Inner>>) {
-    let (nickname, files, epoch, sender) = {
+    let (nickname, files, epoch, sender, room) = {
         let g = inner.lock().unwrap();
         match g.joined.as_ref() {
-            Some(j) => (j.nickname.clone(), j.files.clone(), j.epoch, j.sender.clone()),
+            Some(j) => (
+                j.nickname.clone(),
+                j.files.clone(),
+                j.epoch,
+                j.sender.clone(),
+                j.room.clone(),
+            ),
             None => return,
         }
     };
-    let p = Presence::signed(key, &nickname, files, epoch);
+    let p = Presence::signed(key, &nickname, files, epoch, &room);
     if let Ok(bytes) = serde_json::to_vec(&Wire::Presence { p }) {
         let _ = sender.lock().await.broadcast(bytes.into()).await;
     }
@@ -2530,6 +2578,9 @@ pub fn now_ms() -> u64 {
 mod security_tests {
     use super::*;
 
+    /// v4：签名载荷绑定房间，测试统一用这个房间名
+    const ROOM: &str = "test-room";
+
     fn kp() -> SecretKey {
         SecretKey::from_bytes(&[7u8; 32])
     }
@@ -2545,7 +2596,7 @@ mod security_tests {
             sig: String::new(),
             file: None,
         }
-        .sign(&k)
+        .sign(&k, ROOM)
     }
 
     // ── P1-1：分隔符歧义 ────────────────────────────────────────────
@@ -2557,11 +2608,11 @@ mod security_tests {
         b.id = a.id.clone();
         b.sig = a.sig.clone();
         assert_ne!(
-            a.canonical(),
-            b.canonical(),
+            a.canonical(ROOM),
+            b.canonical(ROOM),
             "长度前缀编码没能消除分隔符歧义"
         );
-        assert!(!b.verify(), "改了字段却仍然通过验签");
+        assert!(!b.verify(ROOM), "改了字段却仍然通过验签");
     }
 
     #[test]
@@ -2569,7 +2620,7 @@ mod security_tests {
         let m = msg("Alice", "hello");
         let mut tampered = m.clone();
         tampered.text = "hello2".into();
-        assert!(!tampered.verify());
+        assert!(!tampered.verify(ROOM));
     }
 
     #[test]
@@ -2577,19 +2628,19 @@ mod security_tests {
         let m = msg("Alice", "hi");
         let mut tampered = m.clone();
         tampered.nickname = "Bob".into();
-        assert!(!tampered.verify());
+        assert!(!tampered.verify(ROOM));
     }
 
     // ── P1-2：消息 id 必须在签名载荷里 ──────────────────────────────
     #[test]
     fn 改消息id无法重放() {
         let m = msg("Alice", "hi");
-        assert!(m.verify());
+        assert!(m.verify(ROOM));
         // 只改 id：签名仍然"有效"（载荷里 id 也变了 → canonical 变了 → 其实会失败），
         // 但 id_matches() 也会先挡住，双保险
         let mut forged = m.clone();
         forged.id = "deadbeefdeadbeefdeadbeefdeadbeef".into();
-        assert!(!forged.verify(), "改了 id 竟然还能通过验签");
+        assert!(!forged.verify(ROOM), "改了 id 竟然还能通过验签");
     }
 
     #[test]
@@ -2604,10 +2655,10 @@ mod security_tests {
             sig: String::new(),
             file: None,
         }
-        .sign(&k);
+        .sign(&k, ROOM);
         assert!(!m.id.is_empty());
-        assert!(m.id_matches());
-        assert!(m.verify());
+        assert!(m.id_matches(ROOM));
+        assert!(m.verify(ROOM));
     }
 
     #[test]
@@ -2629,7 +2680,7 @@ mod security_tests {
                     mime: String::new(),
                 }),
             }
-            .sign(&k)
+            .sign(&k, ROOM)
         };
         assert_ne!(mk("f1").id, mk("f2").id);
     }
@@ -2692,8 +2743,8 @@ mod security_tests {
         let now = now_ms();
 
         // ① 攻击者自己签一条 sender 写成别人的邀约：签名完全合法……
-        let bad = SignedCtrl::sign(&k, &FileCtrl::Invite(mk("someone-else")), now);
-        let bad = bad.verify().expect("签名本身应当是合法的");
+        let bad = SignedCtrl::sign(&k, &FileCtrl::Invite(mk("someone-else")), now, "room-a");
+        let bad = bad.verify("room-a").expect("签名本身应当是合法的");
         // ……但映射结果必须是 None（丢这一条），而不是 panic / 终止。
         assert!(
             ctrl_event(bad, &me, "room-a", now).is_none(),
@@ -2702,8 +2753,8 @@ mod security_tests {
 
         // ② 同一房间里紧接着的正常邀约仍要正常映射 ——
         //    这正是"循环没有被结束"的行为证据（F1）。
-        let good = SignedCtrl::sign(&k, &FileCtrl::Invite(mk(&me)), now);
-        let good = good.verify().expect("签名合法");
+        let good = SignedCtrl::sign(&k, &FileCtrl::Invite(mk(&me)), now, "room-a");
+        let good = good.verify("room-a").expect("签名合法");
         match ctrl_event(good, &me, "room-a", now) {
             Some(RoomEvent::FileInvite { room, meta }) => {
                 assert_eq!(room, "room-a");
@@ -2755,8 +2806,9 @@ mod security_tests {
                 receiver_relay: "https://relay.example".into(),
             },
             old,
+            "room-a",
         );
-        let replayed = replayed.verify().expect("签名合法");
+        let replayed = replayed.verify("room-a").expect("签名合法");
         assert!(
             ctrl_event(replayed, &me, "room-a", old).is_none(),
             "过期的 Accept 必须被丢弃（防重放放大）"
@@ -2778,7 +2830,7 @@ mod security_tests {
                 sig: String::new(),
                 file: None,
             };
-            m = m.sign(&k);
+            m = m.sign(&k, ROOM);
             msgs.push(m);
         }
         // 预算很小 → 只能留少数几条，且必须是**最新**的那些
@@ -2813,21 +2865,21 @@ mod security_tests {
             sig: String::new(),
             file: None,
         }
-        .sign(&kp());
-        assert!(m.verify(), "正常消息应当通过");
+        .sign(&kp(), ROOM);
+        assert!(m.verify(ROOM), "正常消息应当通过");
         m.text = "hello!".into(); // 篡改正文（id 及其签名随之失效）
-        assert!(!m.verify(), "被改过的历史记录必须被筛掉");
+        assert!(!m.verify(ROOM), "被改过的历史记录必须被筛掉");
     }
 
     // ── Presence：文件清单不能被分隔符歧义篡改 ─────────────────────
     #[test]
     fn 文件清单的分隔符注入不产生相同载荷() {
         let k = kp();
-        let a = Presence::signed(&k, "n", vec!["x,y".into()], 1);
-        let b = Presence::signed(&k, "n", vec!["x".into(), "y".into()], 1);
+        let a = Presence::signed(&k, "n", vec!["x,y".into()], 1, ROOM);
+        let b = Presence::signed(&k, "n", vec!["x".into(), "y".into()], 1, ROOM);
         assert_ne!(
-            a.canonical(),
-            b.canonical(),
+            a.canonical(ROOM),
+            b.canonical(ROOM),
             "清单项的分隔符歧义没有消除"
         );
     }
@@ -2835,35 +2887,65 @@ mod security_tests {
     #[test]
     fn 心跳被改字段后验签失败() {
         let k = kp();
-        let p = Presence::signed(&k, "n", vec!["a".into()], 1);
-        assert!(p.verify());
+        let p = Presence::signed(&k, "n", vec!["a".into()], 1, ROOM);
+        assert!(p.verify(ROOM));
         let mut t = p.clone();
         t.nickname = "m".into();
-        assert!(!t.verify());
+        assert!(!t.verify(ROOM));
         let mut t2 = p.clone();
         t2.files.push("b".into());
-        assert!(!t2.verify());
+        assert!(!t2.verify(ROOM));
         let mut t3 = p;
         t3.epoch += 1;
-        assert!(!t3.verify());
+        assert!(!t3.verify(ROOM));
     }
 
     // ── Leave / FileQuery ─────────────────────────────────────────
     #[test]
     fn 离开声明被改后验签失败() {
-        let m = LeaveMsg::signed(&kp());
-        assert!(m.verify());
+        let m = LeaveMsg::signed(&kp(), ROOM);
+        assert!(m.verify(ROOM));
         let mut t = m;
         t.ts += 1;
-        assert!(!t.verify());
+        assert!(!t.verify(ROOM));
     }
 
     #[test]
     fn 质询被改后验签失败() {
-        let m = FileQuery::signed(&kp(), "fid", "want");
-        assert!(m.verify());
+        let m = FileQuery::signed(&kp(), "fid", "want", ROOM);
+        assert!(m.verify(ROOM));
         let mut t = m;
         t.want = "someone-else".into();
-        assert!(!t.verify());
+        assert!(!t.verify(ROOM));
+    }
+    // ── F6：签名载荷绑定房间 —— 跨房间重放必须失败 ──────────────────
+    //
+    // 这是 v4 的核心性质：把 A 房间抓到的合法签名消息**原样**搬进 B 房间，
+    // 接收方必须验签失败。没有这条测试，v4 就只是"改了格式"。
+    #[test]
+    fn 跨房间重放的消息验签失败() {
+        let m = msg("Alice", "hello");
+        assert!(m.verify(ROOM), "本房间内应当通过");
+        // 字节完全没变，只换房间名 —— 必须验不过
+        assert!(!m.verify("another-room"), "A 房间的消息不能在 B 房间通过验签");
+        // id 也绑定了房间（id 由包含 room 的载荷派生）
+        assert!(m.id_matches(ROOM));
+        assert!(!m.id_matches("another-room"));
+    }
+
+    #[test]
+    fn 跨房间重放的心跳与离开也验签失败() {
+        let k = kp();
+        let p = Presence::signed(&k, "n", vec!["f".into()], 1, ROOM);
+        assert!(p.verify(ROOM));
+        assert!(!p.verify("another-room"), "心跳不能被搬进别的房间");
+
+        let l = LeaveMsg::signed(&k, ROOM);
+        assert!(l.verify(ROOM));
+        assert!(!l.verify("another-room"), "离开声明不能被搬进别的房间");
+
+        let q = FileQuery::signed(&k, "fid", "want", ROOM);
+        assert!(q.verify(ROOM));
+        assert!(!q.verify("another-room"), "质询不能被搬进别的房间");
     }
 }

@@ -585,7 +585,7 @@
 | F3  | ✅ 已修 | `build-wasm.sh native` 同时产出 `dist/roomd`；删除仓库里那份 9-29 旧二进制；README/Dockerfile 写明"必须验证容器里的二进制" |
 | F4  | ✅ 已修 | 历史响应按 1MB 预算裁剪（纯函数 `cap_history_by_bytes` + 测试，保证至少留一条） |
 | F5  | ✅ 已修 | 续传时 JS 回读整份文件算 BLAKE3；校验失败则**丢弃断点**并以 `transfer:error` 明确报失败 |
-| F6  | ⏸ **待定** | 协议 v4（签名载荷绑定房间）会**破坏兼容**：必须 roomd + 前端同时重部署并清旧历史。已与用户确认后再动。 |
+| F6  | ✅ 已修 | 协议升到 **v4**：房间标识进全部签名载荷（ChatMessage/Presence/Leave/FileQuery/FileCtrl），`compute_id` 一并含 room；补 3 条「跨房间重放必须验签失败」测试。⚠️ **破坏性变更**：roomd + 前端必须同时升级并清旧历史。 |
 | F7  | ✅ 已修 | `send_ctrl_in` 的房间参数改为**必填**（删掉"不限定房间"的入口）；`query_file`/`accept_file`/`reject_file` 全部带房间 |
 | F8  | ✅ 已修 | 落盘加载与客户端渲染前都验签（各配日志计数） |
 | F9  | ✅ 已修 | 同步 `Cargo.lock` + 三处构建加 `--locked` |
@@ -652,4 +652,14 @@ python3 scripts/check-site-modules.py dist/site     exit 0
    再用 `docker cp` + `strings` 验证容器里确实是新二进制
 4. `bash scripts/deploy-web.sh`（发布站点）
 
-线上线协议**没有变化**（未改任何签名载荷格式），所以 roomd 与前端可以先后升级。
+⚠️ **F6 之后协议已是 v4，这一条不再成立**：签名载荷格式变了，
+**roomd 与前端必须同时升级**，并且**清掉旧历史**（旧 `.jsonl` 里的消息在新代码下验不过，
+会在加载时被当作"验签失败"丢弃并打 warn）。升级顺序：
+
+1. 先 `bash scripts/build-wasm.sh release`（新 wasm）与 `native`（新 roomd）
+2. 部署新 roomd（`deploy/roomd/README.md`），确认容器里是新二进制
+3. 再 `bash scripts/deploy-web.sh` 发布新前端
+4. 清历史：删掉 `ROOMD_DATA_DIR/history/*.jsonl`（**保留 `identity.key`**，否则 EndpointId 会变）
+
+第 2、3 步之间存在一个混跑窗口：先升级的那一侧发出的消息会被另一侧静默丢弃。
+自建小规模场景通常可接受；要完全避免就挑没人使用时做。
