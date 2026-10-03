@@ -176,6 +176,15 @@ function bindWorkerPushes() {
       case 'transfer:verified':
         bus.emit(EV.TIP, '续传完成，整文件校验通过');
         break;
+      // 这两条原来**没有处理者**（复检 P3-13）：Worker 明明算了
+      // "为什么这次从头收"（目标文件为空 / 大小与位图预期不符 / 属于另一个文件），
+      // 却没人显示 —— 用户只看到进度从 0 重新开始，无从判断是不是出了问题。
+      case 'transfer:note':
+        if (p.note) bus.emit(EV.TIP, p.note);
+        break;
+      case 'transfer:send-failed':
+        bus.emit(EV.TIP, `发送失败：${p.reason ?? '未知原因'}`);
+        break;
       // 发送侧汇总进度：一份文件可能同时发给多人，Worker 会把所有人的
       // 进度汇总成一条推上来（`peers` / `done` / `failed` / `sending`）。
       case 'transfer:send': {

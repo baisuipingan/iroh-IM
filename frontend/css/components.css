@@ -836,3 +836,10 @@ html[data-density='compact'] .composer__input { height: 24px; line-height: 24px;
 .imgcard__actions .btn-primary { background: var(--c-brand); color: #fff; }
 .imgcard__actions .btn-ghost { border: 1px solid var(--line); }
 .imgcard__actions .btn-ghost:hover { background: var(--bg-hover); }
+
+/* 被白名单拦下的外部图片（见 timeline.js 的 _fillBubble，F14） */
+.bubble__blocked {
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 2px 0;
+}

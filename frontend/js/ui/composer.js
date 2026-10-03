@@ -293,6 +293,12 @@ export const composer = {
     // 失败气泡的 DOM 引用：重发成功后要能把它撤掉。
     // 用一个可变对象当"回传通道" —— pushFailed 会在同一个对象上挂 `.el`。
     const failed = { el: null };
+    // ⚠️ **在第一个 await 之前**把房间定下来（复检 P3-14）。
+    //    发送要等好几秒（附件还要算哈希），期间用户可能切房间 ——
+    //    若在 await 之后才读 `this.room`，就会出现"文字发进 A、
+    //    附件邀约发进 B"。Rust 侧现在会对房间不一致直接报错，
+    //    但正确做法是这一条消息自始至终用同一个房间。
+    const room = this.room;
     try {
       // ① 文字先走
       //
@@ -302,7 +308,7 @@ export const composer = {
       //    红色气泡（同一条消息在时间线上出现两次，一次正常一次标红）。
       let textOk = true;
       if (trimmed) {
-        const r = await this._push(trimmed);
+        const r = await this._push(trimmed, room);
         textOk = r.ok;
         if (!r.ok) {
           ok = false;
@@ -318,7 +324,7 @@ export const composer = {
           if (p.url) URL.revokeObjectURL(p.url);
           this.tip(`正在准备 ${p.file.name}…`);
           try {
-            await fileTransfer.pickAndSend(p.file, this.room, p.mem);
+            await fileTransfer.pickAndSend(p.file, room, p.mem);
           } catch (e) {
             filesOk = false;
             ok = false;
@@ -372,11 +378,16 @@ export const composer = {
     return true;
   },
 
-  /** 发出去 + 立刻本地渲染（乐观插入，靠 id 去重） */
-  async _push(payload) {
+  /**
+   * 发出去 + 立刻本地渲染（乐观插入，靠 id 去重）。
+   *
+   * `room` 由调用方传入并**在 await 之前定好**：这一步要等网络往返，
+   * 期间用户可能已经切房间，用 `this.room` 会把消息渲染进错误的时间线（P3-14）。
+   */
+  async _push(payload, room) {
     try {
       const m = await net.send(payload);
-      bus.emit(EV.MSG, { room: this.room, message: m, mine: true, isHistory: false });
+      bus.emit(EV.MSG, { room: room ?? this.room, message: m, mine: true, isHistory: false });
       return { ok: true, reason: '' };
     } catch (e) {
       const reason = e?.message ?? String(e);

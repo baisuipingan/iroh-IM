@@ -97,13 +97,20 @@ export function withTimeout(promise, ms, label = '操作') {
 /** 字节数 → 人类可读（与 Rust 侧 `human_size` 保持一致的口径） */
 export function humanSize(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let v = Number(bytes) || 0;
+  // ⚠️ 返回前必须确认输入是**数字**：`Number(x) || 0` 之后原来的写法
+  //    在 i === 0 时仍是 `` `${bytes} B` `` —— 把**原始值**原样回显。
+  //    而调用点把它拼进 innerHTML（timeline 的文件卡片），所以一个
+  //    非数字的 size 就是一处 XSS。当前上游是 Rust 的 u64 所以不可达，
+  //    但这里是"只差一次类型检查"的隐患（复检 P3-2）。
+  const n = Number(bytes);
+  if (!Number.isFinite(n)) return '—';
+  let v = n;
   let i = 0;
   while (v >= 1024 && i < units.length - 1) {
     v /= 1024;
     i++;
   }
-  return i === 0 ? `${bytes} B` : `${v.toFixed(1)} ${units[i]}`;
+  return i === 0 ? `${v} B` : `${v.toFixed(1)} ${units[i]}`;
 }
 
 /** 按扩展名给一个文件图标（用 emoji 是为了零依赖、跨平台一致） */

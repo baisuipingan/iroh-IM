@@ -308,7 +308,7 @@ export const timeline = {
         </div>
         <div class="imgcard__bar"><i style="width:0%"></i></div>
         <div class="imgcard__foot">
-          <span class="filecard__state">${this._fileStateText(state, error, { dir: direction || '', avail: avail || '' })}</span>
+          <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '' }))}</span>
           <span class="filecard__size">${U.humanSize(meta.size)}</span>
           <span class="imgcard__actions"></span>
         </div>
@@ -320,7 +320,7 @@ export const timeline = {
           <div class="filecard__name">${U.esc(meta.name)}</div>
           <div class="filecard__meta">${U.humanSize(meta.size)} · ${
             direction === 'send' ? '我发送' : '对方发送'
-          } · <span class="filecard__state">${this._fileStateText(state, error, { dir: direction || '', avail: avail || '' })}</span></div>
+          } · <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '' }))}</span></div>
           <div class="filecard__bar"><i style="width:0%"></i></div>
           ${error ? `<div class="filecard__err">${U.esc(error)}</div>` : ''}
         </div>
@@ -332,9 +332,22 @@ export const timeline = {
     return el;
   },
 
+  /**
+   * 按 `file_id` 找卡片，**对 id 做转义**（P3-15）。
+   * `file_id` 来自对端，不能直接拼进 CSS 选择器。
+   */
+  _fileCardEl(file_id) {
+    const esc = window.CSS && CSS.escape ? CSS.escape(String(file_id)) : String(file_id).replace(/["\\]/g, '\\$&');
+    return $('tl-inner').querySelector(`[data-file-id="${esc}"]`);
+  },
+
   /** 更新卡片状态/进度 */
   updateFileCard({ file_id, state, done, total, bytes, error, peers, peersDone, peersFailed, avail }) {
-    const el = $('tl-inner').querySelector(`[data-file-id="${file_id}"]`);
+    // ⚠️ `file_id` 是**对端自选**的字符串（只过签名、不看格式）。
+    //    直接拼进选择器的话，一个 `a"]` 就能让 querySelector 抛 SyntaxError，
+    //    而 bus 对监听器有 try/catch 包着 → **异常被吞、进度从此不再更新**（P3-15）。
+    //    `CSS.escape` 是标准做法；配合 Rust 侧 validate_meta 的字符集限制，双保险。
+    const el = this._fileCardEl(file_id);
     if (!el) return;
     if (avail) el.dataset.avail = avail;
     const st = el.querySelector('.filecard__state');
@@ -549,7 +562,7 @@ export const timeline = {
 
   /** 把一张文件卡片从时间线上摘掉（用于"移除已失效的接收记录"） */
   removeFileCard(file_id) {
-    const el = $('tl-inner').querySelector(`[data-file-id="${file_id}"]`);
+    const el = this._fileCardEl(file_id);
     if (el) el.remove();
     this.seen.delete(`file:${file_id}`);
   },
@@ -661,11 +674,32 @@ export const timeline = {
       box.textContent = text || '';
       return;
     }
+    // ⚠️ `[img]` 里的地址是**对端可控**的（composer 早就不再产生这种消息了，
+    //    所以任何 `[img]` 都是手工构造的）。放任任意 URL 会让房间里每个客户端
+    //    在气泡进入视口时向攻击者服务器发起请求：泄露 IP/在线时间/房间归属，
+    //    还能拿 `http://127.0.0.1:...` 做内网盲探测（F14）。
+    //    所以白名单只放 `data:image/*` 与 `blob:`（旧消息用的就是这两种）。
+    const src = String(m[1] || '').trim();
+    const allowed = /^data:image\//i.test(src) || /^blob:/i.test(src);
+    if (!allowed) {
+      const blocked = document.createElement('div');
+      blocked.className = 'bubble__blocked';
+      blocked.textContent = '已阻止一张外部图片（可能用于追踪）';
+      box.appendChild(blocked);
+      if (m[2]) {
+        const cap = document.createElement('div');
+        cap.style.marginTop = '4px';
+        cap.textContent = m[2];
+        box.appendChild(cap);
+      }
+      return;
+    }
     const img = document.createElement('img');
-    img.src = m[1];
+    img.src = src;
     img.alt = '图片';
     img.loading = 'lazy';
-    img.onclick = () => this.viewImage(m[1]); // 内部查看器，不再开新标签
+    img.referrerPolicy = 'no-referrer';
+    img.onclick = () => this.viewImage(src); // 内部查看器，不再开新标签（src 已白名单校验）
     box.appendChild(img);
     if (m[2]) {
       const cap = document.createElement('div');
