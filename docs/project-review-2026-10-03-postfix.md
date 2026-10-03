@@ -571,3 +571,85 @@
 11. 历史读路径补验签 + 按字节数截断响应（F4/F8）。
 12. 其余 P3 按需处理；其中"`[img]` 白名单"（F14）、"测试脚本默认打生产"、
     "`Pending` 退出路径清理"（P3-20）改动都很小，建议顺手做掉。
+
+---
+
+## 第四部分：修复记录（2026-10-03 晚，本报告之后）
+
+修复过程本身又发现了一个**报告里没有的严重回归**，见下文 ⚠️ 项。
+
+| 编号 | 状态 | 说明 |
+|---|---|---|
+| F1  | ✅ 已修 | `ctrl_event` 抽成纯函数（结构上不可能再 `return`），补回归测试「非法邀约只丢弃不终止循环」 |
+| F2  | ✅ 已修 | roomd：容量上限 + LRU 淘汰（`ROOMD_ROOMS` pinned 保护）+ 新房间令牌桶（20 突发/5 每秒）+ 空闲回收（默认 30 分钟）+ 占位消除 TOCTOU + 有界通道；新增 4 条测试 |
+| F3  | ✅ 已修 | `build-wasm.sh native` 同时产出 `dist/roomd`；删除仓库里那份 9-29 旧二进制；README/Dockerfile 写明"必须验证容器里的二进制" |
+| F4  | ✅ 已修 | 历史响应按 1MB 预算裁剪（纯函数 `cap_history_by_bytes` + 测试，保证至少留一条） |
+| F5  | ✅ 已修 | 续传时 JS 回读整份文件算 BLAKE3；校验失败则**丢弃断点**并以 `transfer:error` 明确报失败 |
+| F6  | ⏸ **待定** | 协议 v4（签名载荷绑定房间）会**破坏兼容**：必须 roomd + 前端同时重部署并清旧历史。已与用户确认后再动。 |
+| F7  | ✅ 已修 | `send_ctrl_in` 的房间参数改为**必填**（删掉"不限定房间"的入口）；`query_file`/`accept_file`/`reject_file` 全部带房间 |
+| F8  | ✅ 已修 | 落盘加载与客户端渲染前都验签（各配日志计数） |
+| F9  | ✅ 已修 | 同步 `Cargo.lock` + 三处构建加 `--locked` |
+| F10 | ✅ 已修 | 改读 `https_bind_addr`；QUIC 端口只在开了 QAD 时放行；顺带把端口解析换成可移植的 `sed -E`（原来的 BRE `\+` 只在 GNU sed 上有效） |
+| F11 | ✅ 已修 | `relay-docker.toml` 补上完整可用配置；端口口径统一为 **15443**（与前端/install.sh/文档一致） |
+| F12 | ✅ 已修 | 抢占判断提到覆盖 `_room` 之前；被抢占时不写 `_room`、不发 `REJOINED`；`main.js` 忽略房间不匹配的 `REJOINED`；重进失败改为 `_scheduleRetry()` |
+| F13 | ✅ 已修 | `restoreInvites(room)` 按房间过滤，且**不再删别的房间的记录** |
+| F14 | ✅ 已修 | `[img]` 白名单（只放 `data:image/*` 与 `blob:`）+ `referrerpolicy=no-referrer` |
+| F15 | ⏸ 未修 | 重发邀约复活已有卡片（`seen` 去重）—— 需要改 `pushFileCard` 的去重语义，风险高于收益，留待后续 |
+| F16 | ✅ 已修 | 接收侧空闲超时（Rust 120s）+ 传输中停顿超时（60s）+ 「停止」按钮 + `paused` 补「继续接收」 |
+| F17 | ✅ 已修 | 校验判定穷尽化（缺哈希/字节数不符一律判失败）+ `validate_meta`（64 位 hex、块大小、块数、id 字符集、文件名）+ 两处失败关闭 |
+| F18 | ✅ 已修 | 读 header/开流超时 30s、帧间空闲 60s、在途并发闸门 64、待接收表上限 32 |
+| F19 | ✅ 已修 | 控制消息新鲜度窗口（15 分钟，含"为什么这么宽"的说明）+ 同 `(file_id, peer)` 重复 Accept 去重 |
+| P3-1 | ✅ 已修 | 加载时同样执行 `MAX_MEM_HISTORY` 上限 |
+| P3-2 | ✅ 已修 | `humanSize` 非数字回退 `—` |
+| P3-3 | ✅ 已修 | `append` 排序统一为 `(ts,id)` |
+| P3-5 | ✅ 已修 | 文件卡片状态文案在拼进 `innerHTML` 前转义 |
+| P3-6 | ✅ 已修 | `rebuildCardsForRoom` 带上进度与失败原因；`pushFileCard` 不再把初始宽度写死 0% |
+| P3-8 | ✅ 已修 | 滚回底部时摘掉"以下为新消息"分隔线 |
+| P3-9 | ✅ 已修 | `loadOlder` 按"游标是否前进"判定到底 |
+| P3-10| ✅ 已修 | Worker 事件流循环加错误处理 → `node:degraded` → 提示并自动重连 |
+| P3-13| ✅ 已修 | 补上 `transfer:note` / `transfer:send-failed` 的处理者 |
+| P3-14| ✅ 已修 | `composer.send` 在第一个 await 前定下房间 |
+| P3-15| ✅ 已修 | 卡片选择器对 `file_id` 用 `CSS.escape` |
+| P3-16| ✅ 已修 | `bus.emit` 透传全部参数（`EV.TIP` 的 opts 不再是死的） |
+| P3-19| ✅ 已修 | 重复块在**写盘之前**拒绝（不再"哈希通过但盘上内容被覆盖"） |
+| P3-20| ✅ 已修 | `Pending` 表项清理守卫（按代次比对，不会误删用户续传新建的那条） |
+| P3-21| ✅ 已修 | `expect_sender` 为空时失败关闭 |
+| P3-4 | ⏸ 未修 | 历史文件头 TOCTOU（需要按文件加锁；当前单进程写入，实际触发概率低） |
+| P3-7 | ⏸ 未修 | 前端 `transfers` / `outFiles` 无上限（长会话地图增长）—— 建议后续加 LRU |
+| P3-11| ⏸ 未修 | `setNickname` 失败被吞、`flashTitle` 是空开关（纯体验问题） |
+| P3-12| ✅ 已修 | `scp` 加 `-p`，让"产物比源码新"的自检真正生效 |
+| 部署 P2-3 | ✅ 已处理 | 新增 `.gitignore`（密钥、构建产物、22MB 二进制）并 `git init` + 4 个提交 |
+
+### ⚠️ 修复过程中发现的新回归（报告里没有，已修）
+
+**浏览器端断点续传此前必然失败。** `JsChunkSink::write_chunk` 把"增量哈希必须按序"
+与"块序号必须连续"混成了一件事，而续传本轮只补缺失块
+（`need = missing_chunks(have, n)`，第一个到达的块序号就是第一个缺失块，例如 32），
+`next_seq` 却从 0 起 —— 于是**第一块**就报
+「块乱序：期望 seq=0，收到 32」，续传直接失败。
+原生 `BytesSink` 只按 `seq * chunk_size` 写、没有顺序要求，所以这个缺陷
+**只在浏览器路径上**，而 37 个单测走的全是原生路径 —— 测试全绿也发现不了。
+已抽出纯函数 `check_chunk_admission` 并补 4 条测试把它钉住。
+
+### 验证结果（修复后）
+
+```
+cargo test --no-default-features --features cli   53(lib) + 4(roomd) + 1(doc) 全绿
+cargo check --locked --no-default-features --features cli   通过
+node --check  23 个前端 JS                          全部通过
+python3 scripts/check-site-modules.py dist/site     exit 0
+事件总线一致性（EV.* 全部有定义）                     通过
+全部 shell 脚本 bash -n                              通过
+```
+
+⚠️ **本次没有重新构建 wasm**（本机缺 wasm32 target，且 rustup 镜像 403）。
+前端 JS 现在会给 `accept_and_receive` / `reject_file` / `query_file` 多传一个
+`room` 参数，**只有新 wasm 才有这个签名** —— 所以部署必须按顺序：
+
+1. `bash scripts/build-wasm.sh release`（重建 wasm，**必须先做**）
+2. `bash scripts/build-wasm.sh native`（拿到新的 `dist/roomd`）
+3. roomd：按 `deploy/roomd/README.md` 上传并 `docker compose up -d --build`，
+   再用 `docker cp` + `strings` 验证容器里确实是新二进制
+4. `bash scripts/deploy-web.sh`（发布站点）
+
+线上线协议**没有变化**（未改任何签名载荷格式），所以 roomd 与前端可以先后升级。
