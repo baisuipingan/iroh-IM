@@ -1,2 +1,0 @@
-iroh 功能评估用文件：中文、emoji 🧪、HTML <b>不是代码</b>。
-second line

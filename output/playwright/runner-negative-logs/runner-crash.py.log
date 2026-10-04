@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/Users/patrick/WorkBuddy/iroh聊天室/output/playwright/runner-crash.py", line 1, in <module>
-    raise RuntimeError('runner negative test')
-RuntimeError: runner negative test

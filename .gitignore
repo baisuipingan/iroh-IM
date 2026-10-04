@@ -27,6 +27,14 @@ tools/iroh-doctor
 __pycache__/
 *.pyc
 
+# ---- 测试产物 / 工具日志（可重新生成，不进版本库）----
+# ⚠️ 这两条是**补加的**：`97232d1` 那次提交误把 `output/playwright/`
+#    （108 个文件 / 2.8 MB 截图）和 `.playwright-mcp/*.log` 收进了版本库
+#    —— 起因是我又用了 `git add -A`。文件仍留在磁盘上，只是不再被跟踪。
+#    截图若要当文档保留，请像 docs/*.png 那样显式放进 docs/。
+output/
+.playwright-mcp/
+
 # ---- 云端工具缓存 ----
 .wrangler/
 

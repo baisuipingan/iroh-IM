@@ -1,9 +1,0 @@
-Traceback (most recent call last):
-  File "/Users/patrick/WorkBuddy/iroh聊天室/scripts/e2e/multi-peer.py", line 75, in <module>
-    first = boot()
-  File "/Users/patrick/WorkBuddy/iroh聊天室/scripts/e2e/multi-peer.py", line 65, in boot
-    wait_until(page, f"window.__state?.().joined === {json.dumps(room)}", 120)
-    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/patrick/WorkBuddy/iroh聊天室/scripts/e2e/multi-peer.py", line 41, in wait_until
-    raise TimeoutError(f"等待超时：{expression}（最后 {last!r}）")
-TimeoutError: 等待超时：window.__state?.().joined === "multi-peer-1791107074854974000"（最后 False）

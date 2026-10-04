@@ -1,9 +1,0 @@
-Traceback (most recent call last):
-  File "/Users/patrick/WorkBuddy/iroh聊天室/scripts/e2e/stale.py", line 29, in <module>
-    tt.wait_until(p, f"!!(window.__state && window.__state().joined === {json.dumps(ROOM)})",
-    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                  120, label="rx")
-                  ^^^^^^^^^^^^^^^^
-  File "/Users/patrick/WorkBuddy/iroh聊天室/scripts/transfer-test.py", line 207, in wait_until
-    raise TimeoutError(f"等待超时：{label or expr}（最后 {last!r}）")
-TimeoutError: 等待超时：rx（最后 False）

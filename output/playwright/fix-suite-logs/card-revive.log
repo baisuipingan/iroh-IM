@@ -1,9 +1,0 @@
-  ✅ B 收到实时邀约  (file_id=b726969d4d6513fc)
-  初始 DOM: {"st":"等待你确认","btns":["✓","✗"]}
-  ✅ A 离开后卡片变 expired  (state=expired)
-  失效后 DOM: {"st":"已失效","btns":["✗"]}
-  ✅ 重发后 B 的卡片复活为 invited（F15）  (state=invited)
-  重发后 DOM: {"st":"等待你确认","btns":["✓","✗"]}
-  ✅ DOM 按钮回到「接收」而不再是「移除这条记录」  (btns=['✓', '✗'] state_txt=等待你确认)
-
-总计 PASS=4 FAIL=0

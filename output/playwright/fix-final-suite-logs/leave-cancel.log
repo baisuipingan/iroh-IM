@@ -1,8 +1,0 @@
-已开跑: TX peers=1 done=65 failed=0
-
-=== 在接收端派发 pagehide（页面保持存活）===
-  [ 1.0s] TX peers=1 cancelled=1
-
-  ✅ pagehide 后发送端很快显示该用户取消（快路径有效）  (1.0s)
-
-总计 PASS=1 FAIL=0
