@@ -251,7 +251,9 @@ function wire() {
 
   // 房间成员变化 → 告诉传输模块。
   // 用于：判断"恢复出来的未完成接收"的发送方是否还在房间里（不在就别显示死卡片）。
-  bus.on(EV.PRESENCE, ({ peers }) => fileTransfer.setPeers(peers));
+  bus.on(EV.PRESENCE, ({ room, peers }) => {
+    if (room === sidebar.currentRoom) fileTransfer.setPeers(peers, room);
+  });
   // 注意：`FILE_ACCEPTED` **不在主线程处理** —— 对方点 ✓ 后要立刻开始传数据，
   // 而数据读写都在 Worker 里（避免切后台被节流）。Worker 收到这条事件后
   // 自己就把传输跑起来了，主线程只等 `transfer:*` 进度推送。

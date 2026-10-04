@@ -16,6 +16,9 @@ import * as U from '../util.js';
 const $ = (id) => document.getElementById(id);
 const PAGE = 50;              // 每次翻页条数
 const GROUP_GAP = 5 * 60e3;   // 同一天内超过 5 分钟插一条时刻分隔
+const SYNC_INTERVAL = 10000;
+const compareMessages = (left, right) => Number(left.ts) - Number(right.ts) ||
+  (String(left.id) < String(right.id) ? -1 : String(left.id) > String(right.id) ? 1 : 0);
 
 export const timeline = {
   room: '',
@@ -31,6 +34,12 @@ export const timeline = {
   unreadAnchor: null,     // 不在底部时，第一条新消息的 id（用于插"新消息"分隔线）
   /** 临时系统提示的自动消失计时器 */
   _noteTimer: null,
+  _generation: 0,
+  _latestRequest: null,
+  _syncTimer: null,
+  _syncedMessage: null,
+  _oldestMessage: null,
+  _filePositions: new Map(),
 
   init() {
     $('timeline').addEventListener('scroll', () => {
@@ -55,6 +64,13 @@ export const timeline = {
       if (room !== this.room) return;
       this.push(message, mine, isHistory);
     });
+    bus.on(EV.REJOINED, (room) => {
+      if (room === this.room) this.loadLatest({ silent: true });
+    });
+    bus.on(EV.PEER_UP, () => this._scheduleSync(500));
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this._scheduleSync(0);
+    });
   },
 
   /** 把 composer 的实际高度写进 CSS 变量，供 .jump-btn 定位 */
@@ -68,6 +84,12 @@ export const timeline = {
   /* ------------------------------------------------------------------ 生命周期 */
 
   open(room, me) {
+    this._generation++;
+    clearTimeout(this._syncTimer);
+    this._latestRequest = null;
+    this._syncedMessage = null;
+    this._oldestMessage = null;
+    this._filePositions.clear();
     this.room = room;
     this.me = me;
     this.seen.clear();
@@ -85,6 +107,8 @@ export const timeline = {
   },
 
   close() {
+    this._generation++;
+    clearTimeout(this._syncTimer);
     this.room = '';
     this._clear();
     $('blank').style.display = 'grid';
@@ -179,6 +203,10 @@ export const timeline = {
     if (m.id && this.seen.has(m.id)) return;
     if (m.id) this.seen.add(m.id);
     this._emptyState(false);   // 有消息了就把空态收掉
+    if (!this._oldestMessage || compareMessages(m, this._oldestMessage) < 0) {
+      this._oldestMessage = { ts: m.ts, id: m.id };
+      this.oldestCursor = U.cursorOf(m);
+    }
 
     // 「文件证明」：text 为空、带 file 字段的一条普通消息（发送方签名）。
     // 交给传输模块渲染成**文件卡片** —— 只有它知道"发送方此刻还在不在、
@@ -187,19 +215,13 @@ export const timeline = {
     // ⚠️ 仍然要推进"最新消息位置"，否则紧接着的那条文本消息会拿错误的
     //    时间基准去判断要不要插时间分隔线（会多插或漏插）。
     if (m.file) {
-      this.lastDayKey = new Date(m.ts).toDateString();
-      this.lastTs = m.ts;
+      this._filePositions.set(m.file.file_id, { ts: m.ts, id: m.id });
       this._emptyState(false);   // 文件卡片也是内容，空态该收
       bus.emit(EV.FILE_PROOF, { room: this.room, m });
+      const card = this._fileCardEl(m.file.file_id);
+      if (card) this._insertMessage(card, m);
       return;
     }
-
-    const dayKey = new Date(m.ts).toDateString();
-    if (dayKey !== this.lastDayKey || m.ts - this.lastTs > GROUP_GAP) {
-      this._divider(dayKey !== this.lastDayKey ? U.dayLabel(m.ts) : U.clockTime(m.ts));
-      this.lastDayKey = dayKey;
-    }
-    this.lastTs = Math.max(this.lastTs, m.ts);
 
     // 不在底部时收到实时消息 → 记下第一条，插"新消息"分隔线
     const wasAtBottom = this.atBottom;
@@ -211,7 +233,7 @@ export const timeline = {
       $('tl-inner').appendChild(d);
     }
 
-    $('tl-inner').appendChild(this._bubble(m, mine, isHistory));
+    this._insertMessage(this._bubble(m, mine, isHistory), m);
 
     if (wasAtBottom) this.scrollBottom();
     else $('jump-btn').classList.add('is-on');
@@ -219,55 +241,38 @@ export const timeline = {
 
   /** 前插一页历史 */
   prependPage(list) {
-    const el = $('timeline');
-    const prevHeight = el.scrollHeight;
-    const frag = document.createDocumentFragment();
-
-    // ⚠️ 分隔线状态必须**先存后还原**。
-    // lastDayKey / lastTs 描述的是"当前视口里最新那条消息的位置"。
-    // 前插的是**更早**的消息，直接顺着遍历覆盖这两个值的话，
-    // 遍历结束后它们会停在"本页最后一条"（即整段里最老的一条），
-    // 于是接下来收到的新消息会拿一个错误的时间基准去判断要不要插分隔线。
-    const savedKey = this.lastDayKey;
-    const savedTs = this.lastTs;
-
     for (const m of list) {
-      if (m.id && this.seen.has(m.id)) continue;
-      if (m.id) this.seen.add(m.id);
-      const dayKey = new Date(m.ts).toDateString();
-      // 历史页内部也要按时钟分组，否则一口气 50 条全挤在一起没有时间参照
-      if (dayKey !== this.lastDayKey || (this.lastTs && m.ts - this.lastTs > GROUP_GAP)) {
-        const d = document.createElement('div');
-        d.className = 'tl-day';
-        d.textContent =
-          dayKey !== this.lastDayKey && this.lastTs ? U.dayLabel(m.ts) : U.clockTime(m.ts);
-        frag.appendChild(d);
-        this.lastDayKey = dayKey;
-      }
-      frag.appendChild(this._bubble(m, m.from === this.me, true));
-      this.lastTs = this.lastTs ? Math.min(this.lastTs, m.ts) : m.ts;
-      // ⚠️ 用 (ts, id) 比大小，不能只比 ts —— 同毫秒消息的先后是 id 决定的。
-      //    只比 ts 时，先渲染的那条可能不是真正最早的那条，游标就会落在
-      //    页面中间，下一页把边界消息跳过去了。
-      if (!this.oldestCursor || U.cursorOf(m) < this.oldestCursor) {
-        this.oldestCursor = U.cursorOf(m);
-      }
+      this.push(m, m.from === this.me, true);
     }
-
-    this.lastDayKey = savedKey;
-    this.lastTs = savedTs;
-
-    // 插在 hint 之后（hint 始终在最上面）
-    $('tl-inner').insertBefore(frag, $('tl-hint').nextSibling);
-    // 保持视口：高度差补回 scrollTop
-    el.scrollTop += el.scrollHeight - prevHeight;
   },
 
-  _divider(text) {
-    const el = document.createElement('div');
-    el.className = 'tl-day';
-    el.textContent = text;
-    $('tl-inner').appendChild(el);
+  _insertMessage(element, message) {
+    const inner = $('tl-inner');
+    const viewport = $('timeline');
+    const rows = [...inner.querySelectorAll('.msg[data-ts]')];
+    const anchor = this.atBottom ? null : rows.find((row) =>
+      row.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top);
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    element.dataset.ts = String(message.ts);
+    element.dataset.id = String(message.id || '');
+    const next = rows.find((row) => row !== element && compareMessages(message, row.dataset) < 0);
+    inner.insertBefore(element, next || null);
+    inner.querySelectorAll('.tl-day').forEach((divider) => divider.remove());
+    let previous = null;
+    for (const row of inner.querySelectorAll('.msg[data-ts]')) {
+      const timestamp = Number(row.dataset.ts);
+      const dayKey = new Date(timestamp).toDateString();
+      if (!previous || dayKey !== previous.dayKey || timestamp - previous.ts > GROUP_GAP) {
+        const divider = document.createElement('div');
+        divider.className = 'tl-day';
+        divider.textContent = !previous || dayKey !== previous.dayKey ? U.dayLabel(timestamp) : U.clockTime(timestamp);
+        inner.insertBefore(divider, row);
+      }
+      previous = { ts: timestamp, dayKey };
+    }
+    this.lastTs = previous?.ts || 0;
+    this.lastDayKey = previous?.dayKey || '';
+    if (anchor?.isConnected) viewport.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
   },
 
   /** 文件邀约卡片：文件名 / 大小 / ✓ ✗ 按钮 / 进度条 */
@@ -278,7 +283,7 @@ export const timeline = {
    * 重建视图时（`rebuildCardsForRoom`）要把当前算出来的可用性一起带回来，
    * 否则重建出来的卡片会退回"未知"文案。
    */
-  pushFileCard({ room = '', meta, direction, state = 'invited', done = 0, total = 0, error = '', avail }) {
+  pushFileCard({ room = '', meta, direction, state = 'invited', done = 0, total = 0, error = '', avail, ts = meta.ts || Date.now() }) {
     const key = `file:${room}:${meta.file_id}`;
     if (this.seen.has(key)) {
       const existing = this._fileCardEl(meta.file_id, room);
@@ -345,7 +350,8 @@ export const timeline = {
         <div class="filecard__actions"></div>
       </div>`;
     this._fileActions(el, state);
-    $('tl-inner').appendChild(el);
+    this._insertMessage(el, this._filePositions.get(meta.file_id) || { ts, id: key });
+    this._emptyState(false);
     if (this.atBottom) this.scrollBottom();
     return el;
   },
@@ -768,10 +774,11 @@ export const timeline = {
     const hint = $('tl-hint');
     hint.style.display = 'block';
     hint.textContent = '正在加载更早的消息…';
+    const generation = this._generation;
     try {
       const room = this.room;
       const list = await net.history(room, PAGE, this.oldestCursor);
-      if (this.room !== room) return;   // 已切房间，丢弃
+      if (this._generation !== generation) return;
       if (!list.length) {
         this.reachStart = true;
         hint.textContent = '没有更早的消息了';
@@ -782,45 +789,83 @@ export const timeline = {
         const cursorBefore = this.oldestCursor;
         this.prependPage(list);
         hint.style.display = 'none';
-        // ⚠️ 只有"不足一页"才说明到底了。刚好满页时服务端可能还有更多。
-        //
-        // 但还有第二种"到底了"：这一页**全是被去重掉的老消息**
+        // 这一页**全是被去重掉的老消息**
         // （锚点视图与本地游标不一致时会发生），此时游标没有前进 ——
         // 再滚一次还是同一页，用户就永远卡在顶部转圈（复检 P3-9）。
         // 判据直接看**游标有没有前进**，而不是看这页几条。
-        if (list.length < PAGE || this.oldestCursor === cursorBefore) {
+        if (this.oldestCursor === cursorBefore) {
           this.reachStart = true;
         }
       }
     } catch (e) {
+      if (this._generation !== generation) return;
       hint.textContent = `加载失败：${e?.message ?? e}（滚动可重试）`;
     } finally {
-      this.loading = false;
+      if (this._generation === generation) this.loading = false;
     }
   },
 
   /** 首次进房：拉最新一页 */
-  async loadLatest() {
-    const hint = $('tl-hint');
-    const room = this.room;
+  _scheduleSync(delay = SYNC_INTERVAL) {
+    clearTimeout(this._syncTimer);
+    if (!this.room || !net.config?.anchor?.id) return;
+    this._syncTimer = setTimeout(() => {
+      if (net.canSend && net._room === this.room && !this.loading) this.loadLatest({ silent: true });
+      else this._scheduleSync();
+    }, delay);
+  },
+
+  async loadLatest({ silent = false } = {}) {
+    if (!this.room) return;
+    if (this._latestRequest?.generation === this._generation) return this._latestRequest.promise;
+    const generation = this._generation;
+    const promise = this._loadLatest(this.room, generation, silent);
+    this._latestRequest = { generation, promise };
     try {
-      const list = await net.history(room, PAGE, '');
-      // 期间用户可能已经切到别的房间了 —— 这批结果属于旧房间，直接丢弃，
-      // 否则会把上一个房间的消息追加到当前房间里。
-      if (this.room !== room) return;
-      list.forEach((m) => this.push(m, m.from === this.me, true));
-      this.oldestCursor = list.length ? U.cursorOf(list[0]) : '';
-      this.reachStart = list.length < PAGE;
+      return await promise;
+    } finally {
+      if (generation === this._generation) {
+        this._latestRequest = null;
+        this._scheduleSync();
+      }
+    }
+  },
+
+  async _loadLatest(room, generation, silent) {
+    const hint = $('tl-hint');
+    try {
+      const previous = this._syncedMessage;
+      let before = '';
+      let newest = null;
+      do {
+        const list = await net.history(room, PAGE, before);
+        if (this._generation !== generation) return;
+        if (!before) newest = list[list.length - 1] || null;
+        this.prependPage(list);
+        if (!before) bus.emit(EV.HISTORY, { room, messages: list, me: this.me });
+        if (!list.length) {
+          if (!previous && !before) this.reachStart = true;
+          break;
+        }
+        if (!previous || compareMessages(list[0], previous) <= 0) break;
+        const next = U.cursorOf(list[0]);
+        if (next === before) throw new Error('历史分页游标未推进');
+        before = next;
+      } while (true);
+      if (newest) this._syncedMessage = { ts: newest.ts, id: newest.id };
       // 历史为空**并且**期间没有实时消息到达，才认为房间是空的。
       // （实时消息可能是"进房的瞬间对方刚发的"，这时它不在历史里？其实在，
       //   但历史响应可能更早/更晚返回，所以两条路都要看一眼。）
       const hasLive = !!$('tl-inner').querySelector('.msg');
-      this._emptyState(list.length === 0 && !hasLive);
-      this.scrollBottom();
-      // 通知会话列表回填最后一条预览
-      bus.emit(EV.HISTORY, { room, messages: list, me: this.me });
+      this._emptyState(!newest && !hasLive);
+      if (!this.loading) {
+        hint.style.display = 'none';
+        hint.textContent = '';
+      }
+      if (!silent || this.atBottom) this.scrollBottom();
     } catch (e) {
-      if (this.room !== room) return;
+      if (this._generation !== generation) return;
+      if (silent && this._syncedMessage) return;
       // 历史拉不到 ≠ 房间坏了：消息仍能实时收发，所以给一个可重试的提示而不是死掉
       this._emptyState(false);
       hint.style.display = 'block';
@@ -831,7 +876,7 @@ export const timeline = {
         hint.style.display = 'none';
         this.loadLatest();
       };
-      bus.emit(EV.TIP, `拉取历史失败：${e?.message ?? e}`);
+      if (!silent) bus.emit(EV.TIP, `拉取历史失败：${e?.message ?? e}`);
     }
   },
 };

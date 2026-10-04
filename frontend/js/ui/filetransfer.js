@@ -722,6 +722,7 @@ export const fileTransfer = {
       bus.emit(EV.FILE_CARD, {
         room,
         meta: t.meta,
+        ts: t.ts || t.meta.ts,
         direction: t.direction,
         // ⚠️ 进度与失败原因也要带上（复检 P3-6）：
         //    不带的话，切走再切回时 90% 的卡片会显示空进度条，
@@ -792,7 +793,7 @@ export const fileTransfer = {
    * 来晚了也没关系：`restoreInvites` 时还不知道成员就先恢复（宁可先显示），
    * 等 presence 到了这里会**把发送方已离开的卡片标成失效**。
    */
-  setPeers(peers) {
+  setPeers(peers, room) {
     knownPeers = new Set((peers || []).map((p) => p.id).filter(Boolean));
 
     // 重建"能力清单"索引：file_id -> 谁声称还能提供它
@@ -811,6 +812,7 @@ export const fileTransfer = {
 
     // 已经恢复出来的邀约卡片：发送方走了就标失效
     for (const [id, t] of transfers) {
+      if (t.room !== room) continue;
       if (t.direction !== 'recv' || t.state !== 'interrupted') continue;
       const senderId = t.meta?.sender;
       if (senderId && !knownPeers.has(senderId)) {
@@ -867,6 +869,7 @@ export const fileTransfer = {
     bus.emit(EV.FILE_CARD, {
       room,
       meta: transfers.get(ref.file_id).meta,
+      ts: m.ts,
       direction: 'recv',
       state: 'archived',
     });

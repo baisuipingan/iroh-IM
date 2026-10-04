@@ -57,6 +57,7 @@ fi
 
 # 全部用例都在本目录（原来散在 /tmp，重启即丢；搬进来才受版本控制）
 run_case "file-history"    scripts/e2e/file-history.py
+run_case "multi-peer"      scripts/e2e/multi-peer.py
 run_case "review-frontend" scripts/e2e/review-frontend.py
 run_case "dm-removed"      scripts/e2e/dm-removed.py
 run_case "stale"           scripts/e2e/stale.py

@@ -15,6 +15,7 @@ bash scripts/e2e/run.sh room-isolation  # 单个
 | 名称 | 覆盖 |
 |---|---|
 | file-history | 文件历史卡片、能力清单、离开即过期、可逆恢复、刷新失效（主测试） |
+| multi-peer | 三份独立浏览器存储、三人互发、晚加入历史重试、丢失广播补齐、历史/实时排序、跨页断档、切房代次隔离 |
 | review-frontend | 输入框/附件/空态等交互与 console 无错 |
 | dm-removed | 私聊移除后不残留 |
 | stale | 陈旧邀约不诈尸 |
@@ -30,6 +31,8 @@ bash scripts/e2e/run.sh room-isolation  # 单个
 > "状态页/设置页的布局与控件接线"）。
 
 ## 两个必须知道的坑
+
+`multi-peer` 自己创建并销毁三份独立 BrowserContext，不关闭已有标签页；可用 `E2E_CDP` / `E2E_SITE` 指定 CDP 地址和测试站点。它会模拟首次历史失败和丢失实时广播，验证自动重试及每 10 秒的历史补齐；大于一页的断档会继续分页，文件卡片与文本按 `(ts, id)` 合并。
 
 1. **每个用例之前要清浏览器存储**（`clear-storage.py` 已封装）。
    上轮的 IndexedDB 位图与 localStorage 邀约污染下一轮，表现为"进不了房"或 `done=0`。

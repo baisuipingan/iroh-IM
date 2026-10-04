@@ -98,6 +98,7 @@ export const sidebar = {
     bus.on(EV.HISTORY, ({ room, messages, me }) => {
       const last = messages?.[messages.length - 1];
       if (!last) return;
+      if ((sidebar.previews.get(room)?.ts || 0) > last.ts) return;
       sidebar.setPreview(room, {
         text: previewText(last.text),
         nick: last.nickname,
@@ -108,7 +109,8 @@ export const sidebar = {
       store.upsertRoom(room, { last: last.ts });
       sidebar.render();
     });
-    bus.on(EV.PRESENCE, ({ peers }) => {
+    bus.on(EV.PRESENCE, ({ room, peers }) => {
+      if (room !== sidebar.currentRoom) return;
       sidebar.peers = peers;
       if (sidebar.tab === 'people') sidebar.render();
     });
@@ -135,6 +137,7 @@ export const sidebar = {
   },
 
   setPreview(room, p) {
+    if ((this.previews.get(room)?.ts || 0) > p.ts) return;
     this.previews.set(room, p);
     store.setPreview(room, p);
   },
@@ -169,6 +172,10 @@ export const sidebar = {
   },
 
   setRoom(room) {
+    if (room !== this.currentRoom) {
+      this.peers = [];
+      this.neighbors.clear();
+    }
     this.currentRoom = room;
     if (this.unread.delete(room)) store.setUnread(room, 0);
     this.paintBadge();
@@ -271,7 +278,9 @@ export const sidebar = {
     // 常驻节点（anchor）本身也会出现在 peers 里（它是个真实端点）。
     // 之前"在线成员"和"常驻节点"两段各画一次，同一个 id 显示两遍 —— 去掉重复。
     const anchorId = net.config?.anchor?.id || '';
-    const list = this.peers.filter((p) => hit(p.nickname) && p.id !== anchorId);
+    const members = this.peers.filter((p) => p.id !== anchorId && p.id !== net.endpoint_id());
+    const list = members.filter((p) => hit(p.nickname));
+    const memberCount = this.memberCount();
     const anchor = anchorId ? this.peers.find((p) => p.id === anchorId) : null;
     // ⚠️ 别写「未连接」。
     //    常驻节点不是一直挂在这个房间里 —— 它是**被拉历史时**才订阅的，
@@ -294,7 +303,7 @@ export const sidebar = {
 
     return {
       html:
-        `<div class="section-title">在线成员（${list.length}）</div>` +
+        `<div class="section-title">在线成员（${memberCount}，含自己）</div>` +
         (list.length
           ? list
               .map(
@@ -415,7 +424,8 @@ export const sidebar = {
         row('当前房间', this.currentRoom || '未进入') +
         // 邻居数是**网络拓扑**诊断（gossip 直连了几个邻居），
         // 不是"房间里有多少人"—— 后者看成员页。只有自己时是正常的。
-        row('邻居', peers ? `${peers} 个` : '暂无（房间里只有你）') +
+        row('房间人数', `${this.memberCount()} 人（含自己）`) +
+        row('Gossip 邻居', peers ? `${peers} 个` : '暂无直连') +
         (net.phase === 'online'
           ? ''
           : `<div class="set-row" data-act="reconnect">
@@ -495,6 +505,13 @@ export const sidebar = {
         });
       },
     };
+  },
+
+  memberCount() {
+    const anchorId = net.config?.anchor?.id || '';
+    const otherMembers = this.peers.filter((peer) => peer.id !== anchorId && peer.id !== net.endpoint_id());
+    const joined = this.currentRoom && net.canSend && net._room === this.currentRoom;
+    return otherMembers.length + (joined ? 1 : 0);
   },
 
   /* ------------------------------------------------------------------ 设置 */

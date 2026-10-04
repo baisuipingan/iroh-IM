@@ -36,7 +36,7 @@ import { withTimeout } from './util.js';
  * wasm 构建号：**每次重新构建 wasm 都必须 +1**。
  * 浏览器按 `iroh_web_bg.wasm?b=<BUILD>` 缓存，不 bump 会加载到旧 wasm。
  */
-const BUILD = 'v10';
+const BUILD = 'v11';
 const ONLINE_TIMEOUT = 15000;
 /** 重连退避：1s → 2s → 4s … 封顶 30s */
 const BACKOFF = [1000, 2000, 4000, 8000, 15000, 30000];

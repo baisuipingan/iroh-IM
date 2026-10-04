@@ -772,6 +772,9 @@ pub fn snapshot_upsert(snaps: &Snapshots, room: &str, m: MemberSnapshot) {
     let now = now_ms();
     let mut g = snaps.lock().unwrap();
     let s = g.entry(room.to_string()).or_default();
+    if s.members.iter().any(|member| member.id == m.id && member.epoch > m.epoch) {
+        return;
+    }
     s.at = now;
     s.members
         .retain(|x| x.id != m.id && now.saturating_sub(x.last_seen_ms) < PRESENCE_TTL_MS);
@@ -819,7 +822,7 @@ pub fn snapshot_get(snaps: &Snapshots, room: &str) -> Option<RoomSnapshot> {
         return None;
     }
     members.reverse();
-    Some(RoomSnapshot { at: s.at, members })
+    Some(RoomSnapshot { at: now, members })
 }
 
 // ---------------------------------------------------------------------------
@@ -1760,7 +1763,14 @@ impl RoomNode {
         };
         if same {
             if let Some(j) = self.inner.lock().unwrap().joined.as_mut() {
-                j.nickname = nickname.to_string();
+                if j.nickname != nickname {
+                    j.nickname = nickname.to_string();
+                    j.epoch = now_ms().max(j.epoch.saturating_add(1));
+                }
+            }
+            let sender = self.inner.lock().unwrap().joined.as_ref().map(|j| j.sender.clone());
+            if let Some(sender) = sender {
+                sender.lock().await.join_peers(self.anchor.iter().map(|(id, _)| *id).collect()).await?;
             }
             self.broadcast_presence().await;
             return Ok(());
@@ -1777,9 +1787,13 @@ impl RoomNode {
 
         // ⚠️ 先"敲一下"常驻节点：它是按需订阅房间的（收到历史请求才订阅）。
         //    不先敲，就会出现死锁：客户端等 anchor 进房间，anchor 等客户端来要历史。
+        let mut initial_snapshot = None;
         if !bootstrap.is_empty() {
             match n0_future::time::timeout(Duration::from_secs(10), self.fetch_history(room, 1)).await {
-                Ok(Ok(_)) => info!("已通知常驻节点订阅房间 {room}"),
+                Ok(Ok(response)) => {
+                    initial_snapshot = response.snapshot;
+                    info!("已通知常驻节点订阅房间 {room}");
+                }
                 Ok(Err(e)) => warn!("通知常驻节点失败（继续尝试进房）: {e}"),
                 Err(_) => warn!("通知常驻节点超时（继续尝试进房）"),
             }
@@ -1863,6 +1877,7 @@ impl RoomNode {
             let events = self.events_tx.clone();
             let room_s = room.to_string();
             let me = self.endpoint.id().to_string();
+            let key = self.secret_key.clone();
             // 收到"可用性质询"时，若我就是被问的人、且手里还有这个文件，
             // 需要立刻重播一次心跳来"认领" —— 那要用到私钥签名
             // 常驻节点才有值：收到心跳时顺手更新房间快照。
@@ -1875,6 +1890,9 @@ impl RoomNode {
             let mut receiver = receiver;
             async move {
                 while let Some(ev) = receiver.next().await {
+                    if inner.lock().unwrap().joined.as_ref().map(|j| j.room.as_str()) != Some(room_s.as_str()) {
+                        break;
+                    }
                     match ev {
                         Ok(GossipEvent::Received(msg)) => {
                             let Ok(wire) = serde_json::from_slice::<Wire>(&msg.content) else {
@@ -2056,13 +2074,10 @@ impl RoomNode {
                         Ok(GossipEvent::NeighborUp(id)) => {
                             debug!("邻居上线 {id}");
                             events.send(RoomEvent::PeerUp { id: id.to_string() }).await.ok();
+                            broadcast_presence_now(&key, &inner).await;
                         }
                         Ok(GossipEvent::NeighborDown(id)) => {
                             debug!("邻居下线 {id}");
-                            {
-                                let mut g = inner.lock().unwrap();
-                                g.peers.remove(&id.to_string());
-                            }
                             events.send(RoomEvent::PeerDown { id: id.to_string() }).await.ok();
                         }
                         Ok(GossipEvent::Lagged) => warn!("gossip 落后，丢弃了部分事件"),
@@ -2090,6 +2105,7 @@ impl RoomNode {
             let events = self.events_tx.clone();
             let key = self.secret_key.clone();
             let room_s = room.to_string();
+            let bootstrap = bootstrap.clone();
             async move {
                 let mut ticker = n0_future::time::interval(HB_TICK);
                 let mut last_member: u64 = 0;
@@ -2114,6 +2130,9 @@ impl RoomNode {
                     let file_due = !files.is_empty()
                         && now.saturating_sub(last_file) >= FILE_HB_MS;
                     if member_due || file_due {
+                        if member_due && !bootstrap.is_empty() {
+                            let _ = sender.lock().await.join_peers(bootstrap.clone()).await;
+                        }
                         // 心跳也要绑定房间（F6）
                         let p = Presence::signed(&key, &nickname, files, epoch, &room_s);
                         if let Ok(bytes) = serde_json::to_vec(&Wire::Presence { p }) {
@@ -2130,13 +2149,11 @@ impl RoomNode {
                     if !member_due {
                         continue;
                     }
-                    let changed = {
+                    {
                         let mut g = inner.lock().unwrap();
-                        let before = g.peers.len();
                         g.peers.retain(|_, i| now.saturating_sub(i.last_seen_ms) < PRESENCE_TTL_MS);
-                        before != g.peers.len()
-                    };
-                    if changed {
+                    }
+                    {
                         let peers: Vec<PeerInfo> =
                             inner.lock().unwrap().peers.values().cloned().collect();
                         events
@@ -2161,6 +2178,9 @@ impl RoomNode {
         }
 
         self.events_tx.send(RoomEvent::Joined { room: room.to_string() }).await.ok();
+        if let Some(snapshot) = initial_snapshot {
+            self.apply_snapshot(&snapshot, room).await;
+        }
         self.broadcast_presence().await;
         Ok(())
     }
@@ -2180,7 +2200,7 @@ impl RoomNode {
             match g.joined.as_mut() {
                 Some(j) if j.nickname != name => {
                     j.nickname = name.to_string();
-                    j.epoch = now_ms();   // 单调：见 Joined::epoch 的说明
+                    j.epoch = now_ms().max(j.epoch.saturating_add(1));
                     true
                 }
                 _ => false,
@@ -2212,7 +2232,7 @@ impl RoomNode {
                         false
                     } else {
                         j.files = ids;
-                        j.epoch = now_ms();   // 单调：见 Joined::epoch 的说明
+                        j.epoch = now_ms().max(j.epoch.saturating_add(1));
                         true
                     }
                 }
@@ -2310,23 +2330,25 @@ impl RoomNode {
                 snapshot: None,
             });
         };
-        let conn = self
-            .endpoint
-            .connect(EndpointAddr::new(*id).with_relay_url(relay.clone()), HISTORY_ALPN)
-            .await
-            .context("连接常驻节点失败")?;
-        let (mut send, mut recv) = conn.open_bi().await?;
-        let req = HistoryRequest {
-            room: room.to_string(),
-            limit,
-            before,
-        };
-        send.write_all(&serde_json::to_vec(&req)?).await?;
-        send.finish()?;
-        let body = read_all(&mut recv).await?;
-        conn.close(0u8.into(), b"done");
+        let body = n0_future::time::timeout(Duration::from_secs(20), async {
+            let conn = self
+                .endpoint
+                .connect(EndpointAddr::new(*id).with_relay_url(relay.clone()), HISTORY_ALPN)
+                .await
+                .context("连接常驻节点失败")?;
+            let result = async {
+                let (mut send, mut recv) = conn.open_bi().await?;
+                let req = HistoryRequest { room: room.to_string(), limit, before };
+                send.write_all(&serde_json::to_vec(&req)?).await?;
+                send.finish()?;
+                read_all(&mut recv).await
+            }.await;
+            conn.close(0u8.into(), b"done");
+            result
+        }).await.context("拉取历史超时，请重试")??;
         let mut resp: HistoryResponse =
             serde_json::from_slice(&body).context("历史响应解析失败")?;
+        anyhow::ensure!(resp.room == room, "历史响应房间不匹配");
         // ⚠️ 历史消息**必须逐条验签**（缺陷 F8）。
         //
         // 常驻节点是转发者，而签名机制的意义正是"转发者无法伪造作者身份"。
@@ -2346,11 +2368,6 @@ impl RoomNode {
 
     /// 把历史响应里的**房间快照**并进本地成员表。
     ///
-    /// ⚠️ 只用于"补上我还没见过的人"：已经在本地表里的一律以本地心跳为准
-    /// （本地那份更新），避免用快照把一个正在正常心跳的人覆盖成旧状态。
-    /// 补进来的条目按"现在刚见到"记账，所以如果对方其实已经走了，
-    /// 最多 35 秒后被常规超时清理掉 —— 和整套设计的检测延迟一致，
-    /// 而且点击时还有质询式补偿兜底。
     pub async fn apply_snapshot(&self, snap: &RoomSnapshot, room: &str) {
         let added = {
             let mut g = self.inner.lock().unwrap();
@@ -2369,15 +2386,26 @@ impl RoomNode {
                 if m.id == self.endpoint.id().to_string() {
                     continue; // 自己不用进成员表
                 }
-                if g.peers.contains_key(&m.id) {
-                    continue; // 本地已有更新鲜的信息
+                let age = snap.at.saturating_sub(m.last_seen_ms);
+                if age >= PRESENCE_TTL_MS {
+                    continue;
+                }
+                let observed_at = now.saturating_sub(age);
+                if let Some(peer) = g.peers.get_mut(&m.id) {
+                    if peer.epoch > m.epoch {
+                        continue;
+                    }
+                    peer.last_seen_ms = peer.last_seen_ms.max(observed_at);
+                    if peer.epoch == m.epoch {
+                        continue;
+                    }
                 }
                 g.peers.insert(
                     m.id.clone(),
                     PeerInfo {
                         id: m.id.clone(),
                         nickname: m.nickname.clone(),
-                        last_seen_ms: now,
+                        last_seen_ms: observed_at,
                         files: m.files.clone(),
                         epoch: m.epoch,
                     },
@@ -2861,6 +2889,29 @@ mod security_tests {
 
     fn kp() -> SecretKey {
         SecretKey::from_bytes(&[7u8; 32])
+    }
+
+    #[test]
+    fn older_presence_cannot_roll_back_anchor_snapshot() {
+        let snapshots = new_snapshots();
+        let member = MemberSnapshot {
+            id: kp().public().to_string(),
+            nickname: "new".into(),
+            last_seen_ms: now_ms(),
+            files: vec!["available".into()],
+            epoch: 20,
+        };
+        snapshot_upsert(&snapshots, ROOM, member.clone());
+        snapshot_upsert(&snapshots, ROOM, MemberSnapshot {
+            nickname: "old".into(),
+            files: Vec::new(),
+            epoch: 10,
+            ..member
+        });
+        let snapshot = snapshot_get(&snapshots, ROOM).unwrap();
+        assert_eq!(snapshot.members[0].nickname, "new");
+        assert_eq!(snapshot.members[0].files, vec!["available"]);
+        assert!(snapshot.at >= snapshot.members[0].last_seen_ms);
     }
 
     fn msg(nick: &str, text: &str) -> ChatMessage {
@@ -3355,5 +3406,101 @@ mod security_tests {
         let q = FileQuery::signed(&k, "fid", "want", ROOM);
         assert!(q.verify(ROOM));
         assert!(!q.verify("another-room"), "质询不能被搬进别的房间");
+    }
+}
+
+#[cfg(all(test, feature = "cli", not(target_arch = "wasm32")))]
+mod multi_peer_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    async fn node(anchor: Option<&RoomNode>) -> Result<RoomNode> {
+        let node = RoomNode::start(RoomOptions {
+            relays: vec!["https://127.0.0.1:9".into()],
+            relay_token: None,
+            secret_key_hex: None,
+            anchor_id: anchor.map(RoomNode::endpoint_id),
+            anchor_relay: anchor.map(|_| "https://127.0.0.1:9".into()),
+            history_dir: None,
+            serve_history: anchor.is_none(),
+        }).await?;
+        if let Some(anchor) = anchor {
+            node.memory.add_endpoint_info(anchor.endpoint.addr());
+        }
+        Ok(node)
+    }
+
+    #[tokio::test]
+    async fn three_users_exchange_messages_and_late_joiner_gets_history() -> Result<()> {
+        let anchor = node(None).await?;
+        let anchor_events = anchor.subscribe();
+        let store = anchor.history();
+        let recorder = task::spawn(async move {
+            while let Ok(event) = anchor_events.recv().await {
+                if let RoomEvent::Message { room, message, .. } = event {
+                    store.append(&room, message);
+                }
+            }
+        });
+        let recorder = AbortOnDropHandle::new(recorder);
+        let first = node(Some(&anchor)).await?;
+        let second = node(Some(&anchor)).await?;
+        let third = node(Some(&anchor)).await?;
+        let users = [&first, &second, &third];
+        let events: Vec<_> = users.iter().map(|user| user.subscribe()).collect();
+        let room = "three-user-regression";
+        anchor.join(room, "anchor").await?;
+        first.join(room, "first").await?;
+        second.join(room, "second").await?;
+        let initial_epoch = first.inner.lock().unwrap().joined.as_ref().unwrap().epoch;
+        first.set_nickname("first-renamed");
+        let renamed_epoch = first.inner.lock().unwrap().joined.as_ref().unwrap().epoch;
+        assert!(renamed_epoch > initial_epoch);
+        first.set_available_files(vec!["1".repeat(32)]);
+        assert!(first.inner.lock().unwrap().joined.as_ref().unwrap().epoch > renamed_epoch);
+        let initial = first.send("before-third").await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while anchor.store.count(room) < 1 || snapshot_get(&anchor.snaps, room).map(|s| s.members.len()).unwrap_or(0) < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await?;
+        third.join(room, "third").await?;
+        let history = third.fetch_history(room, 50).await?;
+        assert!(history.messages.iter().any(|message| message.id == initial.id));
+        for other in [&first, &second] {
+            assert!(third.inner.lock().unwrap().peers.contains_key(&other.endpoint_id()));
+        }
+        let mut sent = Vec::new();
+        for user in users {
+            sent.push(user.send(&format!("from-{}", user.endpoint_id())).await?);
+        }
+        for (index, receiver) in events.iter().enumerate() {
+            let expected: HashSet<_> = sent.iter().enumerate()
+                .filter(|(sender, _)| *sender != index)
+                .map(|(_, message)| message.id.clone()).collect();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let mut received = HashSet::new();
+                while received.len() < expected.len() {
+                    if let Ok(RoomEvent::Message { message, .. }) = receiver.recv().await {
+                        if expected.contains(&message.id) {
+                            received.insert(message.id);
+                        }
+                    }
+                }
+            }).await?;
+        }
+        second.leave_room().await;
+        let after_leave = first.send("remaining-users").await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(RoomEvent::Message { message, .. }) = events[2].recv().await {
+                    if message.id == after_leave.id { break; }
+                }
+            }
+        }).await?;
+        for user in users { user.shutdown(); }
+        anchor.shutdown();
+        drop(recorder);
+        Ok(())
     }
 }
