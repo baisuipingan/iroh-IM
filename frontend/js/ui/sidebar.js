@@ -41,6 +41,18 @@ export const sidebar = {
   init() {
     // 偏好要在第一次渲染前落到 DOM 上（密度会改变气泡间距/头像大小）
     this._applyPrefs();
+    // ⚠️ 浏览器的自动播放策略：`new AudioContext()` 在没有用户手势的情况下
+    //    创建出来就是 `suspended`，而 `ding()` 遇到 suspended 会直接返回 ——
+    //    结果就是"提示音开关拨开了也永远不响"（开关是真的，声音是哑的）。
+    //    这里在**第一次**交互时解锁一次，之后 ding() 才能真正出声。
+    const unlockAudio = () => {
+      const ac = this._ac;
+      if (ac && ac.state === 'suspended') ac.resume().catch(() => {});
+      document.removeEventListener('pointerdown', unlockAudio);
+      document.removeEventListener('keydown', unlockAudio);
+    };
+    document.addEventListener('pointerdown', unlockAudio);
+    document.addEventListener('keydown', unlockAudio);
     // 从 localStorage 恢复会话预览与未读 —— 否则刷新后列表全是"还没有消息"
     for (const [room, p] of Object.entries(store.previews())) {
       if (p && typeof p.ts === 'number') this.previews.set(room, p);
@@ -174,7 +186,10 @@ export const sidebar = {
     if (!b) return;   // 元素缺失时不要炸掉整条流程
     b.textContent = n > 99 ? '99+' : String(n);
     b.classList.toggle('is-on', n > 0);
-    document.title = n > 0 ? `(${n}) iroh 聊天室` : 'iroh 聊天室';
+    // ⚠️ 标题上的未读数受设置里的开关控制 —— 之前它**无条件**写标题，
+    //    那个"未读时闪烁标题"开关存了值却没有任何读取方（拨了没反应）。
+    const showInTitle = store.prefs().flashTitle !== false;
+    document.title = n > 0 && showInTitle ? `(${n}) iroh 聊天室` : 'iroh 聊天室';
   },
 
   render() {
@@ -299,73 +314,154 @@ export const sidebar = {
   },
 
   /* ------------------------------------------------------------------ 状态 */
+  //
+  // 这一页是"排障"用的，所以要回答两个问题：**能不能用**、**为什么不能用**。
+  // 数据源全部是真实的（没有占位符）：
+  //   · 节点态   ← EV.NODE_STATE
+  //   · 中继     ← EV.RELAYS 的缓存快照（net.relayStatus()，同步）
+  //   · 延迟     ← net.probes（net.probe() 实测的往返）
+  //   · 邻居     ← PEER_UP / PEER_DOWN 实时维护
   view_status() {
     const relays = net.relayStatus();
-    const ok = relays.filter((r) => r.connected).length;
+    const cfg = net.config?.relays || [];
+
+    // 把三份数据按 url 合成一行：
+    //   配置（id / url） + 运行时（connected） + 探测（ok / rtt）
+    // 之前它们是两段 —— 上面「中继」列 URL+状态，下面「延迟探测」再列一遍
+    // id+延迟，同一份信息读两遍，还得自己在脑子里对齐谁是谁。
+    // ⚠️ 三份数据的 url 写法**不一致**：运行时那份带结尾斜杠
+    //    （Rust 侧给的是 `https://iroh1.editor.vip:15443/`），而配置与探测结果不带。
+    //    不归一化的话按 url 关联会全部落空、状态一律显示"未知"
+    //    （实测踩到：标题写着「1/1 已连接」，下面三行却全是「未知」）。
+    const normUrl = (u) => String(u || '').trim().replace(/\/+$/, '');
+    const hostOf = (u) => normUrl(u).replace(/^https?:\/\//, '');
+    const statusByUrl = new Map(relays.map((r) => [normUrl(r.url), r]));
+    const probeByUrl = new Map((net.probes || []).map((pr) => [normUrl(pr.url), pr]));
+    const items = [];
+    const seen = new Set();
+    for (const c of cfg) {
+      const key = normUrl(c.url);
+      items.push({
+        id: c.id || hostOf(c.url),
+        url: c.url,
+        connected: statusByUrl.get(key)?.connected,
+        probe: probeByUrl.get(key),
+      });
+      seen.add(key);
+    }
+    // 运行时存在、但配置里没有的中继也要显示 —— 不能因为"不在名单里"就吞掉
+    for (const r of relays) {
+      const key = normUrl(r.url);
+      if (seen.has(key)) continue;
+      items.push({ id: hostOf(r.url), url: r.url, connected: r.connected, probe: probeByUrl.get(key) });
+    }
+
+    const okCount = relays.filter((r) => r.connected).length;
+    // ⚠️ 判"探通没探通"用 `p.ok`，不能用 `p.rtt`：中继**可达但读不到计时**时
+    //    （缺 Timing-Allow-Origin）ok=true、rtt=null，只看 rtt 会误标成不可达。
+    const rttOf = (pr) => {
+      if (!pr) return '—';
+      if (!pr.ok) return '不可达';
+      return pr.rtt ? `${Math.round(pr.rtt)}ms` : '可达';
+    };
+    // ⚠️ 措辞要准确：`relayStatus()` 来自 `endpoint.home_relay_status()`，
+    //    它**只上报当前作为 home 的那台中继**，而不是配置里的全部。
+    //    所以"运行时没提它" ≠ "它坏了"（探测可能明明可达）—— 只是**没在用**。
+    //    写"未知"会让人以为出问题了，写"未连接"更是错的。
+    const relayState = (it) => {
+      if (it.connected === true) return '在用';
+      if (it.connected === false) return '连接失败';
+      return '未使用';
+    };
+    const relayTip = (it) => {
+      const lines = [it.url];
+      if (it.connected === false) lines.push('连接失败');
+      else if (it.connected == null) lines.push('当前不是这台在用（浏览器版同一时刻只挂一台 home 中继）');
+      if (it.probe && !it.probe.ok) lines.push(`探测不可达${it.probe.error ? `：${it.probe.error}` : ''}`);
+      else if (it.probe?.rtt) lines.push(`探测延迟 ${Math.round(it.probe.rtt)}ms`);
+      return lines.join('\n');
+    };
+
     const row = (k, v, cls = '') =>
       `<div class="kv"><span class="kv__k">${U.esc(k)}</span><span class="kv__v ${cls}">${U.esc(v)}</span></div>`;
 
-    // 探测结果：区分"还在探"、"探完但全挂"、"探完有活的"三种。
-    // ⚠️ 判成败用 `p.ok`，不能用 `p.rtt` —— 中继**可达但读不到计时**
-    //    （缺 Timing-Allow-Origin 且 duration 为 0）时 ok=true、rtt=null，
-    //    只看 rtt 会把它显示成 `×`（不可达），与下面"重新探测"的提示自相矛盾。
-    const probeCell = net.probes.length
-      ? net.probes
-          .map((p) => `${p.id} ${p.ok ? (p.rtt ? `${Math.round(p.rtt)}ms` : '可达') : '×'}`)
-          .join(' · ')
-      : net.probing
-        ? '正在探测…'
-        : '尚未探测';
+    const myId = net.endpoint_id() || '';
+    // 64 位 hex 连排几乎读不出，按 8 位一组
+    const idGrouped = myId.replace(/(.{8})/g, '$1 ').trim();
+
+    const peers = this.neighbors.size;
 
     return {
       html:
         `<div class="section-title">连接</div>` +
         row('节点', this.currentNodeState.text, this.currentNodeState.waiting ? '' : this.currentNodeState.ok ? 'is-ok' : 'is-bad') +
-        row('我的身份', net.endpoint_id() || '—') +
         row('当前房间', this.currentRoom || '未进入') +
-        // gossip 邻居数（PEER_UP / PEER_DOWN 实时维护）。
-        // 是**网络拓扑**诊断信息，不是"房间里有多少人"—— 后者看成员页。
-        row('gossip 邻居', this.neighbors.size ? `${this.neighbors.size} 个` : '暂无') +
-        // 断线时给一个明确的重连入口 —— 干等退避计时器时用户无事可做
+        // 邻居数是**网络拓扑**诊断（gossip 直连了几个邻居），
+        // 不是"房间里有多少人"—— 后者看成员页。只有自己时是正常的。
+        row('邻居', peers ? `${peers} 个` : '暂无（房间里只有你）') +
         (net.phase === 'online'
           ? ''
           : `<div class="set-row" data-act="reconnect">
                <span class="set-row__label">立即重新连接</span>
                <span class="set-row__value">↻</span>
              </div>`) +
-        `<div class="section-title">中继（${ok}/${relays.length} 已连接）</div>` +
-        (relays.length
-          ? relays
-              .map((r) =>
-                row(r.url.replace('https://', ''), r.connected ? '已连接' : '未连接', r.connected ? 'is-ok' : 'is-bad'),
+
+        `<div class="section-title section-title--row">
+           <span>我的身份</span>
+           ${myId ? '<button class="mini-btn" data-act="copy-id">复制</button>' : ''}
+         </div>` +
+        (myId ? `<div class="id-hex" title="${U.esc(myId)}">${U.esc(idGrouped)}</div>` : row('我的身份', '—')) +
+
+        // ⚠️ 计数口径要跟下面的行数自洽：`relays` 只是"运行时上报的"（往往只有 1 台），
+        //    拿它当分母会写出「1/1 已连接」配三行中继的矛盾画面。
+        `<div class="section-title">中继（已连接 ${okCount} · 配置 ${
+          cfg.length || items.length
+        }）${net.probing ? ' · 探测中…' : ''}</div>` +
+        (items.length
+          ? items
+              .map(
+                (it) => `
+                <div class="relay" title="${U.esc(relayTip(it))}">
+                  <i class="relay__dot ${
+                    it.connected === true ? 'is-ok' : it.connected === false ? 'is-bad' : ''
+                  }"></i>
+                  <span class="relay__id">${U.esc(it.id)}</span>
+                  <span class="relay__state ${
+                    it.connected === true ? 'is-ok' : it.connected === false ? 'is-bad' : ''
+                  }">${relayState(it)}</span>
+                  <span class="relay__rtt">${rttOf(it.probe)}</span>
+                </div>`,
               )
               .join('')
           : `<div class="empty">暂无中继信息</div>`) +
-        `<div class="section-title">延迟探测</div>` +
-        row('结果', probeCell) +
         `<div class="set-row" data-act="reprobe">
            <span class="set-row__label">重新探测中继</span>
            <span class="set-row__value">↻</span>
          </div>`,
+
       bind: (root) => {
-        root.querySelectorAll('.set-row[data-act]').forEach((el) => {
+        // ⚠️ 选择器是 `[data-act]`（不是 `.set-row[data-act]`）——
+        //    「我的身份」旁边那个复制按钮是个 `<button>`，不在 `.set-row` 里，
+        //    用旧选择器它永远不会被绑定（点上去毫无反应）。
+        root.querySelectorAll('[data-act]').forEach((el) => {
           el.onclick = () => {
-            if (el.dataset.act === 'reconnect') {
+            const act = el.dataset.act;
+            if (act === 'reconnect') {
               net.reconnect();
               bus.emit(EV.TIP, '正在重新连接中继…');
-            } else {
+              return;
+            }
+            if (act === 'reprobe') {
               bus.emit(EV.TIP, '正在探测中继…');
+              this.render();   // 立刻显示"探测中…"
               net.probe().then(() => {
-                bus.emit(
-                  EV.TIP,
-                  net.probes
-                    .filter((p) => p.ok)
-                    .map((p) => `${p.id} ${p.rtt ? `${Math.round(p.rtt)}ms` : '?'}`)
-                    .join(' · ') || '全部不可达',
-                );
+                const best = net.probes.filter((pr) => pr.ok).map((pr) => `${pr.id} ${rttOf(pr)}`);
+                bus.emit(EV.TIP, best.join(' · ') || '全部不可达');
                 this.render();
               });
+              return;
             }
+            this._settingsAction(act);
           };
         });
       },
@@ -426,8 +522,8 @@ export const sidebar = {
            <div class="set-card__body">
              <div class="set-card__name">${U.esc(store.nick())}</div>
              <div class="set-card__id" title="${U.esc(myId)}">
-               <code>${U.esc(U.shortId(myId, 20))}…</code>
-               <button class="mini-btn" data-act="copy-id">复制 ID</button>
+               <code>${U.esc(U.shortId(myId, 16))}…</code>
+               <button class="mini-btn" data-act="copy-id">复制</button>
              </div>
            </div>
          </div>
@@ -438,7 +534,7 @@ export const sidebar = {
            <div class="set-row set-row--field">
              <div class="set-row__text">
                <div class="set-row__label">发送快捷键</div>
-               <div class="set-row__hint">输入框里用什么键发送消息</div>
+               <div class="set-row__hint">回车直接发送</div>
              </div>
              <select class="mini-select" data-pref="sendKey">
                <option value="enter" ${prefs.sendKey !== 'ctrl' ? 'selected' : ''}>Enter</option>
@@ -450,11 +546,11 @@ export const sidebar = {
 
          <div class="set-group">
            <div class="section-title">外观</div>
-           ${toggle('theme', '深色模式', dark, '浅色更接近微信桌面端')}
+           ${toggle('theme', '深色模式', dark, dark ? '夜间更护眼' : '更接近微信桌面端')}
            <div class="set-row set-row--field">
              <div class="set-row__text">
                <div class="set-row__label">消息密度</div>
-               <div class="set-row__hint">紧凑模式一屏能看到更多消息</div>
+               <div class="set-row__hint">紧凑模式更省空间</div>
              </div>
              <select class="mini-select" data-pref="density">
                <option value="cozy" ${prefs.density !== 'compact' ? 'selected' : ''}>标准</option>
@@ -469,20 +565,20 @@ export const sidebar = {
              'sound',
              '新消息提示音',
              prefs.sound !== false,
-             '仅在页面可见时播放（浏览器限制）',
+             '有过操作后才会出声',
            )}
            ${toggle(
              'flashTitle',
-             '未读时闪烁标题',
+             '标题显示未读数',
              prefs.flashTitle !== false,
-             '切到别的标签页时把标题标成未读',
+             '标签页标题前加 (N)',
            )}
          </div>
 
          <div class="set-group">
            <div class="section-title">连接</div>
            ${nav('status', '连接诊断', this.currentNodeState.ok ? '在线' : '异常', '中继、延迟、重连')}
-           ${nav('probecopy', '我的身份 ID', U.shortId(myId, 10) + '…', '相当于你的主密码，勿外传')}
+           ${nav('probecopy', '我的身份 ID', U.shortId(myId, 10) + '…', '主密码，勿外传')}
          </div>
 
          <div class="set-group">
@@ -509,8 +605,11 @@ export const sidebar = {
            }</span></div>
          </div>`,
       bind: (root) => {
-        root.querySelectorAll('.set-row[data-act]').forEach((el) => {
-          el.onclick = () => this._settingsAction(el.dataset.act);
+        // ⚠️ 用 `[data-act]` 而不是 `.set-row[data-act]`：资料卡里的「复制」是个裸
+        //    `<button>`（在 .set-card__id 里，不是 .set-row），按旧选择器永远绑不上 ——
+        //    用户点「复制」毫无反应。
+        root.querySelectorAll('[data-act]').forEach((el) => {
+          el.onclick = () => this._settingsAction(el.dataset.act, el);
         });
         root.querySelectorAll('[data-toggle]').forEach((el) => {
           el.onclick = () => this._togglePref(el.dataset.toggle);
@@ -581,12 +680,26 @@ export const sidebar = {
     }
   },
 
-  _settingsAction(act) {
+  _settingsAction(act, el) {
     if (act === 'copy-id') {
       const id = net.endpoint_id();
+      // 就地反馈：按钮短暂变成「已复制」，比只弹 toast 更容易确认点到了
+      const flash = (text) => {
+        if (!el || !el.classList.contains('mini-btn')) return;
+        const old = el.textContent;
+        el.textContent = text;
+        el.disabled = true;
+        setTimeout(() => {
+          el.textContent = old;
+          el.disabled = false;
+        }, 1200);
+      };
       navigator.clipboard
         ?.writeText(id)
-        .then(() => bus.emit(EV.TIP, '已复制我的身份 ID'))
+        .then(() => {
+          bus.emit(EV.TIP, '已复制我的身份 ID');
+          flash('已复制');
+        })
         .catch(() => bus.emit(EV.TIP, '复制失败，请手动选中复制'));
       return;
     }

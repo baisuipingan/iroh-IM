@@ -45,13 +45,14 @@ if [ "$#" -gt 0 ]; then
   exit 0
 fi
 
-# 默认：主测试在 /tmp（历史上放在那儿），新增的两个在本目录
-run_case "file-history"   /tmp/file-history-test.py
-run_case "review-frontend" /tmp/review-frontend.py
-run_case "dm-removed"     /tmp/dm-removed-test.py
-run_case "stale"          /tmp/stale-test.py
-run_case "offline-room"   /tmp/offline-room-test.py
-run_case "refresh"        /tmp/refresh-test.py
-run_case "leave-cancel"   /tmp/leave-cancel-test.py
-run_case "room-isolation" scripts/e2e/room-isolation.py
-run_case "card-revive"    scripts/e2e/card-revive.py
+# 全部用例都在本目录（原来散在 /tmp，重启即丢；搬进来才受版本控制）
+run_case "file-history"    scripts/e2e/file-history.py
+run_case "review-frontend" scripts/e2e/review-frontend.py
+run_case "dm-removed"      scripts/e2e/dm-removed.py
+run_case "stale"           scripts/e2e/stale.py
+run_case "offline-room"    scripts/e2e/offline-room.py
+run_case "refresh"         scripts/e2e/refresh.py
+run_case "leave-cancel"    scripts/e2e/leave-cancel.py
+run_case "room-isolation"  scripts/e2e/room-isolation.py
+run_case "card-revive"     scripts/e2e/card-revive.py
+run_case "sidebar-pages"   scripts/e2e/sidebar-pages.py

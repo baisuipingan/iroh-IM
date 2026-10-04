@@ -189,12 +189,17 @@ select:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
 .set-card__body { flex: 1; min-width: 0; }
 .set-card__name { font-size: var(--fs-lg); font-weight: 500; }
 .set-card__id {
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 5px;
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 6px;
   font-family: ui-monospace, Menlo, monospace;
   font-size: var(--fs-xs); color: var(--fg-faint);
 }
-.set-card__id code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* `flex: 1; min-width: 0` 缺一不可：少了它，长 ID 会把「复制」按钮挤出卡片，
+   或者在窄面板里干脆不省略号截断。 */
+.set-card__id code {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* 分组：标题 + 行，收在一起时和别的组有视觉分隔 */
 .set-group {
@@ -211,7 +216,9 @@ select:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
   margin-top: 2px;
   font-size: var(--fs-xs); line-height: 1.5; color: var(--fg-faint);
 }
-.set-row__right { display: flex; align-items: center; gap: 4px; flex: none; }
+/* 右侧（取值 + 箭头）：给取值和文案之间留出呼吸空间，
+   否则窄面板下描述会紧贴取值（看起来像连在一起）。 */
+.set-row__right { display: flex; align-items: center; gap: 6px; flex: none; padding-left: 4px; }
 .chev { color: var(--fg-faint); font-size: 16px; line-height: 1; }
 
 .set-row--danger .set-row__label { color: var(--c-danger); }
@@ -263,6 +270,20 @@ select:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
   line-height: 1.6;
 }
 
+/* 状态页里的身份 ID：64 位 hex 连排几乎不可读，按 8 位一组显示。
+   分组之间用半角空格，配合 `overflow-wrap: anywhere` 让它在窄面板里自然折行。 */
+.id-hex {
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--line);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--fs-xs);
+  line-height: 1.75;
+  letter-spacing: .02em;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+  user-select: all;   /* 点一下就能整段选中，方便手动复制 */
+}
+
 /* 键值行 / 设置行 */
 .kv {
   display: flex; gap: 10px;
@@ -270,10 +291,56 @@ select:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
   border-bottom: 1px solid var(--line);
   font-size: var(--fs-sm);
 }
-.kv__k { flex: none; width: 66px; color: var(--fg-faint); }
-.kv__v { flex: 1; min-width: 0; word-break: break-all; }
-.kv__v.is-ok { color: #3fae74; }
-.kv__v.is-bad { color: #e05a52; }
+/* ⚠️ 键**不能**固定宽度 + 不换行。
+   之前是 `flex: none; width: 66px`，一旦把长字符串（如中继 URL）当键塞进来，
+   它就直接溢出自己的盒子、**压在右侧取值上**（实测截图里出现
+   「iroh1.editor.vi已连接13/」这种叠字）。
+   现在：键可以占更多空间、也能换行；取值仍然优先保证不被挤没。 */
+.kv__k {
+  flex: 0 1 auto; min-width: 58px; max-width: 45%;
+  color: var(--fg-faint);
+  overflow-wrap: anywhere;
+}
+.kv__v { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.kv__v.is-ok { color: var(--c-ok); }
+.kv__v.is-bad { color: var(--c-bad); }
+
+/* --------------------------------------------------------------------------
+ * 中继行
+ *
+ * 状态页原来把中继拆成两段：上面「中继」列 URL + 连接状态，下面「延迟探测」
+ * 再列一遍 id + 延迟 —— 同一份信息出现两次，还得自己在脑子里对齐。
+ * 现在合成一行：状态点 + id + 连接状态 + 延迟。
+ * ------------------------------------------------------------------------*/
+.relay {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-sm);
+}
+.relay__dot {
+  flex: none;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--fg-faint);
+}
+.relay__dot.is-ok { background: var(--c-ok); }
+.relay__dot.is-bad { background: var(--c-bad); }
+.relay__id { flex: none; font-family: ui-monospace, Menlo, monospace; }
+.relay__state { flex: 1 1 auto; min-width: 0; color: var(--fg-faint); font-size: var(--fs-xs); }
+.relay__state.is-ok { color: var(--c-ok); }
+.relay__state.is-bad { color: var(--c-bad); }
+.relay__rtt {
+  flex: none;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--fs-xs); color: var(--fg-dim);
+  text-align: right;
+}
+
+/* 分组标题右侧带操作（如「我的身份」旁的复制按钮） */
+.section-title--row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
+}
 
 .set-row {
   display: flex; align-items: center; gap: 10px;
@@ -323,9 +390,9 @@ select:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
   font-size: var(--fs-xs);
 }
 .pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); }
-.pill.is-ok { color: #3fae74; }
+.pill.is-ok { color: var(--c-ok); }
 .pill.is-ok .pill__dot { background: var(--c-brand); }
-.pill.is-bad { color: #e05a52; }
+.pill.is-bad { color: var(--c-bad); }
 .pill.is-bad .pill__dot { background: var(--c-danger); }
 /* 离线时胶囊可点 = 手动重连，得看起来能点 */
 .pill.is-clickable { cursor: pointer; }
@@ -772,7 +839,7 @@ html[data-density='compact'] .composer__input { height: 24px; line-height: 24px;
   background: var(--c-brand);
   transition: width .2s var(--ease);
 }
-.filecard__err { margin-top: 6px; font-size: var(--fs-xs); color: #e05a52; }
+.filecard__err { margin-top: 6px; font-size: var(--fs-xs); color: var(--c-bad); }
 
 .filecard__actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
 .filecard__btn {
