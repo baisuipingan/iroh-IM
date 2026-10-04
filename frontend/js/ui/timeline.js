@@ -423,7 +423,11 @@ export const timeline = {
 
   _previewImage(el, url) {
     const placeholder = el.querySelector('.imgcard__ph');
-    if (placeholder && url === null) { placeholder.textContent = '图片预览已释放，文件仍保存在本地'; return; }
+    if (placeholder && url === null) {
+      placeholder.classList.remove('has-preview');
+      placeholder.textContent = '图片预览已释放，文件仍保存在本地';
+      return;
+    }
     if (!placeholder || !url || !url.startsWith('blob:')) return;
     if (placeholder.querySelector('img')?.src === url) return;
     const image = document.createElement('img');
@@ -436,6 +440,7 @@ export const timeline = {
     open.append(image);
     open.onclick = () => this.viewImage(url);
     placeholder.replaceChildren(open);
+    placeholder.classList.add('has-preview');
   },
 
   _renderFileRecipients(el) {

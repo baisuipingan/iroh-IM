@@ -7,6 +7,7 @@
 bash scripts/e2e/run.sh                 # 全部
 bash scripts/e2e/run.sh room-isolation  # 单个
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/fix-review.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/image-layout.mjs
 ```
 
 `fix-review.mjs` 启动独立 Chrome/WebKit 进程，覆盖超限报文后的健康通信、同身份连续刷新、
@@ -17,6 +18,11 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/fix-review.mjs
 `run.sh` 保留子进程退出码，任何 FAIL、CRASH、缺脚本或未知名称均返回非零。
 追加覆盖实时文件证明先于邀约的乱序、历史旁观卡隔离，以及 Worker 下载失败和启动无响应。
 Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
+
+`image-layout.mjs` 使用Chrome/WebKit实际渲染横图、竖图、方图及极端比例图片，
+覆盖发送/接收、深浅主题和320px/桌面布局，验证比例、容器边界、底栏不重叠、
+未接收占位、预览释放及放大查看。图片卡片布局通过本地blob注入，不模拟网络接收；
+真实P2P图片接收仍由`fix-review.mjs`覆盖。
 
 ## 用例
 

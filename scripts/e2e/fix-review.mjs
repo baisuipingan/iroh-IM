@@ -133,11 +133,11 @@ try {
   check('空文件明确提示', /空文件/.test(await sender.locator('#composer-tip').innerText()));
   const image = Buffer.from(await sender.evaluate(() => {
     const canvas = document.createElement('canvas');
-    canvas.width = 40;
-    canvas.height = 40;
+    canvas.width = 400;
+    canvas.height = 600;
     const context = canvas.getContext('2d');
     context.fillStyle = '#28a745';
-    context.fillRect(0, 0, 40, 40);
+    context.fillRect(0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/png').split(',')[1];
   }), 'base64');
   await chooseFile(sender, { name: 'preview.png', mimeType: 'image/png', buffer: image });
@@ -166,6 +166,17 @@ try {
   await receiver.locator('.imgcard__ph img').waitFor();
   await sender.locator('.imgcard__ph img').waitFor();
   check('真实文件传输后双方图片预览', true);
+  for (const [label, page] of [['发送端', sender], ['接收端', receiver]]) {
+    const fits = await page.locator('.msg--img').evaluate(async card => {
+      const image = card.querySelector('.imgcard__ph img');
+      await image.decode();
+      const picture = image.getBoundingClientRect();
+      const frame = card.querySelector('.imgcard__ph').getBoundingClientRect();
+      const footer = card.querySelector('.imgcard__foot').getBoundingClientRect();
+      return Math.abs(picture.width / picture.height - 2 / 3) < 0.01 && Math.abs(frame.height - picture.height) < 1 && footer.top >= picture.bottom;
+    });
+    check(`${label}真实竖图按比例撑开预览且不遮挡底栏`, fits);
+  }
   await receiver.locator('.imgcard__ph button').click();
   await receiver.keyboard.press('Escape');
   check('图片可放大并Esc关闭', !await receiver.locator('.lightbox').evaluate(element => element.classList.contains('is-on')));
