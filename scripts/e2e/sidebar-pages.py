@@ -155,7 +155,15 @@ def title_with(flash, tag):
     }})()""")
     p2.call("Page.navigate", {"url": url + "&r=1"})
     tt.wait_until(p2, "!!window.__state", 120, label=tag + "-reload")
-    time.sleep(2)
+    # ⚠️ 不能只 sleep 固定秒数。
+    #    标题是在 init → render → paintBadge 里才写的，而 `<title>` 标签本身
+    #    早就把标题设成站点名了 —— 睡不够就会读到"还没被 paintBadge 改过"的那一刻
+    #    （实测 `__state` 出现后 1.5s 还没写、3.0s 才写；原来只 sleep 2s，卡在边界上，
+    #     页面加载稍有波动就偶发失败）。
+    #    用一个**确定的信号**：同一函数里先设徽标、再设标题，所以
+    #    "徽标 == 3" 就保证 paintBadge 已经跑完，标题也已写好。
+    tt.wait_until(p2, "document.getElementById('rail-badge').textContent === '3'", 30,
+                  label=tag + "-paintBadge")
     title = p2.ev("document.title")
     tt.close_tab(t2["id"])
     return title

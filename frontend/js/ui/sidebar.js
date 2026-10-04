@@ -206,7 +206,7 @@ export const sidebar = {
     // ⚠️ 标题上的未读数受设置里的开关控制 —— 之前它**无条件**写标题，
     //    那个"未读时闪烁标题"开关存了值却没有任何读取方（拨了没反应）。
     const showInTitle = store.prefs().flashTitle !== false;
-    document.title = n > 0 && showInTitle ? `(${n}) iroh 聊天室` : 'iroh 聊天室';
+    document.title = n > 0 && showInTitle ? `(${n}) 派大星聊天室` : '派大星聊天室';
   },
 
   render() {

@@ -766,11 +766,23 @@ html[data-theme='light'] .composer__box:focus-within { border-color: var(--c-bra
 .blank {
   flex: 1;
   display: grid; place-items: center;
+  /* ⚠️ 加了 logo 之后要显式给 `align-content: center` ——
+     默认是 stretch，会把 logo 和文案两行撑开到整个高度、上下分离。
+     `gap` 控制 logo 与文案之间的间距。 */
+  align-content: center;
+  gap: 14px;
   text-align: center; line-height: 2;
   font-size: var(--fs-md);
   color: var(--fg-faint);
 }
 .blank small { font-size: var(--fs-sm); }
+/* 落地页的站点图标。用 `logo.png`（192×192），显示 96px 两倍图，高分屏不糊。 */
+.blank__logo {
+  width: 96px; height: 96px;
+  image-rendering: -webkit-optimize-contrast;
+  opacity: .92;
+  user-select: none;
+}
 
 /* 紧凑密度（设置里可切）：一屏多看几条消息 */
 html[data-density='compact'] .timeline-inner { gap: 9px; padding: 10px 16px 6px; }
