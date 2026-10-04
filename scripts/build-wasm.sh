@@ -23,11 +23,11 @@ KEY="${IROH_BUILD_KEY:-$HOME/Desktop/ssh/mindcrew/codex}"
 DIR="${IROH_BUILD_DIR:-/opt/iroh-build/client-wasm}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SSH=(ssh -i "$KEY" -p "$PORT" -o BatchMode=yes "$HOST")
+SSH=(ssh -i "$KEY" -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$HOST")
 # ⚠️ `-p` 必须加：scp 默认**不保留时间戳**，拉回来的产物 mtime 是"传输时刻"，
 #    于是下面那句"产物必须比源码新"的自检**恒为通过**（源码总是更早），
 #    等于把"这次构建到底有没有生效"的唯一自动判据废掉了（复检 P3-12）。
-SCP=(scp -p -i "$KEY" -P "$PORT" -o BatchMode=yes)
+SCP=(scp -p -i "$KEY" -P "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
 
 echo "==> 同步源码到 $HOST:$DIR"
 "${SSH[@]}" "mkdir -p $DIR/src/bin"
@@ -35,8 +35,10 @@ echo "==> 同步源码到 $HOST:$DIR"
 # 结果新增的 filetransfer.rs / room.rs / transfer_orchestrator.rs 忘了加进去，
 # 构建机上常年跑旧代码（表现为「改了源码但行为不变」，极难排查）。
 # 用 rsync --delete 保证远端与本地完全一致。
-rsync -az --delete -e "ssh -i $KEY -p $PORT -o BatchMode=yes" \
+rsync -az --delete -e "ssh -i $KEY -p $PORT -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3" \
   "$ROOT/client-wasm/src/" "$HOST:$DIR/src/"
+rsync -az --delete -e "ssh -i $KEY -p $PORT -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3" \
+  "$ROOT/client-wasm/vendor/" "$HOST:$DIR/vendor/"
 # ⚠️ `Cargo.lock` **必须一起同步**，并且构建要加 `--locked`（复检缺陷 F9）。
 #    只同步 Cargo.toml 的话，远端那份 lock 会自己漂移，
 #    `cargo` 于是"按语义化版本允许范围"重新解析依赖 —— 上线的那份 wasm
@@ -86,7 +88,7 @@ echo "==> 拉回 wasm 产物到 frontend/pkg"
 "${SCP[@]}" -r "$HOST:$DIR/pkg/." "$ROOT/frontend/pkg/"
 
 # 收尾自检：产物必须**比源码新**，否则说明这次构建其实没生效（防上面那类静默失败）
-NEWER=$(find "$ROOT/client-wasm/src" -name '*.rs' -newer "$ROOT/frontend/pkg/iroh_web_bg.wasm" 2>/dev/null | head -1 || true)
+NEWER=$(find "$ROOT/client-wasm/src" "$ROOT/client-wasm/vendor" -name '*.rs' -newer "$ROOT/frontend/pkg/iroh_web_bg.wasm" 2>/dev/null | head -1 || true)
 if [[ -n "$NEWER" ]]; then
   echo "!! 警告：wasm 比源码旧（$(basename "$NEWER") 更新），本次构建很可能没生效" >&2
   exit 1

@@ -1,0 +1,21 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - generic "用户1060" [ref=e4]: 用
+    - button "聊天" [ref=e6] [cursor=pointer]
+    - button "在线成员" [ref=e9] [cursor=pointer]
+    - button "连接状态" [ref=e15] [cursor=pointer]
+    - button "设置" [ref=e17] [cursor=pointer]
+    - button "重新探测中继" [ref=e21] [cursor=pointer]
+  - complementary [ref=e25]:
+    - generic [ref=e26]:
+      - textbox "搜索" [ref=e31]
+      - button "新建房间" [ref=e32] [cursor=pointer]
+      - button "切换到浅色" [ref=e35] [cursor=pointer]
+    - generic [ref=e38]: 还没有房间点右上角 + 新建，或让别人把房间名告诉你
+  - main [ref=e40]:
+    - generic [ref=e41]:
+      - generic "点击可改备注名" [ref=e42] [cursor=pointer]: 未进入房间
+      - generic [ref=e43]: 启动中
+    - generic [ref=e46]:
+      - text: 选择一个房间开始聊天
+      - generic [ref=e47]: 或点列表右上角的 + 新建一个房间

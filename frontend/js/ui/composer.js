@@ -62,6 +62,8 @@ export const composer = {
   room: '',
   /** 待发送的附件：{ id, file, url }  —— url 仅图片有，用于缩略图预览 */
   pending: [],
+  drafts: new Map(),
+  _roomVersion: 0,
   _seq: 0,
   /** 发送中（防止连点，也用于禁用发送按钮） */
   sending: false,
@@ -110,11 +112,8 @@ export const composer = {
 
     $('tb-file').onclick = () => this._pick('file');
     $('tb-shot').onclick = () => this._pick('file-img');
-    $('tb-voice').onclick = () =>
-      dialog.info(
-        '语音消息',
-        '还没做。需要先把录音编码成小体积格式（如 opus）再走消息通道，属于下一批功能。',
-      );
+    $('tb-voice').disabled = true;
+    $('tb-voice').title = '语音消息尚未支持';
 
     this._bindDrop();
     this._autoGrow(); // 初始就按内容定高（不加这句会停在 CSS 默认值）
@@ -129,7 +128,7 @@ export const composer = {
     this.enabled = !!on;
     $('input').disabled = !on;
     $('input').placeholder =
-      placeholder || (on ? '输入消息，Enter 发送 · Shift+Enter 换行' : '不可用');
+      placeholder || (on ? `输入消息，${store.prefs().sendKey === 'ctrl' ? 'Ctrl/⌘+Enter' : 'Enter'} 发送 · Shift+Enter 换行` : '不可用');
     // 工具条在不可用时也要跟着灰掉，否则用户点了没反应
     for (const id of ['tb-emoji', 'tb-file', 'tb-shot']) $(id).disabled = !on;
     this._syncSendBtn();
@@ -140,8 +139,25 @@ export const composer = {
   },
 
   setRoom(room) {
+    if (room === this.room) return;
+    if (this.room) this.drafts.set(this.room, { text: $('input').value, pending: this.pending });
+    this._roomVersion++;
     this.room = room;
+    const draft = this.drafts.get(room);
+    $('input').value = draft?.text || '';
+    this.pending = draft?.pending || [];
+    this._renderPending();
+    this._syncSendBtn();
+    this._autoGrow();
+  },
+
+  clearDrafts() {
+    for (const draft of this.drafts.values()) {
+      for (const pending of draft.pending) if (pending.url) URL.revokeObjectURL(pending.url);
+    }
+    this.drafts.clear();
     this.clearPending();
+    $('input').value = '';
     this._autoGrow();
   },
 
@@ -185,8 +201,10 @@ export const composer = {
     }
     let added = 0;
     let tooBig = 0;
+    let empty = 0;
     for (const f of files) {
-      if (!f || !f.size) continue;
+      if (!f) continue;
+      if (!f.size) { empty++; continue; }
       if (f.size > BIG_FILE_WARN) tooBig++;
       this.pending.push({
         id: `p${++this._seq}`,
@@ -200,11 +218,12 @@ export const composer = {
       });
       added++;
     }
+    if (empty) this.tip(`有 ${empty} 个空文件未添加：暂不支持零字节文件`, { bad: true });
     if (!added) return;
     this._renderPending();
     this._syncSendBtn();
     if (tooBig) this.tip(`有 ${tooBig} 个文件超过 2GB，传输会比较慢`);
-    else this.tip('');
+    else if (!empty) this.tip('');
   },
 
   removePending(id) {
@@ -282,6 +301,10 @@ export const composer = {
       return;
     }
     if (this.sending) return;   // 防连点
+    if (new TextEncoder().encode(trimmed).length > 64 * 1024) {
+      this.tip('文本最多 64 KiB（按 UTF-8 计算），请缩短或作为文件发送', { bad: true, sticky: true });
+      return;
+    }
 
     this.sending = true;
     const sendBtn = $('send');
@@ -299,6 +322,7 @@ export const composer = {
     //    附件邀约发进 B"。Rust 侧现在会对房间不一致直接报错，
     //    但正确做法是这一条消息自始至终用同一个房间。
     const room = this.room;
+    const roomVersion = this._roomVersion;
     try {
       // ① 文字先走
       //
@@ -319,12 +343,16 @@ export const composer = {
       // ② 附件逐个发起邀约
       let filesOk = true;
       if (files.length) {
-        this.clearPending();
         for (const p of files) {
-          if (p.url) URL.revokeObjectURL(p.url);
           this.tip(`正在准备 ${p.file.name}…`);
           try {
             await fileTransfer.pickAndSend(p.file, room, p.mem);
+            const draft = this.room === room ? { pending: this.pending } : this.drafts.get(room);
+            if (draft) {
+              const index = draft.pending.findIndex((item) => item.id === p.id);
+              if (index >= 0) draft.pending.splice(index, 1);
+            }
+            if (p.url) URL.revokeObjectURL(p.url);
           } catch (e) {
             filesOk = false;
             ok = false;
@@ -337,12 +365,13 @@ export const composer = {
 
       // 文字成功就清空（附件失败不影响"文字已经发出去了"这个事实）
       if (textOk) {
-        input.value = '';
+        if (this.room === room && this._roomVersion === roomVersion && input.value === text) input.value = '';
+        else if (this.room !== room && this.drafts.get(room)?.text === text) this.drafts.get(room).text = '';
       } else {
         // 只有**文字本身**没发出去，才把它放回输入框并留失败气泡
-        input.value = text;
-        if (trimmed) bus.emit(EV.SEND_FAILED, { text: trimmed, reason: failReason, failed });
+        if (trimmed) bus.emit(EV.SEND_FAILED, { room, text: trimmed, reason: failReason, failed });
       }
+      this._renderPending();
       this._autoGrow();
       // 文字发成功、只有附件没发出去时，用底部提示说明（不误导成"消息没发出去"）
       if (textOk && !filesOk) this.tip(`附件未发出：${failReason}`);

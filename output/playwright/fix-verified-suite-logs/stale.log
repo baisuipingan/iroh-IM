@@ -1,0 +1,27 @@
+已进房，myId=7d59c5623dd40a74…
+已注入 fakestale(11分钟前) / fakelive(发送方不在房间) / fakepresent(发送方=常驻节点，在房间里)
+已重新加载并进房
+  加载后立刻: {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+等待 presence（最多 40 秒）…
+  [  3s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [  6s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [  9s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [ 12s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [ 15s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [ 18s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [ 21s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [ 24s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [ 27s] {'fakelive': 'interrupted', 'fakepresent': 'interrupted'}
+  [ 30s] {'fakelive': 'expired', 'fakepresent': 'interrupted'}
+  [ 33s] {'fakelive': 'expired', 'fakepresent': 'interrupted'}
+  [ 36s] {'fakelive': 'expired', 'fakepresent': 'interrupted'}
+  [ 39s] {'fakelive': 'expired', 'fakepresent': 'interrupted'}
+  [ 42s] {'fakelive': 'expired', 'fakepresent': 'interrupted'}
+
+  ✅ TTL 过期的旧邀约不再被恢复  (实际状态=None)
+  ✅ 发送方已离开的邀约不会变成可点的「继续接收」  (实际='expired')
+  ✅ 发送方仍在房间时必须能恢复（证明恢复链路没坏）  (实际='interrupted')
+  卡片按钮: {"fid":"fakelive","dir":"recv","cls":"filecard__btn is-no","title":"移除这条记录"}
+  ✅ 接收卡片不会出现「重发」按钮  (cls=filecard__btn is-no)
+
+总计 PASS=4 FAIL=0

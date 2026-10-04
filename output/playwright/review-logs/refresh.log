@@ -1,0 +1,46 @@
+启动 TX…
+启动 R1…
+启动 R2…
+三方就绪
+  r1 已接受
+  r2 已接受
+  两方 file_id 相同: True
+  两路已开跑: TX peers=2 done=130 bytes=2.0MB
+  关闭前 R1=active:39  R2=active:29
+
+=== 关闭 R1 标签页 ===
+  [  5s] TX=active peers=2 done=0 failed=1 bytes=3.0MB | R2=active:58
+  [ 10s] TX=active peers=2 done=0 failed=1 bytes=3.0MB | R2=active:73
+  [ 15s] TX=active peers=2 done=0 failed=1 bytes=3.0MB | R2=active:95
+  [ 20s] TX=active peers=2 done=0 failed=1 bytes=3.0MB | R2=active:120
+  [ 25s] TX=active peers=2 done=0 failed=1 bytes=4.0MB | R2=active:141
+  [ 30s] TX=active peers=2 done=0 failed=1 bytes=4.0MB | R2=active:166
+  [ 35s] TX=active peers=2 done=0 failed=1 bytes=5.0MB | R2=active:185
+  [ 40s] TX=active peers=2 done=0 failed=1 bytes=5.0MB | R2=active:202
+  [ 45s] TX=active peers=2 done=0 failed=1 bytes=5.0MB | R2=active:219
+  [ 50s] TX=active peers=2 done=0 failed=1 bytes=5.0MB | R2=active:238
+  [ 55s] TX=active peers=2 done=0 failed=1 bytes=6.0MB | R2=active:259
+  [ 60s] TX=active peers=2 done=0 failed=1 bytes=6.0MB | R2=active:272
+  [ 65s] TX=active peers=2 done=0 failed=1 bytes=6.0MB | R2=active:290
+  [ 70s] TX=active peers=2 done=0 failed=1 bytes=6.0MB | R2=active:307
+  [ 75s] TX=active peers=2 done=0 failed=1 bytes=7.0MB | R2=active:330
+  [ 80s] TX=active peers=2 done=0 failed=1 bytes=7.0MB | R2=active:352
+  [ 85s] TX=active peers=2 done=0 failed=1 bytes=7.0MB | R2=active:366
+  [ 90s] TX=active peers=2 done=0 failed=1 bytes=7.0MB | R2=active:374
+  [ 95s] TX=active peers=2 done=0 failed=1 bytes=8.0MB | R2=active:406
+  [100s] TX=active peers=2 done=0 failed=1 bytes=8.0MB | R2=active:432
+  [105s] TX=active peers=2 done=0 failed=1 bytes=9.0MB | R2=active:459
+  [110s] TX=active peers=2 done=0 failed=1 bytes=9.0MB | R2=active:485
+  [115s] TX=active peers=2 done=0 failed=1 bytes=10.0MB | R2=active:509
+  [120s] TX=active peers=2 done=0 failed=1 bytes=10.0MB | R2=active:530
+
+=== 最终 ===
+  TX: active peers=2 peersDone=0 peersFailed=0 peersCancelled=1 err=
+  R2: active 530/3072 err=
+
+  ✅ 发送端看到 2 条独立通道  (peers=2)
+  ✅ R1 断开被检测到（取消或失败）  (耗时 5s)
+  ✅ 检测延迟 ≤ 40s（主动取消快路径，或传输层 30s 超时兜底）  (5s)
+  ✅ R2 继续推进未受影响  (R2 done=530)
+
+总计 PASS=4 FAIL=0

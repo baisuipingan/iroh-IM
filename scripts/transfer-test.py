@@ -505,8 +505,9 @@ def main():
         json.dumps([t["state"] for t in tx_final]),
     )
     check(
-        "发送端最终状态为 done",
-        all(t["state"] == "done" for t in tx_final),
+        "发送端保持分享，所有接收者均已完成",
+        all(t["state"] == "shared" and t.get("peersDone", 0) > 0 and
+            t.get("peersDone") == t.get("peers") for t in tx_final),
         json.dumps([t["state"] for t in tx_final]),
     )
 

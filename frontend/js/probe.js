@@ -17,6 +17,8 @@
  *    → 实现见 measureRtt()：有明细用明细，没有就用 duration。
  */
 
+import { store } from './store.js';
+
 const PROBE_PATH = '/ping';
 
 /** 带超时的 fetch，超时即判死。 */
@@ -137,16 +139,20 @@ export function shouldSwitch(current, best, { margin = 0.2 } = {}) {
 
 /** 拉取中继名单：先网络，失败回落到本地缓存。 */
 export async function loadRelayConfig(url, cacheKey = 'iroh.relay-config') {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(url, { cache: 'no-cache' });
+    const res = await fetch(url, { cache: 'no-cache', signal: controller.signal });
     if (!res.ok) throw new Error(String(res.status));
     const cfg = await res.json();
-    localStorage.setItem(cacheKey, JSON.stringify(cfg));
+    store.setValue(cacheKey, JSON.stringify(cfg));
     return cfg;
   } catch {
-    const cached = localStorage.getItem(cacheKey);
+    const cached = store.getValue(cacheKey);
     if (cached) return JSON.parse(cached);
     throw new Error('relay config unavailable and no cache');
+  } finally {
+    clearTimeout(timer);
   }
 }
 

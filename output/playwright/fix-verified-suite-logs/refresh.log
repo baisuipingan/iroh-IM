@@ -1,0 +1,46 @@
+启动 TX…
+启动 R1…
+启动 R2…
+三方就绪
+  r1 已接受
+  r2 已接受
+  两方 file_id 相同: True
+  两路已开跑: TX peers=2 done=130 bytes=2.0MB
+  关闭前 R1=active:318  R2=active:71
+
+=== 关闭 R1 标签页 ===
+  [  5s] TX=active peers=2 done=0 failed=0 bytes=8.0MB | R2=active:190
+  [ 10s] TX=active peers=2 done=0 failed=0 bytes=10.0MB | R2=active:295
+  [ 15s] TX=active peers=2 done=0 failed=0 bytes=11.0MB | R2=active:375
+  [ 20s] TX=active peers=2 done=0 failed=0 bytes=13.0MB | R2=active:452
+  [ 25s] TX=active peers=2 done=0 failed=0 bytes=14.0MB | R2=active:523
+  [ 30s] TX=active peers=2 done=0 failed=1 bytes=15.0MB | R2=active:606
+  [ 35s] TX=active peers=2 done=0 failed=1 bytes=17.0MB | R2=active:707
+  [ 40s] TX=active peers=2 done=0 failed=1 bytes=18.0MB | R2=active:787
+  [ 45s] TX=active peers=2 done=0 failed=1 bytes=19.0MB | R2=active:877
+  [ 50s] TX=active peers=2 done=0 failed=1 bytes=21.0MB | R2=active:977
+  [ 55s] TX=active peers=2 done=0 failed=1 bytes=22.0MB | R2=active:1078
+  [ 60s] TX=active peers=2 done=0 failed=1 bytes=23.0MB | R2=active:1142
+  [ 65s] TX=active peers=2 done=0 failed=1 bytes=25.0MB | R2=active:1233
+  [ 70s] TX=active peers=2 done=0 failed=1 bytes=26.0MB | R2=active:1323
+  [ 75s] TX=active peers=2 done=0 failed=1 bytes=28.0MB | R2=active:1411
+  [ 80s] TX=active peers=2 done=0 failed=1 bytes=29.0MB | R2=active:1527
+  [ 85s] TX=active peers=2 done=0 failed=1 bytes=31.0MB | R2=active:1596
+  [ 90s] TX=active peers=2 done=0 failed=1 bytes=32.0MB | R2=active:1679
+  [ 95s] TX=active peers=2 done=0 failed=1 bytes=33.0MB | R2=active:1768
+  [100s] TX=active peers=2 done=0 failed=1 bytes=34.0MB | R2=active:1838
+  [105s] TX=active peers=2 done=0 failed=1 bytes=35.0MB | R2=active:1907
+  [110s] TX=active peers=2 done=0 failed=1 bytes=37.0MB | R2=active:2001
+  [115s] TX=active peers=2 done=0 failed=1 bytes=38.0MB | R2=active:2072
+  [120s] TX=active peers=2 done=0 failed=1 bytes=39.0MB | R2=active:2134
+
+=== 最终 ===
+  TX: active peers=2 peersDone=0 peersFailed=1 peersCancelled=0 err=
+  R2: active 2134/3072 err=
+
+  ✅ 发送端看到 2 条独立通道  (peers=2)
+  ✅ R1 断开被检测到（取消或失败）  (耗时 30s)
+  ✅ 检测延迟 ≤ 40s（主动取消快路径，或传输层 30s 超时兜底）  (30s)
+  ✅ R2 继续推进未受影响  (R2 done=2134)
+
+总计 PASS=4 FAIL=0

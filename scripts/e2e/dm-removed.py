@@ -50,7 +50,7 @@ tt.check("设置页仍渲染资料卡", "set-card" in shtml, "")
 tt.check("设置页仍有开关控件", "switch" in shtml, "")
 tt.check("设置页仍有可点行", "set-row--nav" in shtml or "data-act" in shtml, "")
 tt.check("设置页不含「联系人」", "联系人" not in sbody, "")
-tt.check("设置页显示本地占用（usage 还在）", "本地占用" in sbody, "")
+tt.check("设置页显示本地配置占用（usage 还在）", "本地配置占用" in sbody, "")
 
 # ---- 3. 会话列表 ----
 p.ev("document.getElementById('tab-chats').click()")

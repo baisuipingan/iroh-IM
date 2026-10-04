@@ -51,6 +51,12 @@ let queuedRoom = '';
 
 async function openRoom(room) {
   if (!room) return;
+  const invalid = U.roomNameError(room);
+  if (invalid) { bus.emit(EV.TIP, invalid); return; }
+  if (!store.room(room) && store.rooms().length >= 40) {
+    dialog.info('房间列表已满', '最多保存 40 个房间，请先在房间菜单中移出一项。不会删除服务器历史。');
+    return;
+  }
   // 已经在进一个房间了：记下这次请求，等当前这次结束后再进（见下面 finally）
   if (opening) {
     queuedRoom = room;
@@ -65,6 +71,7 @@ async function openRoom(room) {
     store.setLastRoom(room);
     timeline.open(room, myId);
     composer.setRoom(room);
+    joinedRoom = null;
 
     if (!net.canSend) {
       // 没连上也要把界面切过去，但**明确告诉用户现在发不出去**，
@@ -121,7 +128,12 @@ async function openRoom(room) {
       }
       joinedRoom = null;
       timeline.note(`进房间失败：${e?.message ?? e}`, { sticky: true, kind: 'warn' });
-      composer.setEnabled(false, '进入失败');
+      composer.setEnabled(false, '进入失败，请点击“重新进入”');
+      const retry = document.createElement('button');
+      retry.className = 'link-btn';
+      retry.textContent = '重新进入';
+      retry.onclick = () => openRoom(room);
+      document.querySelector('.tl-note--live')?.append(' ', retry);
     } finally {
       sidebar.render();
     }
@@ -150,13 +162,39 @@ function paintMyAvatar() {
   // 只改文字节点，不能碰容器（容器里还有未读红点 #rail-badge）
   $('rail-initial').textContent = U.initial(store.nick());
   const el = $('rail-me');
-  el.style.background = localStorage.getItem(store.keys.avatarColor) || U.colorOf(store.nick());
+  el.style.background = store.getValue(store.keys.avatarColor) || U.colorOf(store.nick());
   el.title = store.nick();
 }
 
 /* ------------------------------------------------------------------ 事件接线 */
 
 function wire() {
+  sidebar.leaveCurrentRoom = async () => {
+    queuedRoom = '';
+    if (opening) await opening;
+    const room = joinedRoom;
+    await net.client?.call('leaveRoom');
+    net._room = '';
+    net._desiredRoom = '';
+    joinedRoom = null;
+    pendingRoom = '';
+    sidebar.setRoom('');
+    composer.clearDrafts();
+    composer.setRoom('');
+    composer.setEnabled(false);
+    timeline.close();
+    store.setLastRoom('');
+    $('room-title').textContent = '未进入房间';
+    bus.emit(EV.ROOM_LEFT, room);
+  };
+  for (const id of ['rail-me', 'room-title']) {
+    const element = $(id);
+    element.setAttribute('role', 'button');
+    element.tabIndex = 0;
+    element.onkeydown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); element.click(); }
+    };
+  }
   bus.on(EV.ROOM_OPEN, (room) => openRoom(room));
 
   bus.on(EV.NODE_STATE, ({ ok, text, waiting }) => {
@@ -166,7 +204,7 @@ function wire() {
     pill.className = `pill ${waiting ? 'is-wait' : ok ? 'is-ok' : 'is-bad'}`;
     pill.querySelector('.pill__text').textContent = text;
     pill.classList.toggle('is-clickable', !ok && !waiting);
-    pill.title = waiting ? '正在连接中继' : ok ? '已连接' : '点击立即重试';
+    pill.title = waiting ? '正在连接中继' : ok ? '中继已连接；房间连接状态见聊天区提示' : '点击立即重试';
 
     // 状态变化要同步到输入区：不然"能打字但发不出去"会一直存在。
     // ⚠️ waiting（正在重试）也必须同步 —— 否则胶囊显示"连接中继…"，
@@ -231,7 +269,8 @@ function wire() {
   // 发送失败 → 在时间线上留下可重发的气泡（而不是只弹一句 tip）
   // `failed` 是可变对象：timeline.pushFailed 会把生成的 DOM 挂到 `.el`，
   // 这样"重发成功"时能拿到引用并把那条红色气泡撤掉。
-  bus.on(EV.SEND_FAILED, ({ text, reason, failed }) => {
+  bus.on(EV.SEND_FAILED, ({ room, text, reason, failed }) => {
+    if (room && room !== timeline.room) return;
     timeline.pushFailed(text, reason, failed);
   });
   bus.on(EV.RETRY_SEND, async ({ text, el }) => {
@@ -247,7 +286,7 @@ function wire() {
   bus.on(EV.FILE_INVITE, ({ room, meta }) => fileTransfer.handle({ type: 'fileInvite', room, meta }));
   // 历史里的「文件证明」（text 为空、带 file 字段的消息）→ 一张历史文件卡片。
   // 能不能收由发送方此刻的状态决定，所以交给传输模块处理而不是时间线自己画。
-  bus.on(EV.FILE_PROOF, ({ room, m }) => fileTransfer._onFileProof(room, m));
+  bus.on(EV.FILE_PROOF, ({ room, m, isHistory }) => fileTransfer._onFileProof(room, m, isHistory));
 
   // 房间成员变化 → 告诉传输模块。
   // 用于：判断"恢复出来的未完成接收"的发送方是否还在房间里（不在就别显示死卡片）。
@@ -257,8 +296,6 @@ function wire() {
   // 注意：`FILE_ACCEPTED` **不在主线程处理** —— 对方点 ✓ 后要立刻开始传数据，
   // 而数据读写都在 Worker 里（避免切后台被节流）。Worker 收到这条事件后
   // 自己就把传输跑起来了，主线程只等 `transfer:*` 进度推送。
-  bus.on(EV.FILE_REJECTED, (d) => fileTransfer.handle({ type: 'fileRejected', ...d }));
-  bus.on(EV.FILE_DONE, (d) => fileTransfer.handle({ type: 'fileDone', ...d }));
 
   // 卡片渲染 / 更新 -> 交给时间线
   bus.on(EV.FILE_CARD, (d) => timeline.pushFileCard(d));
@@ -330,18 +367,18 @@ function wire() {
 /* ------------------------------------------------------------------ 启动 */
 
 async function main() {
-  theme.init();
-  dialog.bind();
-  sidebar.init();
-  timeline.init();
-  composer.init();
-
-  if (!store.nick()) store.setNick(`用户${Math.floor(Math.random() * 9000 + 1000)}`);
-  paintMyAvatar();
-  sidebar.render();
-  wire();
-
   try {
+    theme.init();
+    dialog.bind();
+    sidebar.init();
+    timeline.init();
+    composer.init();
+
+    if (!store.nick()) store.setNick(`用户${Math.floor(Math.random() * 9000 + 1000)}`);
+    paintMyAvatar();
+    sidebar.render();
+    wire();
+
     await net.start();
     myId = net.endpoint_id();
     fileTransfer.init();
@@ -353,6 +390,9 @@ async function main() {
     $('rail-me').title = `${store.nick()}\n${myId}`;
     sidebar.show('chats');
     sidebar.paintBadge();
+    const storageWarning = () => dialog.info('临时存储模式', '浏览器存储不可用或已满。本次操作仅保存在当前页面，刷新后新身份、草稿和设置可能丢失。请释放浏览器空间或允许网站存储后重新打开。');
+    document.addEventListener('storageunavailable', storageWarning);
+    if (!store.persistent) storageWarning();
     autostart();
   } catch (e) {
     // 启动失败 = wasm 没起来 / 中继全挂。给一个能看懂、也能自救的界面，

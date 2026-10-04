@@ -1756,6 +1756,7 @@ impl RoomNode {
 
     /// 进入房间。重复进入同一房间只更新昵称。
     pub async fn join(&self, room: &str, nickname: &str) -> Result<()> {
+        anyhow::ensure!(valid_history_room(room), "房间名必须为 1–256 UTF-8 字节且不能包含控制字符");
         let topic = topic_id(room);
         let same = {
             let g = self.inner.lock().unwrap();
@@ -2301,6 +2302,7 @@ impl RoomNode {
         .sign(&self.secret_key, &room);
 
         let bytes = serde_json::to_vec(&Wire::Message { m: msg.clone() })?;
+        anyhow::ensure!(bytes.len() < MAX_MESSAGE_SIZE.saturating_sub(1024), "消息过长，请缩短文本或作为文件发送");
         sender.lock().await.broadcast(bytes.into()).await?;
         // 自己刚签的消息必然验得过；忽略返回值（失败也会有 warn）
         let _ = self.store.append(&room, msg.clone());
@@ -3452,6 +3454,10 @@ mod multi_peer_tests {
         anchor.join(room, "anchor").await?;
         first.join(room, "first").await?;
         second.join(room, "second").await?;
+        assert!(first.send(&"长".repeat(180_000)).await.is_err());
+        assert!(first.send(&"\u{0001}".repeat(MAX_MESSAGE_SIZE / 5)).await.is_err());
+        assert!(second.join(&"长".repeat(90), "second").await.is_err());
+        assert_eq!(second.current_room().as_deref(), Some(room));
         let initial_epoch = first.inner.lock().unwrap().joined.as_ref().unwrap().epoch;
         first.set_nickname("first-renamed");
         let renamed_epoch = first.inner.lock().unwrap().joined.as_ref().unwrap().epoch;

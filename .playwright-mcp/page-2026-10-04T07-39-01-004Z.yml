@@ -1,0 +1,117 @@
+- generic [ref=f1e2]:
+  - navigation [ref=f1e3]:
+    - generic "实测A d7ecc11df06c2fcea2ed4ffb5223f0674a6642d1b4120247fcf2bb2304417aab" [ref=f1e4]: 实
+    - button "聊天" [ref=f1e6] [cursor=pointer]
+    - button "在线成员" [ref=f1e9] [cursor=pointer]
+    - button "连接状态" [ref=f1e15] [cursor=pointer]
+    - button "设置" [ref=f1e17] [cursor=pointer]
+    - button "重新探测中继" [ref=f1e21] [cursor=pointer]
+  - complementary [ref=f1e25]:
+    - generic [ref=f1e26]:
+      - textbox "搜索" [ref=f1e31]
+      - button "新建房间" [ref=f1e32] [cursor=pointer]
+      - button "切换到深色" [ref=f1e35] [cursor=pointer]
+    - generic [ref=f1e39]:
+      - generic [ref=f1e198] [cursor=pointer]:
+        - generic [ref=f1e199]: 测
+        - generic [ref=f1e201]:
+          - generic [ref=f1e202]: 📌 测试备注 <b>
+          - generic [ref=f1e203]: 15:37
+      - generic [ref=f1e204] [cursor=pointer]:
+        - generic [ref=f1e205]: R
+        - generic [ref=f1e206]:
+          - generic [ref=f1e207]: review-ui-1791099050373-other
+          - generic [ref=f1e209]: 还没有消息
+  - main [ref=f1e55]:
+    - generic [ref=f1e56]:
+      - generic "点击可改备注名" [ref=f1e57] [cursor=pointer]: 测试备注 <b>
+      - generic "已连接" [ref=f1e58]: 在线
+    - generic [ref=f1e79]:
+      - generic [ref=f1e172]: 今天
+      - generic [ref=f1e81]:
+        - generic [ref=f1e82]: 实
+        - generic [ref=f1e83]:
+          - generic [ref=f1e84]: 15:31
+          - generic [ref=f1e86]: 你好三人 🧪
+      - generic [ref=f1e87]:
+        - generic [ref=f1e88]: 实
+        - generic [ref=f1e89]:
+          - generic [ref=f1e90]:
+            - text: 实测B
+            - generic [ref=f1e91]: 15:32
+          - generic [ref=f1e92]: 回复-B 第二行
+      - generic [ref=f1e93]:
+        - generic [ref=f1e94]: 实
+        - generic [ref=f1e95]:
+          - generic [ref=f1e96]:
+            - text: 实测B
+            - generic [ref=f1e97]: 15:32
+          - generic [ref=f1e98]: 回复-B 第二行
+      - generic [ref=f1e99]:
+        - generic [ref=f1e100]: 实
+        - generic [ref=f1e101]:
+          - generic [ref=f1e102]:
+            - text: 实测C
+            - generic [ref=f1e103]: 15:32
+          - generic [ref=f1e104]: 回复-C 第二行
+      - generic [ref=f1e105]:
+        - generic [ref=f1e106]: 实
+        - generic [ref=f1e107]:
+          - generic [ref=f1e108]: 15:32
+          - generic [ref=f1e110]: 换行第一行 第二行
+      - generic [ref=f1e111]:
+        - generic [ref=f1e112]: 实
+        - generic [ref=f1e113]:
+          - generic [ref=f1e114]: 15:32
+          - generic [ref=f1e116]: <img src=x onerror="window.__xss=1"> & ' " 😃 中文
+      - generic [ref=f1e117]:
+        - generic [ref=f1e118]: 实
+        - generic [ref=f1e119]:
+          - generic [ref=f1e120]: 15:33
+          - generic [ref=f1e122]: <img src=x onerror="window.__xss=1"> & 中文 😃
+      - generic [ref=f1e123]:
+        - generic [ref=f1e124]: 实
+        - generic [ref=f1e125]:
+          - generic [ref=f1e126]: 15:34
+          - generic [ref=f1e128]: 快捷键实测
+      - generic [ref=f1e173]:
+        - generic [ref=f1e174]: 实
+        - generic [ref=f1e175]:
+          - generic [ref=f1e176]: 15:37
+          - generic [ref=f1e178]: 两份附件实际测试
+      - generic [ref=f1e180]:
+        - generic [ref=f1e181]: 📄
+        - generic [ref=f1e182]:
+          - generic [ref=f1e183]: fixture.txt
+          - generic [ref=f1e184]: 91 B · 我发送 · 已分享 · 1 人接收完成 · 1 人拒绝接收
+          - group [ref=f1e185]:
+            - generic "接收详情（2 人）" [active] [ref=f1e186] [cursor=pointer]
+            - generic [ref=f1e211]:
+              - generic [ref=f1e213]:
+                - generic "实测B · 5e6985 · 5e69853a6937f6dea27766be64ab863a789062d1a3b344d80165aa54347f3282" [ref=f1e214]: 实测B · 5e6985
+                - generic [ref=f1e215]: ✓ 已接收
+              - generic [ref=f1e217]:
+                - generic "实测C · 914ed0 · 914ed0a79cddcadf079b5bf79abd1aaadaab8eebc0e430e88afd8c48fec21fe6" [ref=f1e218]: 实测C · 914ed0
+                - generic [ref=f1e219]: — 已拒绝
+      - generic [ref=f1e188]:
+        - generic [ref=f1e189]: tiny.png
+        - generic [ref=f1e195]:
+          - generic [ref=f1e196]: 已分享 · 1 人接收完成 · 1 人取消接收
+          - generic [ref=f1e197]: 68 B
+          - button "重新邀请" [ref=f1e221] [cursor=pointer]
+        - group [ref=f1e222]:
+          - generic "接收详情（2 人）" [ref=f1e223] [cursor=pointer]
+    - generic [ref=f1e130]:
+      - generic [ref=f1e224]:
+        - generic [ref=f1e225]: 📄
+        - generic [ref=f1e226]:
+          - generic [ref=f1e227]: fixture.txt
+          - generic [ref=f1e228]: 91 B
+        - button "×" [ref=f1e229] [cursor=pointer]
+      - textbox "输入消息，Enter 发送 · Shift+Enter 换行" [ref=f1e140]
+      - generic [ref=f1e141]:
+        - button "表情" [ref=f1e142] [cursor=pointer]
+        - button "发送文件" [ref=f1e146] [cursor=pointer]
+        - button "发送图片" [ref=f1e149] [cursor=pointer]
+        - button "语音（还没做）" [ref=f1e154] [cursor=pointer]
+        - button "发送" [ref=f1e158] [cursor=pointer]

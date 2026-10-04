@@ -30,13 +30,14 @@
 import { loadRelayConfig, probeAll } from './probe.js';
 import { bus, EV } from './bus.js';
 import { store } from './store.js';
-import { withTimeout } from './util.js';
+import { withTimeout, roomNameError } from './util.js';
 
 /**
  * wasm 构建号：**每次重新构建 wasm 都必须 +1**。
  * 浏览器按 `iroh_web_bg.wasm?b=<BUILD>` 缓存，不 bump 会加载到旧 wasm。
  */
-const BUILD = 'v11';
+const BUILD = 'v12';
+const BOOT_TIMEOUT = 45000;
 const ONLINE_TIMEOUT = 15000;
 /** 重连退避：1s → 2s → 4s … 封顶 30s */
 const BACKOFF = [1000, 2000, 4000, 8000, 15000, 30000];
@@ -207,17 +208,28 @@ export const net = {
     });
 
     // 等启动结果（成功或失败都从这条消息来）
-    this.endpointId = await new Promise((resolve, reject) => {
-      const off = this.client.onMessage((m) => {
+    let stopBoot;
+    let onBootError;
+    const bootResult = new Promise((resolve, reject) => {
+      stopBoot = this.client.onMessage((m) => {
         if (m.type === 'booted') {
-          off();
           resolve(m.payload.endpointId);
         } else if (m.type === 'boot:error') {
-          off();
           reject(new Error(m.payload.error));
         }
       });
+      onBootError = (event) => reject(new Error(`后台线程启动失败：${event.message || 'Worker 加载失败'}`));
+      this.client.worker.addEventListener('error', onBootError, { once: true });
     });
+    try {
+      this.endpointId = await withTimeout(bootResult, BOOT_TIMEOUT, '启动 Worker/wasm');
+    } catch (error) {
+      this.client.worker.terminate();
+      throw error;
+    } finally {
+      stopBoot();
+      this.client.worker.removeEventListener('error', onBootError);
+    }
 
     // 监听浏览器网络恢复：网络回来立刻重试一次，不用等退避计时器
     addEventListener('online', () => {
@@ -453,6 +465,8 @@ export const net = {
    * 不是可变的 `this._room`（原来读的是后者，操作结束时的值）。
    */
   async joinRoom(room, nickname) {
+    const invalid = roomNameError(room);
+    if (invalid) throw new Error(invalid);
     if (!this.ready) throw new Error('还没连上中继');
 
     // ═══════════════════════════════════════════════════════════════

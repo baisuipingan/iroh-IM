@@ -82,3 +82,9 @@ debug = false
 lto = true
 opt-level = "z"
 panic = "abort"
+
+[patch.crates-io]
+iroh-gossip = { path = "vendor/iroh-gossip" }
+
+[dev-dependencies]
+rand = "0.10"

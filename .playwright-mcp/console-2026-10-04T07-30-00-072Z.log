@@ -1,0 +1,267 @@
+[     607ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8099/favicon.ico:0
+[     648ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[     674ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[    2659ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[   50518ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[   50781ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 review-ui-1791099050373 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[   50781ms] [LOG]  INFO iroh_web::room: 已订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  142381ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8099/favicon.ico:0
+[  196423ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 review-ui-1791099050373-other
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  196659ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 review-ui-1791099050373-other 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  196659ms] [LOG]  INFO iroh_web::room: 已订阅房间 review-ui-1791099050373-other
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  197085ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  197345ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 review-ui-1791099050373 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  197345ms] [LOG]  INFO iroh_web::room: 已订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  255326ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[  255346ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  255774ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  342502ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  342641ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 review-ui-1791099050373 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  342641ms] [LOG]  INFO iroh_web::room: 已订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  408864ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 review-ui-1791099050373-other
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  409018ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 review-ui-1791099050373-other 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  409018ms] [LOG]  INFO iroh_web::room: 已订阅房间 review-ui-1791099050373-other
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  409409ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  409542ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 review-ui-1791099050373 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  409542ms] [LOG]  INFO iroh_web::room: 已订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  463786ms] [LOG]  INFO iroh_web::transfer_orchestrator: 开始发送 fixture.txt：共 1 块，需要补发 1 块
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  463996ms] [LOG]  INFO iroh_web::transfer_orchestrator: [stats] 第 0 块 | pathPathId(0) rtt=202ms | ConnectionStats { udp_tx: UdpStats { datagrams: 7, bytes: 5194, ios: 0 }, udp_rx: UdpStats { datagrams: 2, bytes: 1338, ios: 0 }, frame_tx: FrameStats { ACK: 2, ACK_FREQUENCY: 0, CONNECTION_CLOSE: 0, CRYPTO: 2, DATA_BLOCKED: 0, DATAGRAM: 0, HANDSHAKE_DONE: 0, IMMEDIATE_ACK: 1, MAX_DATA: 0, MAX_PATH_ID: 0, MAX_STREAM_DATA: 0, MAX_STREAMS_BIDI: 0, MAX_STREAMS_UNI: 0, NEW_CONNECTION_ID: 0, NEW_TOKEN: 0, PATHS_BLOCKED: 0, PATH_ABANDON: 0, PATH_ACK: 1, PATH_STATUS_AVAILABLE: 0, PATH_STATUS_BACKUP: 0, PATH_CHALLENGE: 0, PATH_CIDS_BLOCKED: 0, PATH_NEW_CONNECTION_ID: 39, PATH_RESPONSE: 0, PATH_RETIRE_CONNECTION_ID: 0, PING: 1, RESET_STREAM: 0, RETIRE_CONNECTION_ID: 0, STREAM_DATA_BLOCKED: 0, STREAMS_BLOCKED_BIDI: 0, STREAMS_BLOCKED_UNI: 0, STOP_SENDING: 0, STREAM: 1, OBSERVED_ADDRESS: 0, ADD_ADDRESS: 0, REACH_OUT: 0, REMOVE_ADDRESS: 0 }, frame_rx: FrameStats { ACK: 1, ACK_FREQUENCY: 0, CONNECTION_CLOSE: 0, CRYPTO: 2, DATA_BLOCKED: 0, DATAGRAM: 0, HANDSHAKE_DONE: 0, IMMEDIATE_ACK: 0, MAX_DATA: 0, MAX_PATH_ID: 0, MAX_STREAM_DATA: 0, MAX_STREAMS_BIDI: 0, MAX_STREAMS_UNI: 0, NEW_CONNECTION_ID: 4, NEW_TOKEN: 2, PATHS_BLOCKED: 0, PATH_ABANDON: 0, PATH_ACK: 0, PATH_STATUS_AVAILABLE: 0, PATH_STATUS_BACKUP: 0, PATH_CHALLENGE: 0, PATH_CIDS_BLOCKED: 0, PATH_NEW_CONNECTION_ID: 0, PATH_RESPONSE: 0, PATH_RETIRE_CONNECTION_ID: 0, PING: 0, RESET_STREAM: 0, RETIRE_CONNECTION_ID: 0, STREAM_DATA_BLOCKED: 0, STREAMS_BLOCKED_BIDI: 0, STREAMS_BLOCKED_UNI: 0, STOP_SENDING: 0, STREAM: 0, OBSERVED_ADDRESS: 0, ADD_ADDRESS: 0, REACH_OUT: 0, REMOVE_ADDRESS: 0 }, lost_packets: 0, lost_bytes: 0 }
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  463996ms] [LOG]  INFO iroh_web::transfer_orchestrator: 发送耗时分解：共 6ms（读源 3ms / 写网络 0ms），91 字节 ≈ 0 KB/s
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  463996ms] [LOG]  INFO iroh_web::transfer_orchestrator: 已发完 91 字节，等待接收方回执…
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  464175ms] [LOG]  INFO iroh_web::transfer_orchestrator: 收到回执：ok=true 
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  464175ms] [LOG]  INFO iroh_web::transfer_orchestrator: 发送完成 fixture.txt：91 字节
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  539400ms] [LOG]  INFO iroh_web::transfer_orchestrator: 开始发送 tiny.png：共 1 块，需要补发 1 块
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  539653ms] [LOG]  INFO iroh_web::transfer_orchestrator: [stats] 第 0 块 | pathPathId(0) rtt=249ms | ConnectionStats { udp_tx: UdpStats { datagrams: 7, bytes: 5190, ios: 0 }, udp_rx: UdpStats { datagrams: 2, bytes: 1338, ios: 0 }, frame_tx: FrameStats { ACK: 2, ACK_FREQUENCY: 0, CONNECTION_CLOSE: 0, CRYPTO: 2, DATA_BLOCKED: 0, DATAGRAM: 0, HANDSHAKE_DONE: 0, IMMEDIATE_ACK: 1, MAX_DATA: 0, MAX_PATH_ID: 0, MAX_STREAM_DATA: 0, MAX_STREAMS_BIDI: 0, MAX_STREAMS_UNI: 0, NEW_CONNECTION_ID: 0, NEW_TOKEN: 0, PATHS_BLOCKED: 0, PATH_ABANDON: 0, PATH_ACK: 1, PATH_STATUS_AVAILABLE: 0, PATH_STATUS_BACKUP: 0, PATH_CHALLENGE: 0, PATH_CIDS_BLOCKED: 0, PATH_NEW_CONNECTION_ID: 39, PATH_RESPONSE: 0, PATH_RETIRE_CONNECTION_ID: 0, PING: 1, RESET_STREAM: 0, RETIRE_CONNECTION_ID: 0, STREAM_DATA_BLOCKED: 0, STREAMS_BLOCKED_BIDI: 0, STREAMS_BLOCKED_UNI: 0, STOP_SENDING: 0, STREAM: 1, OBSERVED_ADDRESS: 0, ADD_ADDRESS: 0, REACH_OUT: 0, REMOVE_ADDRESS: 0 }, frame_rx: FrameStats { ACK: 1, ACK_FREQUENCY: 0, CONNECTION_CLOSE: 0, CRYPTO: 2, DATA_BLOCKED: 0, DATAGRAM: 0, HANDSHAKE_DONE: 0, IMMEDIATE_ACK: 0, MAX_DATA: 0, MAX_PATH_ID: 0, MAX_STREAM_DATA: 0, MAX_STREAMS_BIDI: 0, MAX_STREAMS_UNI: 0, NEW_CONNECTION_ID: 4, NEW_TOKEN: 2, PATHS_BLOCKED: 0, PATH_ABANDON: 0, PATH_ACK: 0, PATH_STATUS_AVAILABLE: 0, PATH_STATUS_BACKUP: 0, PATH_CHALLENGE: 0, PATH_CIDS_BLOCKED: 0, PATH_NEW_CONNECTION_ID: 0, PATH_RESPONSE: 0, PATH_RETIRE_CONNECTION_ID: 0, PING: 0, RESET_STREAM: 0, RETIRE_CONNECTION_ID: 0, STREAM_DATA_BLOCKED: 0, STREAMS_BLOCKED_BIDI: 0, STREAMS_BLOCKED_UNI: 0, STOP_SENDING: 0, STREAM: 0, OBSERVED_ADDRESS: 0, ADD_ADDRESS: 0, REACH_OUT: 0, REMOVE_ADDRESS: 0 }, lost_packets: 0, lost_bytes: 0 }
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  539653ms] [LOG]  INFO iroh_web::transfer_orchestrator: 发送耗时分解：共 1ms（读源 1ms / 写网络 0ms），68 字节 ≈ 0 KB/s
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  539653ms] [LOG]  INFO iroh_web::transfer_orchestrator: 已发完 68 字节，等待接收方回执…
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  539831ms] [LOG]  INFO iroh_web::transfer_orchestrator: 收到回执：ok=true 
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  539831ms] [LOG]  INFO iroh_web::transfer_orchestrator: 发送完成 tiny.png：68 字节
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[  917787ms] [WARNING]  WARN iroh_web::room: 拒绝写入历史：消息超过 524288 字节 room=review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 1090552ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[ 1090574ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 1091867ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 1092891ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 1112900ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 1115093ms] [LOG]  INFO iroh_web::room: 第 2 次进入房间 review-ui-1791099050373 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 1115094ms] [LOG]  INFO iroh_web::room: 已订阅房间 review-ui-1791099050373
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 1164342ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8099/favicon.ico:0
+[ 2045558ms] [WARNING]  WARN gossip{me=d7ecc11df0}: iroh_gossip::net: dial failed: timed out peer=861fc50be8
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5502023ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[ 5502041ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5502554ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5503082ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5503245ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 fix-browser-1791104502020 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5503246ms] [LOG]  INFO iroh_web::room: 已订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5516707ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[ 5516721ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5517290ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh3.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5519383ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5539503ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5560720ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was Some(RelayUrl("https://iroh3.editor.vip:15443/"))
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5561631ms] [WARNING]  WARN iroh_web::room: 第 2 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5583761ms] [WARNING]  WARN iroh_web::room: 第 3 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5605895ms] [WARNING]  WARN iroh_web::room: 第 4 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5609236ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5629459ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5651590ms] [WARNING]  WARN iroh_web::room: 第 2 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5673717ms] [WARNING]  WARN iroh_web::room: 第 3 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5695855ms] [WARNING]  WARN iroh_web::room: 第 4 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5699114ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5719318ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5741453ms] [WARNING]  WARN iroh_web::room: 第 2 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5763582ms] [WARNING]  WARN iroh_web::room: 第 3 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5785707ms] [WARNING]  WARN iroh_web::room: 第 4 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5789039ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5809208ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5831334ms] [WARNING]  WARN iroh_web::room: 第 2 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5853525ms] [WARNING]  WARN iroh_web::room: 第 3 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5875646ms] [WARNING]  WARN iroh_web::room: 第 4 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5878921ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5899136ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5921260ms] [WARNING]  WARN iroh_web::room: 第 2 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5943387ms] [WARNING]  WARN iroh_web::room: 第 3 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5965544ms] [WARNING]  WARN iroh_web::room: 第 4 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 5968816ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 5988943ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6011077ms] [WARNING]  WARN iroh_web::room: 第 2 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6033206ms] [WARNING]  WARN iroh_web::room: 第 3 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6055340ms] [WARNING]  WARN iroh_web::room: 第 4 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6058643ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 fix-browser-1791104502020
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6078793ms] [WARNING]  WARN iroh_web::room: 第 1 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6100918ms] [WARNING]  WARN iroh_web::room: 第 2 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6123038ms] [WARNING]  WARN iroh_web::room: 第 3 次 join 超时（20s 内没连上常驻节点）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6125188ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[ 6125203ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6125656ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6126137ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6126234ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6126362ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 stage-refresh-1791105125119 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6126362ms] [LOG]  INFO iroh_web::room: 已订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6126427ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[ 6126440ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6126898ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6127350ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6127503ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6127508ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 stage-refresh-1791105125119 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6127508ms] [LOG]  INFO iroh_web::room: 已订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6127575ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[ 6127588ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6128127ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6128647ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6128832ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 stage-refresh-1791105125119 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6128833ms] [LOG]  INFO iroh_web::room: 已订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6128901ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ http://127.0.0.1:8099/pkg/iroh_web.js:1810
+[ 6128914ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6129348ms] [LOG]  INFO endpoint{id=d7ecc11df0}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6130062ms] [LOG]  INFO iroh_web::room: 已通知常驻节点订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6130435ms] [LOG]  INFO iroh_web::room: 第 1 次进入房间 stage-refresh-1791105125119 成功（已连上至少一个成员）
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6130435ms] [LOG]  INFO iroh_web::room: 已订阅房间 stage-refresh-1791105125119
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:970
+[ 6130528ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6130529ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6133013ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6133186ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6134221ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6136676ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6138038ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6141267ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6142573ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6151597ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 6154121ms] [WARNING]  WARN router.accept{me=d7ecc11df0}: iroh::protocol: Ignoring connection: accepting failed: detected an error with protocol compliance that was not covered by more specific error codes: authentication failed
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 8180425ms] [WARNING]  WARN gossip{me=d7ecc11df0}: iroh_gossip::net: dial failed: timed out peer=4976bbc8d9
+ @ http://127.0.0.1:8099/pkg/iroh_web.js:1284
+[ 9658831ms] [WARNING] using deprecated parameters for the initialization function; pass a single object instead @ https://im.editor.vip/pkg/iroh_web.js:1810
+[ 9660188ms] [LOG]  INFO iroh_web::wasm_api: iroh-web ready (relay-only browser node)
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[ 9661981ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh1.editor.vip:15443/, was None
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[12403518ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh2.editor.vip:15443/, was Some(RelayUrl("https://iroh1.editor.vip:15443/"))
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[12552513ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh3.editor.vip:15443/, was Some(RelayUrl("https://iroh2.editor.vip:15443/"))
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[12873307ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh2.editor.vip:15443/, was Some(RelayUrl("https://iroh3.editor.vip:15443/"))
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[13495780ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh3.editor.vip:15443/, was Some(RelayUrl("https://iroh2.editor.vip:15443/"))
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[13515798ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh2.editor.vip:15443/, was Some(RelayUrl("https://iroh3.editor.vip:15443/"))
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[13816917ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh3.editor.vip:15443/, was Some(RelayUrl("https://iroh2.editor.vip:15443/"))
+ @ https://im.editor.vip/pkg/iroh_web.js:970
+[13837068ms] [LOG]  INFO endpoint{id=79e66b6fb7}:relay-actor: iroh::socket::transports::relay::actor: home is now relay https://iroh2.editor.vip:15443/, was Some(RelayUrl("https://iroh3.editor.vip:15443/"))
+ @ https://im.editor.vip/pkg/iroh_web.js:970

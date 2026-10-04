@@ -125,23 +125,22 @@ function handleNodeEvent(ev) {
       if (accLog.length > 50) accLog.shift();
       // 对方点了 ✓ —— 立刻开始传数据。**这一步在主线程是看不到数据的**。
       onAccepted(ev).catch((e) => {
-        push('transfer:error', { file_id: ev.file_id, error: String(e?.message ?? e) });
+        push('transfer:peer-error', { file_id: ev.file_id, peer: ev.by, error: String(e?.message ?? e) });
       });
       break;
     case 'fileRejected': {
-      // 对方**主动**说不收了（点了 ✗，或刷新/关页面时主动取消）。
-      //
-      // 这比看门狗快得多，而且能**精确到人**：一条文件可能同时发给多个人，
-      // 只把这一个人的那条通道标失败，其他人继续传。
-      // （看门狗是兜底：对端静默消失、连 Reject 都发不出来时才靠它。）
       const fileId = ev.file_id ?? ev.fileId;
       const peer = ev.by;
-      if (peer) {
+      const file = outFiles.get(fileId);
+      if (peer && file && ev.room === file.room) {
         const k = okey(fileId, peer);
         const o = outgoing.get(k);
-        if (o && o.state === 'sending') {
-          o.state = 'failed';
-          o.error = ev.reason || '对方取消了接收';
+        if (o?.state !== 'done') {
+          const reason = ev.reason || '用户拒绝';
+          const recipient = o || { file_id: fileId, room: file.room, peer, done: 0, total: file.total, bytes: 0 };
+          recipient.state = ['已取消保存', '已暂停接收', '对方刷新或关闭了页面'].includes(reason) ? 'cancelled' : 'rejected';
+          recipient.error = reason;
+          outgoing.set(k, recipient);
           pushOutgoing(fileId);
         }
       }
@@ -251,6 +250,7 @@ function evictOutFiles() {
     if (outFiles.size <= 1) break; // 至少留一个
     outFiles.delete(id);
     dropped.push(id);
+    pushOutgoing(id, v.room);
   }
   return dropped;
 }
@@ -274,45 +274,44 @@ function syncAvailableFiles(room = currentRoom) {
 }
 
 /** 某文件当前的出站汇总（给 UI 用） */
-function outgoingSummary(fileId) {
+function outgoingSummary(fileId, room = '') {
   const items = [...outgoing.values()].filter((x) => x.file_id === fileId);
-  if (!items.length) return null;
   const total = items.length;
   const done = items.filter((x) => x.state === 'done').length;
   const failed = items.filter((x) => x.state === 'failed').length;
   const sending = items.filter((x) => x.state === 'sending').length;
+  const rejected = items.filter((x) => x.state === 'rejected').length;
+  const cancelled = items.filter((x) => x.state === 'cancelled').length;
   // 进度取"所有接收方的已完成块数之和 / 每人都收完所需块数之和"
   const sumDone = items.reduce((a, x) => a + x.done, 0);
   const sumNeed = items.reduce((a, x) => a + x.total, 0);
   return {
+    room: outFiles.get(fileId)?.room || items[0]?.room || room,
+    available: outFiles.has(fileId),
     peers: total,
     done,
     failed,
     sending,
+    rejected,
+    cancelled,
     doneChunks: sumDone,
     totalChunks: sumNeed,
     bytes: items.reduce((a, x) => a + x.bytes, 0),
+    recipients: items.map((recipient) => ({
+      id: recipient.peer,
+      state: recipient.state,
+      done: recipient.done,
+      total: recipient.total,
+      bytes: recipient.bytes,
+      error: recipient.error,
+    })),
   };
 }
 
 /** 汇总推送（每次某条进度变化都推一次，主线程只按 file_id 更新卡片） */
-function pushOutgoing(fileId) {
-  const s = outgoingSummary(fileId);
-  if (!s) return;
+function pushOutgoing(fileId, room = '') {
+  const s = outgoingSummary(fileId, room);
   push('transfer:send', { file_id: fileId, ...s });
-  // 全部有结果（都收完 / 有人失败且没人还在传）→ 再推一条终态，
-  // 让主线程知道"这事结束了"（区别于"还在传"）
-  if (s.sending === 0) {
-    const allDone = s.done === s.peers;
-    push('transfer:outcome', {
-      file_id: fileId,
-      ok: allDone,
-      peers: s.peers,
-      done: s.done,
-      failed: s.failed,
-      bytes: s.bytes,
-    });
-  }
 }
 
 /** 哈希切片大小：4MB。按块大小（16KB）切会有 2.4 万次跨边界调用，太慢。 */
@@ -376,7 +375,7 @@ async function pickAndSend({ file, room, mem }) {
     push('transfer:send-failed', { file_id: meta.file_id, name: meta.name, reason: why });
     throw new Error(`房间已切换，文件未发送（${why}）。请切回原房间后重试。`);
   }
-  return { meta, total };
+  return { meta, total, summary: outgoingSummary(meta.file_id) };
 }
 
 async function onAccepted(ev) {
@@ -420,7 +419,7 @@ async function onAccepted(ev) {
     o.state = 'failed';
     o.error = '已被新的请求取代';
   }
-  o = { file_id: fileId, peer, relay, state: 'sending', done: 0, total: t.total, bytes: 0, error: '' };
+  o = { file_id: fileId, room: t.room, peer, relay, state: 'sending', done: 0, total: t.total, bytes: 0, error: '' };
   outgoing.set(k, o);
   pushOutgoing(fileId);
 
@@ -429,6 +428,7 @@ async function onAccepted(ev) {
 
   // ⚠️ 读回调在这里，用 File.slice() —— 数据不经过 WASM 内存，也不经过 postMessage
   const read = async (seq, size) => {
+    if (outgoing.get(k) !== o || o.state !== 'sending') throw new Error('接收已停止');
     const buf = await file.slice(seq * size, (seq + 1) * size).arrayBuffer();
     return new Uint8Array(buf);
   };
@@ -443,7 +443,7 @@ async function onAccepted(ev) {
     if (e.phase === 'sending') {
       const base = Math.max(0, t.total - e.total);
       const cur = outgoing.get(k);
-      if (!cur || cur.state !== 'sending') return;
+      if (cur !== o || cur.state !== 'sending') return;
       cur.done = base + e.done;
       cur.bytes = e.bytes;
       cur.lastProgressAt = Date.now(); // 喂看门狗
@@ -464,7 +464,7 @@ async function onAccepted(ev) {
   cur0.lastProgressAt = Date.now();
   const watchdog = setInterval(() => {
     const cur = outgoing.get(k);
-    if (!cur || cur.state !== 'sending') {
+    if (cur !== o || cur.state !== 'sending') {
       clearInterval(watchdog);
       return;
     }
@@ -490,28 +490,18 @@ async function onAccepted(ev) {
     //
     // 不判状态的话，会把已经判定为"对方失联"的通道**改回 done**，
     // 于是汇总里 failed 消失、卡片从"失败"跳回"已完成" —— 与事实相反。
-    if (cur && cur.state === 'sending') {
+    if (cur === o && cur.state === 'sending') {
       cur.state = 'done';
       cur.done = t.total;
       cur.bytes = bytes;
       cur.error = '';
     }
     pushOutgoing(fileId);
-    // 所有人都收完了才清掉文件引用（**这是唯一该删的时机**）
-    const s = outgoingSummary(fileId);
-    if (s && s.done === s.peers && s.failed === 0) {
-      // ⚠️ 注意：这里**不再**删掉文件本身。
-      //
-      // 以前"这轮所有人都收完"就 `outFiles.delete`，结果是：
-      // 第一个接收方收完，发送方就把文件忘了 —— 后来进房间的人点接收必失败。
-      // 现在改成"留到页面刷新"，由上面的 LRU 上限控制代价。
-      // 只把这条通道标完成即可（outgoing 是每条通道独立的）。
-    }
   } catch (e) {
     clearInterval(watchdog);
     const cur = outgoing.get(k);
     // 同上：已经被判失败的不要再覆盖（保留更准确的原因，比如"对方刷新了"）
-    if (cur && cur.state === 'sending') {
+    if (cur === o && cur.state === 'sending') {
       cur.state = 'failed';
       cur.error = String(e?.message ?? e);
     }
@@ -932,16 +922,13 @@ self.onmessage = async (e) => {
           const t = outFiles.get(fid);
           if (!t) throw new Error('文件已不在内存（页面重载过），请重新选择文件');
           await node.invite_file(JSON.stringify(t.meta), t.room || '');
-          if (wantPeer) {
-            // 把该 peer 的旧记录清掉，表示"重新尝试中"
-            const k = okey(fid, wantPeer);
-            const o = outgoing.get(k);
-            if (o) {
-              o.state = 'sending';
-              o.done = 0;
-              o.error = '';
-            }
+          for (const recipient of outgoing.values()) {
+            if (recipient.file_id !== fid || (wantPeer && recipient.peer !== wantPeer)) continue;
+            if (recipient.state !== 'failed' && recipient.state !== 'cancelled') continue;
+            recipient.state = 'waiting';
+            recipient.error = '';
           }
+          pushOutgoing(fid);
           value = null;
           break;
         }

@@ -29,6 +29,7 @@ export const sidebar = {
   unread: new Map(),
   currentNodeState: { ok: false, text: '启动中' },
   currentRoom: '',
+  leaveCurrentRoom: async () => {},
   /**
    * 当前 gossip 邻居的 id 集合（PEER_UP / PEER_DOWN 实时维护）。
    * ⚠️ 这是**网络邻居**，不是"房间成员" —— 邻居只是 gossip 覆盖网的局部视图，
@@ -78,7 +79,8 @@ export const sidebar = {
     // 点遮罩关闭移动端面板
     $('panel-scrim').onclick = () => sidebar.closePanel();
 
-    bus.on(EV.MSG, ({ room, message, mine }) => {
+    bus.on(EV.MSG, ({ room, message, mine, isHistory }) => {
+      if (!this.currentRoom) return;
       // 提示音：只在自己发的之外、且页面可见时响（浏览器自动播放策略）
       if (!mine && !document.hidden) sidebar.ding();
       sidebar.setPreview(room, {
@@ -87,12 +89,20 @@ export const sidebar = {
         ts: message.ts,
         mine,
       });
-      if (!mine && room !== sidebar.currentRoom) {
+      if (!mine && !isHistory && (room !== sidebar.currentRoom || document.hidden)) {
         sidebar.bumpUnread(room);
       }
       // 消息时间就是房间的"最近活跃时间"，用它重排列表（微信行为）
       store.upsertRoom(room, { last: message.ts });
       sidebar.render();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && this.currentRoom) {
+        this.unread.delete(this.currentRoom);
+        store.setUnread(this.currentRoom, 0);
+        this.paintBadge();
+        this.render();
+      }
     });
     // 进房后拉到的历史里，最后一条要回填到会话预览（否则显示"还没有消息"）
     bus.on(EV.HISTORY, ({ room, messages, me }) => {
@@ -208,6 +218,15 @@ export const sidebar = {
     const keepTop = body.scrollTop;
     body.innerHTML = view?.html ?? '';
     view?.bind?.(body);
+    for (const element of body.querySelectorAll('.row[data-room], [data-act], [data-toggle]')) {
+      if (element.tagName === 'BUTTON') continue;
+      element.setAttribute('role', 'button');
+      element.tabIndex = 0;
+      element.onkeydown = (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); element.click(); }
+        if (event.key === 'F10' && event.shiftKey && element.dataset.room) { event.preventDefault(); this.roomMenu(element.dataset.room); }
+      };
+    }
     if (keepTop) body.scrollTop = keepTop;
   },
 
@@ -303,7 +322,7 @@ export const sidebar = {
 
     return {
       html:
-        `<div class="section-title">在线成员（${memberCount}，含自己）</div>` +
+        `<div class="section-title">在线成员（${memberCount}，含自己）</div><div class="dialog__hint">依据近期心跳估计，异常退出可能延迟约 45 秒更新。</div>` +
         (list.length
           ? list
               .map(
@@ -606,7 +625,7 @@ export const sidebar = {
          </div>
 
          <div class="set-group">
-           <div class="section-title">通知</div>
+           <div class="section-title">通知（仅当前房间）</div>
            ${toggle(
              'sound',
              '新消息提示音',
@@ -624,15 +643,15 @@ export const sidebar = {
          <div class="set-group">
            <div class="section-title">连接</div>
            ${nav('status', '连接诊断', this.currentNodeState.ok ? '在线' : '异常', '中继、延迟、重连')}
-           ${nav('probecopy', '我的身份 ID', U.shortId(myId, 10) + '…', '主密码，勿外传')}
+           ${nav('probecopy', '我的身份 ID', U.shortId(myId, 10) + '…', '公开标识，可用于识别你；私钥才需保密')}
          </div>
 
          <div class="set-group">
            <div class="section-title">数据</div>
-           <div class="kv"><span class="kv__k">本地占用</span><span class="kv__v">${U.humanSize(usage.bytes)}</span></div>
+           <div class="kv"><span class="kv__k">本地配置占用</span><span class="kv__v">${U.humanSize(usage.bytes)}</span></div>
            <div class="kv"><span class="kv__k">房间数</span><span class="kv__v">${store.rooms().length}</span></div>
            ${nav('export', '导出本地数据', '', '房间列表、会话预览、偏好为 JSON')}
-           ${nav('clearlocal', '清除本地记录', '', '房间列表、预览、未读、偏好（不动身份）')}
+           ${nav('clearlocal', '清除本地记录', '', '退出当前房间并清理配置（不动身份）')}
          </div>
 
          <div class="set-group set-group--danger">
@@ -645,6 +664,7 @@ export const sidebar = {
            <div class="section-title">关于</div>
            <div class="kv"><span class="kv__k">传输</span><span class="kv__v">iroh · QUIC over 自建中继</span></div>
            <div class="kv"><span class="kv__k">加密</span><span class="kv__v">端到端；中继看不到内容</span></div>
+           <div class="dialog__hint">常驻节点保存文本历史；知道房间名即可访问，没有成员审批。请勿发送敏感信息。仅订阅当前房间，切走后不会收到其他房间的新消息。</div>
            <div class="kv"><span class="kv__k">浏览器</span><span class="kv__v">永久 relay-only（不能打洞）</span></div>
            <div class="kv"><span class="kv__k">文件传输</span><span class="kv__v">${
              typeof window.showSaveFilePicker === 'function' ? '可用（Chrome / Edge）' : '不支持（需 Chrome / Edge）'
@@ -692,6 +712,7 @@ export const sidebar = {
   _applyPrefs() {
     const p = store.prefs();
     document.documentElement.dataset.density = p.density === 'compact' ? 'compact' : 'cozy';
+    if (!$('input').disabled) $('input').placeholder = `输入消息，${p.sendKey === 'ctrl' ? 'Ctrl/⌘+Enter' : 'Enter'} 发送 · Shift+Enter 换行`;
     // 提示音：预置一个极短的"叮"，用 WebAudio 合成，不引入音频文件
     if (p.sound !== false && !this._soundReady) {
       this._soundReady = true;
@@ -754,7 +775,7 @@ export const sidebar = {
         title: '我的身份 ID',
         body:
           `<div class="id-box"><code>${U.esc(net.endpoint_id())}</code></div>` +
-          `<div class="dialog__hint">这串 ID 就是你的身份凭据。<b>谁拿到都能以"你"的身份连进来</b>，只在信任的人之间分享。<br />` +
+          `<div class="dialog__hint">这是你的<b>公开身份 ID</b>，可以分享用于识别你，仅凭它不能冒充你。身份私钥保存在浏览器中，切勿分享私钥。<br />` +
           `换身份请用下面的「更换身份密钥」。</div>`,
         okText: '知道了',
       });
@@ -792,7 +813,8 @@ export const sidebar = {
             bus.emit(EV.TIP, '昵称不能为空');
             return false;
           }
-          if (name.length > 24) {
+          const characters = typeof Intl.Segmenter === 'function' ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(name)].length : [...name].length;
+          if (characters > 24) {
             bus.emit(EV.TIP, '昵称太长了（最多 24 字）');
             return false;
           }
@@ -814,14 +836,16 @@ export const sidebar = {
       return dialog.open({
         title: '清除本地记录',
         body:
-          '<div class="dialog__hint">会清掉：房间列表、会话预览、未读计数、偏好设置。<br />' +
+          '<div class="dialog__hint">会退出当前房间，丢弃草稿，并清掉房间列表、会话预览、未读计数、隐藏消息标记和偏好设置。<br />' +
           '<b>保留</b>：身份密钥、服务器上的历史消息。<br />' +
           '想要连身份一起换，用下面的「清空全部数据」。</div>',
         okText: '清除',
-        onOk: () => {
+        onOk: async () => {
+          await this.leaveCurrentRoom();
           store.clearLocal();
           this.unread.clear();
           this.previews.clear();
+          this._applyPrefs();
           this.paintBadge();
           this.render();
           bus.emit(EV.TIP, '已清除本地记录');
@@ -868,13 +892,14 @@ export const sidebar = {
     dialog.open({
       title: `房间：${name}`,
       body:
-        `<label class="dialog__label">备注名（只改我这边显示）</label>` +
+        `<label class="dialog__label" for="dlg-alias">备注名（只改我这边显示）</label>` +
         `<input id="dlg-alias" class="dialog__field" value="${U.esc(r.alias || '')}" placeholder="留空 = 显示原名" />` +
-        `<label class="dialog__label">置顶</label>` +
+        `<label class="dialog__label" for="dlg-pin">置顶</label>` +
         `<select id="dlg-pin" class="dialog__field">` +
         `<option value="0">不置顶</option><option value="1" ${r.pinned ? 'selected' : ''}>置顶</option>` +
         `</select>` +
-        `<div class="dialog__hint">房间名本身不可改（它决定了加密组播的标识），这里改的是你本地看到的备注。</div>`,
+        `<div class="dialog__hint">房间名不可改，备注只在本地生效。常驻节点保存历史，知道房名即可访问。</div>` +
+        `<button class="btn-ghost" id="dlg-copy-room">复制真实房间名</button> <button class="btn-ghost" id="dlg-remove-room">移出列表${name === this.currentRoom ? '并退出' : ''}</button>`,
       okText: '保存',
       onOk: () => {
         store.upsertRoom(name, {
@@ -885,6 +910,13 @@ export const sidebar = {
         document.dispatchEvent(new CustomEvent('roomrenamed', { detail: name }));
       },
     });
+    $('dlg-copy-room').onclick = () => navigator.clipboard.writeText(name).then(() => bus.emit(EV.TIP, '已复制房间名')).catch(() => bus.emit(EV.TIP, '复制失败，请手动复制标题中的房间名'));
+    $('dlg-remove-room').onclick = async () => {
+      if (name === this.currentRoom) await this.leaveCurrentRoom();
+      store.removeRoom(name);
+      this.render();
+      dialog.close();
+    };
   },
 
   newRoom() {
@@ -892,10 +924,13 @@ export const sidebar = {
       title: '新建 / 加入房间',
       label: '房间名（同名即同房间）',
       placeholder: '例如 team-alpha',
-      hint: '房间名决定加密组播的标识。把同一个名字告诉别人，就能互相看到。',
+      hint: '同名即同房。常驻节点保存文本历史，知道房名即可访问；不要使用可猜的名称分享敏感内容。仅接收当前房间的消息。',
       okText: '进入',
       onOk: (v) => {
         if (!v) return false;
+        const invalid = U.roomNameError(v);
+        if (invalid) { bus.emit(EV.TIP, invalid); return false; }
+        if (!store.room(v) && store.rooms().length >= 40) { bus.emit(EV.TIP, '房间列表已满（40 个），请先在房间菜单中移出一项'); return false; }
         bus.emit(EV.ROOM_OPEN, v);
       },
     });

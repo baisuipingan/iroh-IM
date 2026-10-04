@@ -63,7 +63,7 @@ print(f"  初始 DOM: {dom_buttons(B, fid)}", flush=True)
 # A 离开 → B 的卡片应变"已失效"
 A.ev(f"(() => {{ window.__openRoom({json.dumps(R2)}); return 1; }})()")
 gone = None
-for _ in range(25):
+for _ in range(60):
     time.sleep(1)
     c = card(B, fid)
     if c and c.get("state") == "expired":

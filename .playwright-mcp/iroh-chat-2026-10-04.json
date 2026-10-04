@@ -1,0 +1,31 @@
+{
+  "exportedAt": "2026-10-04T07:34:15.209Z",
+  "endpointId": "d7ecc11df06c2fcea2ed4ffb5223f0674a6642d1b4120247fcf2bb2304417aab",
+  "nickname": "实测A",
+  "rooms": [
+    {
+      "name": "review-ui-1791099050373-other",
+      "last": 1791099196276
+    },
+    {
+      "name": "review-ui-1791099050373",
+      "last": 1791099254851,
+      "alias": "测试备注 <b>",
+      "pinned": true
+    }
+  ],
+  "previews": {
+    "review-ui-1791099050373": {
+      "text": "快捷键实测",
+      "nick": "实测A",
+      "ts": 1791099254851,
+      "mine": true
+    }
+  },
+  "prefs": {
+    "sendKey": "ctrl",
+    "density": "compact",
+    "sound": false,
+    "flashTitle": false
+  }
+}

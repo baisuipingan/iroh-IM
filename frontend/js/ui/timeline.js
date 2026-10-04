@@ -10,6 +10,7 @@
 
 import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
+import { store } from '../store.js';
 import { avatar } from './sidebar.js';
 import * as U from '../util.js';
 
@@ -200,6 +201,7 @@ export const timeline = {
 
   /** 追加一条消息 */
   push(m, mine, isHistory = false) {
+    if (store.isHidden(this.room, m.id)) return;
     if (m.id && this.seen.has(m.id)) return;
     if (m.id) this.seen.add(m.id);
     this._emptyState(false);   // 有消息了就把空态收掉
@@ -217,7 +219,7 @@ export const timeline = {
     if (m.file) {
       this._filePositions.set(m.file.file_id, { ts: m.ts, id: m.id });
       this._emptyState(false);   // 文件卡片也是内容，空态该收
-      bus.emit(EV.FILE_PROOF, { room: this.room, m });
+      bus.emit(EV.FILE_PROOF, { room: this.room, m, isHistory });
       const card = this._fileCardEl(m.file.file_id);
       if (card) this._insertMessage(card, m);
       return;
@@ -283,7 +285,8 @@ export const timeline = {
    * 重建视图时（`rebuildCardsForRoom`）要把当前算出来的可用性一起带回来，
    * 否则重建出来的卡片会退回"未知"文案。
    */
-  pushFileCard({ room = '', meta, direction, state = 'invited', done = 0, total = 0, error = '', avail, ts = meta.ts || Date.now() }) {
+  pushFileCard({ room = '', meta, direction, state = 'invited', done = 0, total = 0, error = '', avail, available = true, recipients = [], previewUrl, ts = meta.ts || Date.now() }) {
+    if (store.isHidden(room || this.room, `file:${meta.file_id}`)) return;
     const key = `file:${room}:${meta.file_id}`;
     if (this.seen.has(key)) {
       const existing = this._fileCardEl(meta.file_id, room);
@@ -296,6 +299,9 @@ export const timeline = {
         total,
         error,
         avail,
+        available,
+        recipients,
+        previewUrl,
       });
       return existing;
     }
@@ -307,6 +313,8 @@ export const timeline = {
     if (room) el.dataset.room = room;
     // 记下方向：按钮要按方向给（接收卡片不能出现"重新发送"）
     el.dataset.dir = direction || '';
+    el.dataset.available = String(available);
+    el._recipients = recipients;
     // ⚠️ 重建视图时（rebuildCardsForRoom）要把 avail 落到 dataset 上，
     //    后续的 updateFileCard 才会沿用同一个值而不是退回"检查中…"。
     if (avail) el.dataset.avail = avail;
@@ -331,7 +339,7 @@ export const timeline = {
         </div>
         <div class="imgcard__bar"><i style="width:${pct}%"></i></div>
         <div class="imgcard__foot">
-          <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '' }))}</span>
+          <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '', available, recipients }))}</span>
           <span class="filecard__size">${U.humanSize(meta.size)}</span>
           <span class="imgcard__actions"></span>
         </div>
@@ -343,13 +351,15 @@ export const timeline = {
           <div class="filecard__name">${U.esc(meta.name)}</div>
           <div class="filecard__meta">${U.humanSize(meta.size)} · ${
             direction === 'send' ? '我发送' : '对方发送'
-          } · <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '' }))}</span></div>
+          } · <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '', available, recipients }))}</span></div>
           <div class="filecard__bar"><i style="width:${pct}%"></i></div>
           ${error ? `<div class="filecard__err">${U.esc(error)}</div>` : ''}
         </div>
         <div class="filecard__actions"></div>
       </div>`;
+    this._renderFileRecipients(el);
     this._fileActions(el, state);
+    this._previewImage(el, previewUrl);
     this._insertMessage(el, this._filePositions.get(meta.file_id) || { ts, id: key });
     this._emptyState(false);
     if (this.atBottom) this.scrollBottom();
@@ -364,7 +374,7 @@ export const timeline = {
   },
 
   /** 更新卡片状态/进度 */
-  updateFileCard({ room, file_id, state, done, total, bytes, error, peers, peersDone, peersFailed, avail }) {
+  updateFileCard({ room, file_id, state, done, total, bytes, error, avail, available, recipients, previewUrl }) {
     // ⚠️ `file_id` 是**对端自选**的字符串（只过签名、不看格式）。
     //    直接拼进选择器的话，一个 `a"]` 就能让 querySelector 抛 SyntaxError，
     //    而 bus 对监听器有 try/catch 包着 → **异常被吞、进度从此不再更新**（P3-15）。
@@ -372,6 +382,8 @@ export const timeline = {
     const el = this._fileCardEl(file_id);
     if (!el) return;
     if (room && el.dataset.room && el.dataset.room !== room) return;
+    if (available !== undefined) el.dataset.available = String(available);
+    if (recipients !== undefined) el._recipients = recipients;
     if (avail !== undefined) {
       if (avail) el.dataset.avail = avail;
       else delete el.dataset.avail;
@@ -379,9 +391,8 @@ export const timeline = {
     const st = el.querySelector('.filecard__state');
     if (st)
       st.textContent = this._fileStateText(state, error, {
-        peers,
-        peersDone,
-        peersFailed,
+        recipients: el._recipients || [],
+        available: el.dataset.available !== 'false',
         dir: el.dataset.dir,
         avail: avail || el.dataset.avail || '',
       });
@@ -403,19 +414,77 @@ export const timeline = {
     }
     const m = el.querySelector('.filecard__meta');
     if (m && total) m.title = `${done}/${total} 块${bytes ? `（${U.humanSize(bytes)}）` : ''}`;
-    // 多人汇总：把"已送达 N/M 人"补进 meta 行
-    if (m && peers > 1) {
-      let s = el.querySelector('.filecard__peers');
-      if (!s) {
-        s = document.createElement('span');
-        s.className = 'filecard__peers';
-        m.appendChild(s);
-      }
-      s.textContent = ` · 已送达 ${peersDone}/${peers} 人`;
-    }
     const sz = el.querySelector('.filecard__size');
-    if (sz && bytes) sz.textContent = U.humanSize(bytes);
+    if (sz && bytes && el.dataset.dir !== 'send') sz.textContent = U.humanSize(bytes);
+    this._renderFileRecipients(el);
     this._fileActions(el, state);
+    this._previewImage(el, previewUrl);
+  },
+
+  _previewImage(el, url) {
+    const placeholder = el.querySelector('.imgcard__ph');
+    if (placeholder && url === null) { placeholder.textContent = '图片预览已释放，文件仍保存在本地'; return; }
+    if (!placeholder || !url || !url.startsWith('blob:')) return;
+    if (placeholder.querySelector('img')?.src === url) return;
+    const image = document.createElement('img');
+    image.src = url;
+    image.alt = '本地图片预览，点击放大';
+    image.loading = 'lazy';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.setAttribute('aria-label', '放大图片');
+    open.append(image);
+    open.onclick = () => this.viewImage(url);
+    placeholder.replaceChildren(open);
+  },
+
+  _renderFileRecipients(el) {
+    if (el.dataset.dir !== 'send') return;
+    const recipients = el._recipients || [];
+    let details = el.querySelector('.filecard__recipients');
+    if (!recipients.length) {
+      details?.remove();
+      return;
+    }
+    if (!details) {
+      details = document.createElement('details');
+      details.className = 'filecard__recipients';
+      details.innerHTML = '<summary></summary><div class="filecard__recipient-list"></div>';
+      (el.querySelector('.filecard__body') || el.querySelector('.imgcard'))?.appendChild(details);
+    }
+    details.querySelector('summary').textContent = `接收详情（${recipients.length} 人）`;
+    const rows = recipients.map((recipient) => {
+      const row = document.createElement('div');
+      row.className = 'filecard__recipient';
+      row.dataset.peer = recipient.id;
+      row.dataset.state = recipient.state;
+      const percent = recipient.total > 0 ? Math.min(100, Math.max(0, Math.round(recipient.done / recipient.total * 100))) : 0;
+      const status = {
+        waiting: '等待接收',
+        sending: percent === 100 ? '等待确认' : `接收中 ${percent}%`,
+        done: '✓ 已接收',
+        rejected: '— 已拒绝',
+        cancelled: '— 已取消',
+        failed: '接收失败',
+      }[recipient.state] || '等待接收';
+      const name = recipient.nickname ? `${recipient.nickname} · ${String(recipient.id).slice(0, 6)}` : `用户 ${String(recipient.id).slice(0, 8)}`;
+      row.innerHTML = `<div class="filecard__recipient-head"><span class="filecard__recipient-name" title="${U.esc(`${name} · ${recipient.id}`)}">${U.esc(name)}</span><span class="filecard__recipient-state">${U.esc(status)}</span></div>`;
+      if (recipient.state === 'sending') {
+        const progress = document.createElement('progress');
+        progress.max = Math.max(1, recipient.total);
+        progress.value = recipient.done;
+        progress.setAttribute('aria-label', `${name} 的接收进度`);
+        row.append(progress);
+      }
+      if (recipient.error && (recipient.state === 'failed' || recipient.state === 'cancelled')) {
+        const note = document.createElement('div');
+        note.className = 'filecard__recipient-note';
+        note.textContent = recipient.error;
+        row.append(note);
+      }
+      return row;
+    });
+    details.querySelector('.filecard__recipient-list').replaceChildren(...rows);
   },
 
   /**
@@ -424,7 +493,21 @@ export const timeline = {
    * 一份文件发给多个人时，"已完成"到底指谁完成，必须让用户看得明白。
    */
   _fileStateText(state, error, info = {}) {
-    const { peers = 0, peersDone = 0, peersFailed = 0, dir = '', avail = '' } = info;
+    const { dir = '', avail = '', available = true, recipients = [] } = info;
+    if (dir === 'send') {
+      const labels = [available ? '已分享' : '已停止分享'];
+      for (const [recipientState, label] of [
+        ['done', '接收完成'], ['sending', '接收中'], ['waiting', '等待接收'],
+        ['rejected', '拒绝接收'], ['cancelled', '取消接收'], ['failed', '接收失败'],
+      ]) {
+        const count = recipients.filter((recipient) => recipient.state === recipientState).length;
+        if (count) labels.push(`${count} 人${label}`);
+      }
+      if (available && !recipients.some((recipient) => ['done', 'sending', 'waiting'].includes(recipient.state))) {
+        labels.push('等待接收');
+      }
+      return labels.join(' · ');
+    }
     // 历史里的文件：能不能收取决于**发送方此刻的状态**（派生，不是缓存的状态）
     if (state === 'archived') {
       if (avail === 'live') return '可接收（发送方在线）';
@@ -432,26 +515,23 @@ export const timeline = {
       return '已过期（发送方已离开）';
     }
     if (state === 'asking') return '正在联系发送方…';
-    const multi = peers > 1;
     const base = {
       invited: '等待你确认',
       // 刷新页面后恢复出来的"没收完"的接收
       interrupted: '接收中断（可继续）',
       pending: '等待对方确认',
-      active: multi ? `传输中（${peers} 人）` : '传输中',
+      active: '传输中',
       // 发送端专属：数据已全部发出，正在等接收方校验回执。
       // 与「传输中」分开，避免大文件在"已发完但对方还在校验"的空窗期看起来像卡住。
-      sent: multi ? `已发送，等待确认（${peers} 人）` : '已发送，等待对方确认',
+      sent: '已发送，等待对方确认',
       // 传输被中断（网络断了 / 对方离开），已收部分保留，可续传
       paused: '已暂停（可续传）',
-      done: multi ? `已完成（${peersDone}/${peers} 人）` : '已完成',
+      done: '已完成',
       rejected: '已拒绝',
-      // ⚠️ 同一个 `expired` 两个方向含义不同：
-      //    发送方看到的是"对方没点接受"，接收方看到的是"发送方走了"。
-      expired: dir === 'send' ? '对方未响应' : '已失效',
+      cancelled: '已取消保存（可重新接收）',
+      expired: '已失效',
     }[state];
     if (state === 'failed') {
-      if (multi && peersFailed > 0) return `${peersFailed} 人未收到（可重发）`;
       return `失败${error ? `：${error}` : ''}`;
     }
     if (base) return base;
@@ -475,12 +555,37 @@ export const timeline = {
 
     // 图片卡片的按钮在底部行里，用文字更省空间；文件卡片用圆钮
     const compact = box.classList.contains('imgcard__actions');
+    if (el.dataset.dir === 'send') {
+      if (el.dataset.available === 'false') return;
+      if (!(el._recipients || []).some((recipient) => ['failed', 'cancelled'].includes(recipient.state))) return;
+      const invite = document.createElement('button');
+      invite.className = compact ? 'btn-ghost' : 'filecard__btn is-again';
+      invite.title = '重新邀请未完成的接收者（不打扰已接收或拒绝的人）';
+      invite.textContent = compact ? '重新邀请' : '↻';
+      invite.onclick = () => {
+        invite.disabled = true;
+        bus.emit(EV.FILE_RESEND, { file_id: fileId });
+      };
+      box.append(invite);
+      return;
+    }
+    if (typeof window.showSaveFilePicker !== 'function' && ['invited', 'interrupted', 'paused', 'cancelled', 'archived'].includes(state)) {
+      const notice = document.createElement('span');
+      notice.className = 'filecard__err';
+      notice.textContent = '接收需 Chrome / Edge';
+      const reject = document.createElement('button');
+      reject.className = 'btn-ghost';
+      reject.textContent = state === 'invited' ? '拒绝' : '移除';
+      reject.onclick = () => bus.emit(state === 'invited' ? EV.FILE_REJECT : EV.FILE_DISMISS, { file_id: fileId });
+      box.append(notice, reject);
+      return;
+    }
 
     // 刷新后恢复的"未完成接收" → 给一个「继续接收」
     //
     // ⚠️ `paused`（传输中途被打断/用户主动停下）是**同一件事的另一个来源**：
     //    文案已经写着"已暂停（可续传）"，如果不给按钮，这句承诺就是空的（F16）。
-    if (state === 'interrupted' || state === 'paused') {
+    if (state === 'interrupted' || state === 'paused' || state === 'cancelled') {
       const go = document.createElement('button');
       go.className = compact ? 'btn-primary' : 'filecard__btn is-yes';
       go.title = '继续接收（会从断点续传）';
@@ -561,30 +666,13 @@ export const timeline = {
       return;
     }
 
-    // 发送方在失败/超时之后给一个重发入口
     if (state === 'failed' || state === 'expired') {
-      // ⚠️ 只有**我发的**才谈得上"重发"。
-      //    接收方的卡片也可能变成 failed/expired（发送方走了、很久没响应），
-      //    那种情况给"↻"是错的 —— 点了必然报"文件已不在内存"。
-      //    给一个「移除」，让它能把这张死卡片清掉。
-      if (el.dataset.dir !== 'send') {
-        const drop = document.createElement('button');
-        drop.className = 'filecard__btn is-no';
-        drop.title = '移除这条记录';
-        drop.textContent = '✗';
-        drop.onclick = () => bus.emit(EV.FILE_DISMISS, { file_id: fileId });
-        box.append(drop);
-        return;
-      }
-      const again = document.createElement('button');
-      again.className = 'filecard__btn is-again';
-      again.title = '重新发送（对方接受后会从断点续传）';
-      again.textContent = '↻';
-      again.onclick = () => {
-        again.disabled = true;
-        bus.emit(EV.FILE_RESEND, { file_id: fileId });
-      };
-      box.append(again);
+      const drop = document.createElement('button');
+      drop.className = 'filecard__btn is-no';
+      drop.title = '移除这条记录';
+      drop.textContent = '✗';
+      drop.onclick = () => bus.emit(EV.FILE_DISMISS, { file_id: fileId });
+      box.append(drop);
     }
   },
 
@@ -660,7 +748,7 @@ export const timeline = {
       if (m.text && !/^\[img\]/.test(m.text)) {
         items.push({ label: '复制', fn: () => navigator.clipboard?.writeText(m.text) });
       }
-      items.push({ label: '删除（仅本地）', danger: true, fn: () => el.remove() });
+      items.push({ label: '删除（仅本地）', danger: true, fn: () => { store.hideMessage(el.dataset.room || this.room, m.id); el.remove(); } });
       this._contextMenu(e.clientX, e.clientY, items);
     });
     return el;

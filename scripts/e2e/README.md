@@ -6,7 +6,17 @@
 # 前置：本地静态服务 + 带 CDP 的 Chrome（见 run.sh 顶部注释）
 bash scripts/e2e/run.sh                 # 全部
 bash scripts/e2e/run.sh room-isolation  # 单个
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/fix-review.mjs
 ```
+
+`fix-review.mjs` 启动独立 Chrome/WebKit 进程，覆盖超限报文后的健康通信、同身份连续刷新、
+异步草稿/附件保护、按房草稿、房名校验、本地隐藏、取消/拒绝/重邀、图片预览、
+窄屏、模态焦点、临时存储模式、列表容量和清理退出。可设置 `E2E_SITE`、
+`E2E_ANCHOR`（只覆盖测试上下文的锚点）、`CHROME_PATH` 和 `E2E_OUTPUT`。
+系统保存窗口由真实 OPFS 文件句柄替代，文件网络传输与写盘/预览不模拟。
+`run.sh` 保留子进程退出码，任何 FAIL、CRASH、缺脚本或未知名称均返回非零。
+追加覆盖实时文件证明先于邀约的乱序、历史旁观卡隔离，以及 Worker 下载失败和启动无响应。
+Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
 
 ## 用例
 
@@ -16,6 +26,7 @@ bash scripts/e2e/run.sh room-isolation  # 单个
 |---|---|
 | file-history | 文件历史卡片、能力清单、离开即过期、可逆恢复、刷新失效（主测试） |
 | multi-peer | 三份独立浏览器存储、三人互发、晚加入历史重试、丢失广播补齐、历史/实时排序、跨页断档、切房代次隔离 |
+| file-recipients | 独立三端的成功/拒绝混合结果、全拒绝、按人进度、失败与取消、续传重试、图片/文件详情和切房重建 |
 | review-frontend | 输入框/附件/空态等交互与 console 无错 |
 | dm-removed | 私聊移除后不残留 |
 | stale | 陈旧邀约不诈尸 |
@@ -33,6 +44,11 @@ bash scripts/e2e/run.sh room-isolation  # 单个
 ## 两个必须知道的坑
 
 `multi-peer` 自己创建并销毁三份独立 BrowserContext，不关闭已有标签页；可用 `E2E_CDP` / `E2E_SITE` 指定 CDP 地址和测试站点。它会模拟首次历史失败和丢失实时广播，验证自动重试及每 10 秒的历史补齐；大于一页的断档会继续分页，文件卡片与文本按 `(ts, id)` 合并。
+
+`file-recipients` 同样使用独立 BrowserContext，可设置 `E2E_CDP` / `E2E_SITE`，以及可选的 `E2E_SCREENSHOT` 保存发送侧截图。发送端卡片表示“已分享”，只统计实际响应的接收者，不把房间人数当作必须接收人数；详情里的进度和成功、拒绝、取消、失败均按身份独立记录。拒绝和取消不是技术错误，重新邀请只重置失败/取消的等待状态，不清掉已接收或拒绝的结果。文件在发送侧页面刷新或被保留预算淘汰前仍可供后来者接收。
+
+若历史补齐先显示文件证明，用例会实际请求可接收的历史卡片以补齐邀约，
+再完成逐字节传输检查；不会仅凭 `archived/live` 状态假定已收到文件。
 
 1. **每个用例之前要清浏览器存储**（`clear-storage.py` 已封装）。
    上轮的 IndexedDB 位图与 localStorage 邀约污染下一轮，表现为"进不了房"或 `done=0`。

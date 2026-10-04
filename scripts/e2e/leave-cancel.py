@@ -4,7 +4,7 @@
 而是**手动派发 pagehide 事件**并让页面继续存活 —— 这样能把
 "逻辑是否对" 和 "广播来不来得及发" 两件事分开判断。
 
-预期：派发后几秒内发送端就把那条通道标失败（peersFailed → 1）。
+预期：派发后几秒内发送端就把该用户标为取消（peersCancelled → 1）。
 若 10 秒都没反应，说明 pagehide → Reject 这条链路真的坏了。
 """
 import importlib.util, time, json, sys
@@ -70,14 +70,14 @@ detected = None
 for i in range(10):
     time.sleep(1)
     a = snap(tx)
-    f = a.get("peersFailed", 0) or 0
-    print(f"  [{time.time()-t_drop:4.1f}s] TX peers={a.get('peers')} failed={f}", flush=True)
+    f = a.get("peersCancelled", 0) or 0
+    print(f"  [{time.time()-t_drop:4.1f}s] TX peers={a.get('peers')} cancelled={f}", flush=True)
     if f >= 1:
         detected = time.time() - t_drop
         break
 
 print(flush=True)
-tt.check("pagehide 后发送端很快把该通道标失败（快路径有效）",
+tt.check("pagehide 后发送端很快显示该用户取消（快路径有效）",
          detected is not None and detected <= 8,
          f"{detected:.1f}s" if detected else "10 秒内无反应")
 

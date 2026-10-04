@@ -63,11 +63,12 @@ else
 fi
 
 # wasm 是不是比源码旧（比"匹配某个字符串"更可靠，也不受 grep 多字节问题影响）
-NEWER=$(find "$ROOT/client-wasm/src" -name '*.rs' -newer "$OUT/pkg/iroh_web_bg.wasm" 2>/dev/null | head -1 || true)
+NEWER=$(find "$ROOT/client-wasm/src" "$ROOT/client-wasm/vendor" -name '*.rs' -newer "$OUT/pkg/iroh_web_bg.wasm" 2>/dev/null | head -1 || true)
 if [[ -z "$NEWER" ]]; then
   echo "    ✅ wasm 不比源码旧"
 else
   echo "    ⚠️  wasm 比源码旧（$(basename "$NEWER") 更新），先跑 scripts/build-wasm.sh release"
+  fail=1
 fi
 
 # 逐个解析 JS 里的相对 import，确认目标文件真的在部署目录里。

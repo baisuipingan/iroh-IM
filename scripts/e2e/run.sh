@@ -16,7 +16,7 @@
 # 用法：bash scripts/e2e/run.sh [用例名...]   （默认全部）
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-PY="${PY:-/Users/patrick/.workbuddy/binaries/python/versions/3.13.12/bin/python3}"
+PY="${PY:-python3}"
 CLEAN=(-u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy)
 export NO_PROXY=127.0.0.1,localhost
 
@@ -26,38 +26,49 @@ export NO_PROXY=127.0.0.1,localhost
 LOG_DIR="${E2E_LOG_DIR:-/tmp/e2e-logs}"
 
 SUMMARY_PY='import sys
+import re
 lines = open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
 total = next((l.strip() for l in reversed(lines) if l.startswith("总计")), "")
 if total:
-    print(total); sys.exit(0)
+    print(total)
+    failed = re.search(r"FAIL\s*=\s*(\d+)", total)
+    sys.exit(0 if failed and int(failed.group(1)) == 0 else 1)
 err = [l for l in lines if l.startswith(("Traceback", "TimeoutError", "urllib", "  File"))]
 print("CRASH  " + sys.argv[1])
 for l in err[-3:]:
-    print("    " + l.strip()[:150])'
+    print("    " + l.strip()[:150])
+sys.exit(1)'
+
+fail=0
 
 run_case() {            # <显示名> <脚本路径>
   local name="$1" file="$2"
-  [ -f "$file" ] || { printf "%-18s (脚本不存在: %s)\n" "$name" "$file"; return 0; }
-  env "${CLEAN[@]}" "$PY" scripts/e2e/clear-storage.py >/dev/null 2>&1
+  [ -f "$file" ] || { printf "%-18s (脚本不存在: %s)\n" "$name" "$file"; fail=1; return; }
+  if ! env "${CLEAN[@]}" "$PY" scripts/e2e/clear-storage.py >/dev/null 2>&1; then
+    printf '%s CRASH 清理存储失败\n' "$name"; fail=1; return;
+  fi
   mkdir -p "$LOG_DIR"
-  local log="$LOG_DIR/$name.log"
-  env "${CLEAN[@]}" "$PY" "$file" > "$log" 2>&1
+  local log="$LOG_DIR/$(basename "$name").log"
+  env "${CLEAN[@]}" "$PY" "$file" > "$log" 2>&1 || fail=1
   printf "%-18s " "$name"
-  "$PY" -c "$SUMMARY_PY" "$log"
+  "$PY" -c "$SUMMARY_PY" "$log" || fail=1
 }
 
 if [ "$#" -gt 0 ]; then
   for n in "$@"; do
-    for cand in "$n" "/tmp/$n.py" "/tmp/$n-test.py" "scripts/e2e/$n.py"; do
-      [ -f "$cand" ] && { run_case "$n" "$cand"; break; }
+    found=0
+    for cand in "$n" "scripts/e2e/$n.py" "/tmp/$n.py" "/tmp/$n-test.py"; do
+      [ -f "$cand" ] && { found=1; run_case "$n" "$cand"; break; }
     done
+    if [ "$found" -eq 0 ]; then printf '未知用例：%s\n' "$n" >&2; fail=1; fi
   done
-  exit 0
+  exit "$fail"
 fi
 
 # 全部用例都在本目录（原来散在 /tmp，重启即丢；搬进来才受版本控制）
 run_case "file-history"    scripts/e2e/file-history.py
 run_case "multi-peer"      scripts/e2e/multi-peer.py
+run_case "file-recipients" scripts/e2e/file-recipients.py
 run_case "review-frontend" scripts/e2e/review-frontend.py
 run_case "dm-removed"      scripts/e2e/dm-removed.py
 run_case "stale"           scripts/e2e/stale.py
@@ -68,3 +79,4 @@ run_case "room-isolation"  scripts/e2e/room-isolation.py
 run_case "card-revive"     scripts/e2e/card-revive.py
 run_case "sidebar-pages"   scripts/e2e/sidebar-pages.py
 run_case "relay-enabled"   scripts/e2e/relay-enabled.py   # ⚠️ 会临时改 relay-config.json（自动还原）
+exit "$fail"

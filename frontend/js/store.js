@@ -19,11 +19,35 @@ const KEYS = {
   previews: `${NS}previews`,
   /** room -> 未读数 */
   unread: `${NS}unread`,
+  hidden: `${NS}hidden-messages`,
 };
+
+const sessionValues = new Map();
+let persistent = true;
+
+function storageFailed() {
+  if (!persistent) return;
+  persistent = false;
+  document.dispatchEvent(new CustomEvent('storageunavailable'));
+}
+
+function getValue(key) {
+  if (sessionValues.has(key)) return sessionValues.get(key);
+  try { return localStorage.getItem(key); }
+  catch { storageFailed(); return null; }
+}
+
+function setValue(key, value) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+    sessionValues.delete(key);
+  } catch { sessionValues.set(key, value); storageFailed(); }
+}
 
 function readJSON(key, fallback) {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = getValue(key);
     if (!raw) return fallback;
     return JSON.parse(raw);
   } catch {
@@ -31,47 +55,46 @@ function readJSON(key, fallback) {
   }
 }
 function writeJSON(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* 配额满等情况静默忽略 */
-  }
+  setValue(key, JSON.stringify(value));
 }
 
 export const store = {
   keys: KEYS,
+  get persistent() { return persistent; },
+  getValue,
+  setValue,
 
   /* ---------- 身份 ---------- */
   /** 读取身份私钥；没有就生成一个（32 字节 hex） */
   identity() {
-    let hex = localStorage.getItem(KEYS.secretKey);
+    let hex = getValue(KEYS.secretKey);
     if (!/^[0-9a-f]{64}$/.test(hex || '')) {
       const buf = new Uint8Array(32);
       crypto.getRandomValues(buf);
       hex = [...buf].map((b) => b.toString(16).padStart(2, '0')).join('');
-      localStorage.setItem(KEYS.secretKey, hex);
+      setValue(KEYS.secretKey, hex);
     }
     return hex;
   },
   resetIdentity() {
-    localStorage.removeItem(KEYS.secretKey);
+    setValue(KEYS.secretKey, null);
   },
 
   /* ---------- 昵称 ---------- */
   nick(fallback) {
-    const v = localStorage.getItem(KEYS.nick);
+    const v = getValue(KEYS.nick);
     return v || fallback || '';
   },
   setNick(v) {
-    localStorage.setItem(KEYS.nick, v);
+    setValue(KEYS.nick, v);
   },
 
   /* ---------- 主题 ---------- */
   theme() {
-    return localStorage.getItem(KEYS.theme) || 'dark';
+    return getValue(KEYS.theme) || 'dark';
   },
   setTheme(v) {
-    localStorage.setItem(KEYS.theme, v);
+    setValue(KEYS.theme, v);
   },
 
   /* ---------- 房间列表 ---------- */
@@ -80,7 +103,7 @@ export const store = {
     return Array.isArray(list) ? list : [];
   },
   saveRooms(list) {
-    writeJSON(KEYS.rooms, list.slice(0, 40));
+    writeJSON(KEYS.rooms, list.slice().sort((left, right) => Number(!!right.pinned) - Number(!!left.pinned) || (right.last || 0) - (left.last || 0)).slice(0, 40));
   },
   /** 降序：置顶优先，其次最近活跃 */
   roomsSorted() {
@@ -97,7 +120,10 @@ export const store = {
     const list = store.rooms();
     const i = list.findIndex((r) => r.name === name);
     if (i >= 0) Object.assign(list[i], patch);
-    else list.unshift({ name, last: Date.now(), ...patch });
+    else {
+      if (list.length >= 40) return null;
+      list.unshift({ name, last: Date.now(), ...patch });
+    }
     store.saveRooms(list);
     return store.room(name);
   },
@@ -106,10 +132,10 @@ export const store = {
   },
 
   lastRoom() {
-    return localStorage.getItem(KEYS.lastRoom) || '';
+    return getValue(KEYS.lastRoom) || '';
   },
   setLastRoom(name) {
-    localStorage.setItem(KEYS.lastRoom, name);
+    setValue(KEYS.lastRoom, name);
   },
 
   /* ---------- 会话预览 / 未读 ----------
@@ -138,7 +164,7 @@ export const store = {
     writeJSON(KEYS.previews, all);
   },
   clearPreviews() {
-    localStorage.removeItem(KEYS.previews);
+    setValue(KEYS.previews, null);
   },
 
   /** @returns {Record<string, number>} */
@@ -153,21 +179,23 @@ export const store = {
     writeJSON(KEYS.unread, all);
   },
   clearUnread() {
-    localStorage.removeItem(KEYS.unread);
+    setValue(KEYS.unread, null);
   },
 
   /** localStorage 实际占用（设置页"数据用量"用，别写死数字骗人） */
   usage() {
     let bytes = 0;
     const detail = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k || !k.startsWith(NS)) continue;
+    try {
+      for (let index = 0; index < localStorage.length; index++) {
+        const key = localStorage.key(index);
+        if (!key || !key.startsWith(NS)) continue;
       // UTF-16：字符数 × 2
-      const size = (localStorage.getItem(k) || '').length * 2;
-      bytes += size;
-      detail[k.slice(NS.length)] = size;
-    }
+        const size = (localStorage.getItem(key) || '').length * 2;
+        bytes += size;
+        detail[key.slice(NS.length)] = size;
+      }
+    } catch { storageFailed(); }
     return { bytes, detail };
   },
 
@@ -182,10 +210,20 @@ export const store = {
   },
 
   clearLocal() {
-    localStorage.removeItem(KEYS.rooms);
-    localStorage.removeItem(KEYS.lastRoom);
-    localStorage.removeItem(KEYS.prefs);
+    setValue(KEYS.rooms, null);
+    setValue(KEYS.lastRoom, null);
+    setValue(KEYS.prefs, null);
+    setValue(KEYS.hidden, null);
     store.clearPreviews();
     store.clearUnread();
+  },
+
+  hideMessage(room, id) {
+    const hidden = readJSON(KEYS.hidden, {});
+    hidden[room] = [...new Set([...(hidden[room] || []), id])];
+    writeJSON(KEYS.hidden, hidden);
+  },
+  isHidden(room, id) {
+    return (readJSON(KEYS.hidden, {})[room] || []).includes(id);
   },
 };

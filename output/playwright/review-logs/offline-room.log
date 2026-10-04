@@ -1,0 +1,13 @@
+已进房 oa99361
+
+=== 模拟断线，然后在断线状态下点另一个房间 ===
+  phase=reconnecting joined=None room=ob99361 notes=['中继已断开，正在重连。恢复后会自动回到这个房间。']
+  ✅ 断线时点房间：界面切过去但确实没进房  (joined=None room=ob99361)
+
+=== 恢复网络（走真实 reconnect 流程）===
+  phase=online joined=ob99361 composer=True notes=['已重新连接并回到「ob99361」']
+  ✅ 恢复后真的进入了那个房间（不再停在假房间）  (joined=ob99361 期望=ob99361)
+  ✅ 恢复后输入区可用  (True)
+  ✅ 确实已加入房间（能收到该房间的消息）  (['进房验证'])
+
+总计 PASS=4 FAIL=0

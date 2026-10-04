@@ -26,7 +26,7 @@
  *
  * 1. 对方发文件 → 聊天框出现卡片：文件名 / 大小 / ✓ ✗
  * 2. 点 ✓ → **弹「保存位置」对话框**（默认落在下载目录），选完才开始收
- * 3. 不点、或点 ✗ → 什么都不发生（对方稍后超时）
+ * 3. 不点不会自动接收；点 ✗ 只拒绝自己的接收，不影响其他人
  * 4. 收的时候有进度；中断后下次从断点继续
  * 5. **切走标签页也不会掉速**（传输在 Worker 里跑，不受后台节流）
  *
@@ -38,15 +38,13 @@
 
 import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
+import { store } from '../store.js';
 import { dialog } from './dialog.js';
 import * as U from '../util.js';
 
 /** 只有 Chromium 支持文件系统访问 API */
 export const canTransferFiles = () =>
   typeof window.showSaveFilePicker === 'function' && !!window.isSecureContext;
-
-/** 邀约的有效期：对方超过这么久没点 ✓，就认为"未响应" */
-const INVITE_TIMEOUT_MS = 60_000;
 
 /* ------------------------------------------------------------------
  * 「历史里的文件」—— 能不能收，看的是发送方**此刻**的状态
@@ -75,6 +73,8 @@ const quarantined = new Map();
 
 /** 传输中的任务：file_id → 状态（只用于 UI 展示，真数据在 Worker 里） */
 const transfers = new Map();
+const peerNames = new Map();
+const pendingOutgoing = new Map();
 
 /**
  * 能力清单索引：`file_id -> Set(peerId)`，由各人的心跳清单（`PeerInfo.files`）汇总而来。
@@ -124,8 +124,8 @@ setupVisibilityHint();
  * 只是把包丢掉，发送方照样在写，实测**两分多钟都不报错**。
  * 期间发送端那张卡片一直停在"传输中"，用户完全不知道发生了什么。
  *
- * 所以走之前**主动广播一条 Reject**：发送方收到后立刻只把这一条通道
- * 标失败（`FileRejected.by` 指明是谁），其他人照传不受影响。
+ * 所以走之前**主动广播一条 Reject**：发送方收到后立刻只把这个接收者
+ * 标取消（`FileRejected.by` 指明是谁），其他人照传不受影响。
  *
  * ## 只能"尽力而为"
  *
@@ -192,65 +192,12 @@ function bindWorkerPushes() {
       // 发送侧汇总进度：一份文件可能同时发给多人，Worker 会把所有人的
       // 进度汇总成一条推上来（`peers` / `done` / `failed` / `sending`）。
       case 'transfer:send': {
-        const t = transfers.get(p.file_id);
-        if (!t) return;
-        // 有人接受了 → 邀约超时定时器可以撤了
-        if (t.inviteTimer) {
-          clearTimeout(t.inviteTimer);
-          t.inviteTimer = null;
-        }
-        t.done = p.doneChunks;
-        t.bytes = p.bytes;
-        t.peers = p.peers;
-        t.peersDone = p.done;
-        t.peersFailed = p.failed;
-        // 只要还有人没收完，就算"传输中"；全失败才算失败
-        const state = p.sending > 0 || p.done > 0 ? 'active' : p.failed > 0 ? 'failed' : 'active';
-        t.state = state;
-        bus.emit(EV.FILE_CARD_UPDATE, {
-          file_id: p.file_id,
-          state,
-          done: p.doneChunks,
-          total: p.totalChunks,
-          bytes: p.bytes,
-          peers: p.peers,
-          peersDone: p.done,
-          peersFailed: p.failed,
-        });
+        fileTransfer._updateOutgoing(p);
         break;
       }
       // 多条出站里某一条出问题（文件丢了等），只提示该条，不影响其他人
       case 'transfer:peer-error': {
         bus.emit(EV.TIP, `有一位接收方传输失败：${p.error}`);
-        break;
-      }
-      // 发送侧"全部有结果了"：都收完 → done；有人失败 → 让卡片可重发
-      case 'transfer:outcome': {
-        const t = transfers.get(p.file_id);
-        if (!t) return;
-        if (t.inviteTimer) {
-          clearTimeout(t.inviteTimer);
-          t.inviteTimer = null;
-        }
-        t.peers = p.peers;
-        t.peersDone = p.done;
-        t.peersFailed = p.failed;
-        if (p.ok) {
-          t.state = 'done';
-          bus.emit(EV.FILE_CARD_UPDATE, { file_id: p.file_id, state: 'done', done: t.total, total: t.total });
-        } else {
-          // 有人没成功：卡片显示"部分失败"，并给重发入口
-          t.state = 'failed';
-          t.error = `${p.failed} 位接收方未完成`;
-          bus.emit(EV.FILE_CARD_UPDATE, {
-            file_id: p.file_id,
-            state: 'failed',
-            error: t.error,
-            peers: p.peers,
-            peersDone: p.done,
-            peersFailed: p.failed,
-          });
-        }
         break;
       }
       case 'transfer:recv': {
@@ -274,6 +221,7 @@ function bindWorkerPushes() {
         if (t) {
           t.state = 'done';
           t.done = p.total;
+          t.error = '';
         }
         forgetInvite(p.file_id); // 收完了，不必再恢复
         bus.emit(EV.FILE_CARD_UPDATE, {
@@ -281,7 +229,9 @@ function bindWorkerPushes() {
           state: 'done',
           done: p.total,
           total: p.total,
+          error: '',
         });
+        if (t) fileTransfer.preview(p.file_id);
         break;
       }
       case 'transfer:paused': {
@@ -373,13 +323,6 @@ const INVITE_VER = 3;
  * 记录会在接收过程中被 `touchInvite()` 不断刷新，所以长传输（大文件、
  * 传一半去干别的）不会因为"邀请是很久以前发的"而被丢掉。
  *
- * 这里原本写的是 24 小时，结果是**自相矛盾的设计**：发送端 60 秒就把
- * 邀约标成"对方未响应"、页面一关连文件引用都没了，而接收端刷新后却会把
- * **一整天前**的旧邀约恢复成「继续接收」——用户一点必然失败。
- * 这正是"一上来就显示失败"的来源。
- *
- * 取 10 分钟：远宽松于发送端的 60 秒邀约有效期（容忍对方页面刚刷新、
- * 或自己离开一会儿），又不至于久到毫无意义。
  */
 const INVITE_TTL_MS = 10 * 60 * 1000;
 
@@ -395,10 +338,14 @@ let selfId = '';
  * 还没收到 presence 时（null）不据此过滤，宁可先恢复、等 presence 到了再降级。
  */
 let knownPeers = null;
+let knownRoom = '';
+let peerGraceUntil = 0;
+let peerGraceTimer = null;
+let latestPeers = [];
 
 function loadStoredInvites() {
   try {
-    const raw = JSON.parse(localStorage.getItem(INVITE_KEY) || '{}');
+    const raw = JSON.parse(store.getValue(INVITE_KEY) || '{}');
     // 兼容：旧格式是数组，直接当作过时数据丢弃
     if (Array.isArray(raw) || raw.ver !== INVITE_VER) return [];
     const now = Date.now();
@@ -418,7 +365,7 @@ function loadStoredInvites() {
 
 function saveStoredInvites(list) {
   try {
-    localStorage.setItem(INVITE_KEY, JSON.stringify({ ver: INVITE_VER, items: list.slice(-20) }));
+    store.setValue(INVITE_KEY, JSON.stringify({ ver: INVITE_VER, items: list.slice(-20) }));
   } catch {
     /* 隐私模式 / 配额满：降级为不恢复，不影响主流程 */
   }
@@ -454,7 +401,7 @@ function touchInvite(fileId) {
   if (now - (touchAt.get(fileId) || 0) < 30_000) return;
   touchAt.set(fileId, now);
   try {
-    const raw = JSON.parse(localStorage.getItem(INVITE_KEY) || '{}');
+    const raw = JSON.parse(store.getValue(INVITE_KEY) || '{}');
     if (raw.ver !== INVITE_VER || !Array.isArray(raw.items)) return;
     let hit = false;
     for (const it of raw.items) {
@@ -491,12 +438,6 @@ export const fileTransfer = {
       case 'fileInvite':
         this._onInvite(event.room, event.meta);
         break;
-      case 'fileRejected':
-        this._onRejected(event);
-        break;
-      case 'fileDone':
-        this._onDone(event);
-        break;
       default:
         break;
     }
@@ -528,85 +469,67 @@ export const fileTransfer = {
     // 传给 Worker 用于"内存类文件"的单独上限 —— 必须显式传，
     // File 的自定义属性过不了结构化克隆。
     const raw = await net.client.call('pickAndSend', file, room, !!memoryBacked);
-    const { meta, total } = JSON.parse(raw);
+    const { meta, total, summary } = JSON.parse(raw);
     bus.emit(EV.TIP, '');
 
     transfers.set(meta.file_id, {
       meta,
       file,
       room,
-      state: 'pending',
+      state: 'shared',
       done: 0,
       total,
       bytes: 0,
       direction: 'send',
-      // 多接收方汇总：peers=接受的人数，peersDone=已收完的人数
+      // 多接收方汇总：peers=已响应的人数，peersDone=已收完的人数
       peers: 0,
       peersDone: 0,
       peersFailed: 0,
+      recipients: [],
+      available: true,
     });
-    bus.emit(EV.FILE_CARD, { room, meta, direction: 'send', state: 'pending' });
-
-    // 邀约超时：**没人接受**时才降级为"未响应"。
-    //
-    // ⚠️ 判定要严格：只要已经有接收方在传（`peers > 0`）或已经收完，
-    //    就绝不能标 expired —— 否则传输中卡片会突然显示"对方未响应"，
-    //    但数据其实还在传（实测踩到：两个接收方都在传，发送端却显示 expired）。
-    const rec = transfers.get(meta.file_id);
-    rec.inviteTimer = setTimeout(() => {
-      const cur = transfers.get(meta.file_id);
-      if (!cur) return;
-      if (cur.state !== 'pending') return;      // 已有人接受 / 已结束
-      if (cur.peers > 0) return;                // 兜底：有接收方就不算过期
-      cur.state = 'expired';
-      bus.emit(EV.FILE_CARD_UPDATE, { file_id: meta.file_id, state: 'expired' });
-    }, INVITE_TIMEOUT_MS);
+    bus.emit(EV.FILE_CARD, { room, meta, direction: 'send', state: 'shared' });
+    this._updateOutgoing(pendingOutgoing.get(meta.file_id) || { file_id: meta.file_id, ...summary });
+    pendingOutgoing.delete(meta.file_id);
+    this.preview(meta.file_id);
 
     return meta;
   },
 
-  /**
-   * 有人拒绝收这份文件。
-   *
-   * ⚠️ **只有发送方该理会这条**：`Reject` 是群广播，同一房间的所有人都会
-   * 收到。如果我是个**接收方**（正要收同一份文件），别人拒绝跟我毫无关系 ——
-   * 不管方向就会把自己的卡片也标成"已拒绝"（多接收方场景下的误伤）。
-   *
-   * 发送方这边也**不再整张卡片判死**：一份文件可能同时发给多个人，
-   * 该标记哪一条通道由 Worker 按 `by` 精确处理（它会推 `transfer:outcome`），
-   * 主线程这里只处理**还没开始传**（`pending`）时对方直接拒绝的情况。
-   */
-  _onRejected({ room, file_id, reason }) {
-    const t = transfers.get(file_id);
-    if (!t) return;
-    // ⚠️ 房间必须对得上：控制消息是广播的，来自别的房间的同名 file_id
-    //    （或用户切房间后才到达的旧消息）不该动这张卡片（F7）。
-    if (room && t.room && room !== t.room) return;
-    if (t.direction !== 'send') return; // 接收方：别人的拒绝与我无关
-    if (t.inviteTimer) clearTimeout(t.inviteTimer);
-    // 已经在传/已传完的，交给 Worker 的按人汇总去更新（别整张卡判死）
-    if (t.state !== 'pending') return;
-    t.state = 'rejected';
-    bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'rejected', error: reason });
+  _updateOutgoing(summary) {
+    const transfer = transfers.get(summary.file_id);
+    if (!transfer) {
+      pendingOutgoing.set(summary.file_id, summary);
+      return;
+    }
+    if (transfer.direction !== 'send' || summary.room !== transfer.room) return;
+    const previous = new Map(transfer.recipients.map((recipient) => [recipient.id, recipient]));
+    transfer.recipients = summary.recipients.map((recipient) => ({
+      ...recipient,
+      nickname: peerNames.get(`${transfer.room}:${recipient.id}`) || previous.get(recipient.id)?.nickname || '',
+    }));
+    transfer.done = summary.doneChunks;
+    transfer.bytes = summary.bytes;
+    transfer.peers = summary.peers;
+    transfer.peersDone = summary.done;
+    transfer.peersFailed = summary.failed;
+    transfer.peersRejected = summary.rejected;
+    transfer.peersCancelled = summary.cancelled;
+    transfer.available = summary.available;
+    transfer.state = summary.sending > 0 ? 'active' : summary.available ? 'shared' : 'expired';
+    transfer.error = '';
+    this._renderOutgoing(summary.file_id, transfer);
   },
 
-  /**
-   * 有人收完了这份文件。
-   *
-   * ⚠️ 同样是**群广播**：只对发送方有意义（接收方收到别人的"我收完了"
-   * 与自己无关）。而且多接收方时，**不能一个人收完就把整张卡标成完成** ——
-   * 那由 Worker 的按人汇总决定（`transfer:outcome` 会在全部有结果时才推）。
-   */
-  _onDone({ room, file_id, ok, reason }) {
-    const t = transfers.get(file_id);
-    if (!t || t.direction !== 'send') return;
-    if (room && t.room && room !== t.room) return; // 同上：房间对不上就忽略
-    // 还在传其他人：不在这里下结论，等 Worker 汇总
-    if (t.peers > 1) return;
-    if (t.state === 'active' || t.state === 'sent') {
-      t.state = ok ? 'done' : 'failed';
-      bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, error: reason });
-    }
+  _renderOutgoing(file_id, transfer) {
+    bus.emit(EV.FILE_CARD_UPDATE, {
+      room: transfer.room,
+      file_id,
+      state: transfer.state,
+      available: transfer.available,
+      recipients: transfer.recipients,
+      error: '',
+    });
   },
 
   /* ------------------------------------------------------------------ 接收 */
@@ -634,14 +557,14 @@ export const fileTransfer = {
     // 那 X 自己点的那张怎么办？它在 `openArchived()` 里已经被置成 `asking`，
     // 由下面这条分支正常接管成 `invited`（它有 chunk_size/root_hash 能收）。
     // 这里只需要**放过 `asking`**，其余状态一律不动。
-    if (cur && cur.state === 'archived') {
+    if (cur && cur.state === 'archived' && !cur.liveProof) {
       // 顺便刷新一下可用性：发送方重发意味着他此刻确实还持有这个文件。
       this._refreshArchived();
       return;
     }
     // 用户点了历史卡片后会进入 asking。重发的 Invite 必须更新这张已有卡片，
     // 不能再次发 FILE_CARD 后被时间线的 file_id 去重静默丢掉。
-    if (cur && cur.state === 'asking') {
+    if (cur && (cur.state === 'asking' || cur.state === 'archived')) {
       cur.meta = meta;
       cur.room = room;
       cur.state = 'invited';
@@ -732,6 +655,9 @@ export const fileTransfer = {
         error: t.error || '',
         state: t.state,
         avail: t.avail,
+        available: t.available,
+        recipients: t.recipients,
+        previewUrl: t.previewUrl,
       });
       n++;
     }
@@ -760,11 +686,6 @@ export const fileTransfer = {
       if (room && item.room && item.room !== room) continue;
 
       // 发送方还在这间房里吗？不在 → 这张卡片点了也白点，直接丢掉记录
-      if (knownPeers && item.senderId && !knownPeers.has(item.senderId)) {
-        forgetInvite(meta.file_id);
-        continue;
-      }
-
       transfers.set(meta.file_id, {
         meta,
         room: item.room,
@@ -794,7 +715,31 @@ export const fileTransfer = {
    * 等 presence 到了这里会**把发送方已离开的卡片标成失效**。
    */
   setPeers(peers, room) {
+    if (knownRoom !== room) {
+      knownRoom = room;
+      peerGraceUntil = Date.now() + 30000;
+      clearTimeout(peerGraceTimer);
+      peerGraceTimer = setTimeout(() => {
+        if (knownRoom === room) this.setPeers(latestPeers, room);
+      }, 30100);
+    }
+    latestPeers = peers || [];
     knownPeers = new Set((peers || []).map((p) => p.id).filter(Boolean));
+    for (const peer of peers || []) {
+      if (peer.id && peer.nickname) peerNames.set(`${room}:${peer.id}`, peer.nickname);
+    }
+    for (const [file_id, transfer] of transfers) {
+      if (transfer.room !== room || transfer.direction !== 'send') continue;
+      let changed = false;
+      for (const recipient of transfer.recipients) {
+        const nickname = peerNames.get(`${room}:${recipient.id}`);
+        if (nickname && nickname !== recipient.nickname) {
+          recipient.nickname = nickname;
+          changed = true;
+        }
+      }
+      if (changed) this._renderOutgoing(file_id, transfer);
+    }
 
     // 重建"能力清单"索引：file_id -> 谁声称还能提供它
     capability.clear();
@@ -815,7 +760,7 @@ export const fileTransfer = {
       if (t.room !== room) continue;
       if (t.direction !== 'recv' || t.state !== 'interrupted') continue;
       const senderId = t.meta?.sender;
-      if (senderId && !knownPeers.has(senderId)) {
+      if (senderId && !knownPeers.has(senderId) && Date.now() >= peerGraceUntil) {
         t.state = 'expired';
         t.error = '发送方已离开房间';
         forgetInvite(id);
@@ -838,7 +783,7 @@ export const fileTransfer = {
    * `m` 是一条普通消息，只是 `m.file` 有值、`text` 为空（发送方签名，
    * 常驻节点只是存储，无法伪造）。
    */
-  _onFileProof(room, m) {
+  _onFileProof(room, m, isHistory = true) {
     const ref = m?.file;
     if (!ref?.file_id) return;
     // 自己发的文件不再画一张"历史文件"卡片：发的时候已经有实时卡片了，
@@ -865,6 +810,7 @@ export const fileTransfer = {
       bytes: 0,
       direction: 'recv',
       fromProof: true,
+      liveProof: !isHistory || !!exist?.liveProof,
     });
     bus.emit(EV.FILE_CARD, {
       room,
@@ -987,6 +933,11 @@ export const fileTransfer = {
   async accept(file_id, opts = {}) {
     const t = transfers.get(file_id);
     if (!t || t.direction !== 'recv') return;
+    if (!opts.useOpfs && !canTransferFiles()) {
+      bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, error: '此浏览器不支持保存文件，请使用 Chrome / Edge' });
+      bus.emit(EV.TIP, '此浏览器不支持保存文件，请使用 Chrome / Edge');
+      return;
+    }
     const { meta } = t;
 
     let handle;
@@ -1001,13 +952,17 @@ export const fileTransfer = {
         handle = await pickSaveHandle(meta);
       } catch (e) {
         if (e?.name === 'AbortError') return this.reject(file_id, '已取消保存');
-        throw e;
+        t.error = `无法选择保存位置：${e?.message ?? e}`;
+        bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, error: t.error });
+        bus.emit(EV.TIP, t.error);
+        return;
       }
       this._handles.set(file_id, handle);
     }
 
     t.state = 'active';
-    bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'active' });
+    t.error = '';
+    bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'active', error: '' });
     // 记一次"刚刚活动过"：刷新后要能恢复（TTL 按最后活动时间算）
     rememberInvite(t.room, meta);
     try {
@@ -1032,7 +987,6 @@ export const fileTransfer = {
   /**
    * 用户主动**停下**一个正在接收的传输（卡片上的「停止」）。
    *
-   * 与 `reject` 的区别：不发 Reject 给对方 —— 我们只是这一侧停下来，
    * 已收到的内容留在磁盘上、位图也保留，之后点「继续接收」即可续传。
    * 对应 Rust 的 `cancel_file`（它会让读流循环主动退出）。
    */
@@ -1044,6 +998,7 @@ export const fileTransfer = {
     bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'paused', done: t.done, total: t.total });
     try {
       await net.client.call('cancel', file_id);
+      await net.client.call('reject', file_id, '已暂停接收', t.room);
     } catch {
       /* 可能已经结束了 */
     }
@@ -1051,9 +1006,10 @@ export const fileTransfer = {
 
   async reject(file_id, reason = '用户拒绝') {
     const t = transfers.get(file_id);
-    if (t) t.state = 'rejected';
-    forgetInvite(file_id);
-    bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'rejected' });
+    const state = reason === '已取消保存' ? 'cancelled' : 'rejected';
+    if (t) { t.state = state; t.error = ''; }
+    if (state === 'rejected') forgetInvite(file_id);
+    bus.emit(EV.FILE_CARD_UPDATE, { file_id, state, error: '' });
     try {
       // 带上房间：Reject 含自由文本理由，发错房间会泄露给无关的人（F7）
       await net.client.call('reject', file_id, reason, t?.room ?? '');
@@ -1075,24 +1031,10 @@ export const fileTransfer = {
     try {
       bus.emit(EV.TIP, `正在重新发送 ${t.meta.name}…`);
       await net.client.call('resend', file_id);
-      t.state = 'pending';
-      t.error = '';
-      bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'pending', error: '' });
       bus.emit(EV.TIP, '已重新发起，等待对方确认');
-
-      // 重新起算邀约有效期
-      if (t.inviteTimer) clearTimeout(t.inviteTimer);
-      t.inviteTimer = setTimeout(() => {
-        const cur = transfers.get(file_id);
-        if (cur && cur.state === 'pending') {
-          cur.state = 'expired';
-          bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'expired' });
-        }
-      }, INVITE_TIMEOUT_MS);
     } catch (e) {
       const msg = String(e?.message ?? e);
       bus.emit(EV.TIP, `重新发送失败：${msg}`);
-      bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'failed', error: msg });
     }
   },
 
@@ -1106,6 +1048,8 @@ export const fileTransfer = {
   dismiss(file_id) {
     const t = transfers.get(file_id);
     if (!t || t.direction !== 'recv') return;
+    if (t.previewUrl) URL.revokeObjectURL(t.previewUrl);
+    store.hideMessage(t.room, `file:${file_id}`);
     transfers.delete(file_id);
     forgetInvite(file_id);
     this._handles.delete(file_id);
@@ -1115,6 +1059,38 @@ export const fileTransfer = {
   /** 已有多少块（UI 显示用） */
   progress(file_id) {
     return transfers.get(file_id);
+  },
+
+  async preview(file_id) {
+    const transfer = transfers.get(file_id);
+    if (!transfer || transfer.previewUrl || transfer.previewing) return;
+    if (!/^image\/(png|jpeg|webp|gif)$/i.test(transfer.meta.mime || '') || transfer.meta.size > 8 * 1024 * 1024) return;
+    transfer.previewing = true;
+    try {
+      const file = transfer.file || await this._handles.get(file_id)?.getFile();
+      if (!file) return;
+      const bitmap = await createImageBitmap(file);
+      const pixels = bitmap.width * bitmap.height;
+      if (pixels > 16 * 1024 * 1024 || transfers.get(file_id) !== transfer) { bitmap.close(); return; }
+      const scale = Math.min(1, 1024 / bitmap.width, 1024 / bitmap.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      const thumbnail = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (!thumbnail || transfers.get(file_id) !== transfer) return;
+      const previews = [...transfers.entries()].filter(([, item]) => item.previewUrl);
+      if (previews.length >= 20) {
+        const [previousId, previous] = previews[0];
+        URL.revokeObjectURL(previous.previewUrl);
+        previous.previewUrl = null;
+        bus.emit(EV.FILE_CARD_UPDATE, { room: previous.room, file_id: previousId, state: previous.state, previewUrl: null });
+      }
+      transfer.previewUrl = URL.createObjectURL(thumbnail);
+      bus.emit(EV.FILE_CARD_UPDATE, { room: transfer.room, file_id, state: transfer.state, previewUrl: transfer.previewUrl });
+    } catch { }
+    finally { transfer.previewing = false; }
   },
 };
 
@@ -1143,6 +1119,10 @@ window.__transfers = () => {
       peers: t.peers,
       peersDone: t.peersDone,
       peersFailed: t.peersFailed,
+      peersRejected: t.peersRejected,
+      peersCancelled: t.peersCancelled,
+      recipients: t.recipients,
+      available: t.available,
       bytes: t.bytes,
       // 历史文件卡片当前算出来的可用性（live / expired / unknown）。
       // 测试要断言"发送方走了卡片就变过期"，所以把它显式导出来；

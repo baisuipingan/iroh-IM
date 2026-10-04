@@ -165,3 +165,8 @@ export function cursorOf(msg) {
   if (!msg) return '';
   return `${Number(msg.ts) || 0}:${String(msg.id ?? '')}`;
 }
+export function roomNameError(room) {
+  if (!room || /[\u0000-\u001f\u007f-\u009f]/u.test(room)) return '房间名不能为空或包含控制字符';
+  if (new TextEncoder().encode(room).length > 256) return '房间名最多 256 UTF-8 字节（中文约 85 字）';
+  return '';
+}

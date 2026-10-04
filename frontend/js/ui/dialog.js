@@ -7,9 +7,24 @@ import { esc } from '../util.js';
 
 const $ = (id) => document.getElementById(id);
 let onOk = null;
+let previousFocus = null;
+let previousFocusSelector = '';
+const inertElements = new Map();
 
 export const dialog = {
   open({ title, body = '', okText = '确定', cancelText = '取消', onOk: cb }) {
+    if (!$('modal').classList.contains('is-on')) {
+      previousFocus = document.activeElement;
+      previousFocusSelector = previousFocus?.id ? `#${CSS.escape(previousFocus.id)}` : '';
+      for (const attribute of ['data-act', 'data-room', 'data-toggle']) {
+        if (previousFocus?.hasAttribute(attribute)) previousFocusSelector = `[${attribute}="${CSS.escape(previousFocus.getAttribute(attribute))}"]`;
+      }
+    }
+    for (const sibling of document.body.children) {
+      if (sibling === $('modal') || sibling.tagName === 'SCRIPT') continue;
+      if (!inertElements.has(sibling)) inertElements.set(sibling, sibling.inert);
+      sibling.inert = true;
+    }
     $('dlg-title').textContent = title;
     $('dlg-body').innerHTML = body;
     $('dlg-ok').textContent = okText;
@@ -17,12 +32,17 @@ export const dialog = {
     onOk = cb || null;
     $('modal').classList.add('is-on');
     // 自动聚焦第一个可输入元素
-    setTimeout(() => $('dlg-body').querySelector('input, select, textarea')?.focus(), 30);
+    $('dlg-ok').disabled = false;
+    ($('dlg-body').querySelector('input, select, textarea, button') || $('dlg-ok')).focus();
   },
 
   close() {
     $('modal').classList.remove('is-on');
     onOk = null;
+    for (const [element, wasInert] of inertElements) element.inert = wasInert;
+    inertElements.clear();
+    const target = previousFocus?.isConnected ? previousFocus : previousFocusSelector && document.querySelector(previousFocusSelector);
+    target?.focus();
   },
 
   /** 只读提示 */
@@ -35,7 +55,7 @@ export const dialog = {
     dialog.open({
       title,
       body:
-        `<label class="dialog__label">${esc(label)}</label>` +
+        `<label class="dialog__label" for="dlg-input">${esc(label)}</label>` +
         `<input id="dlg-input" class="dialog__field" value="${esc(value)}" placeholder="${esc(placeholder)}" />` +
         (hint ? `<div class="dialog__hint">${hint}</div>` : ''),
       okText,
@@ -45,15 +65,26 @@ export const dialog = {
 
   bind() {
     $('dlg-cancel').onclick = () => dialog.close();
-    $('dlg-ok').onclick = () => {
-      if (onOk && onOk() === false) return;
-      dialog.close();
+    $('dlg-ok').onclick = async () => {
+      const callback = onOk;
+      $('dlg-ok').disabled = true;
+      try {
+        if (callback && await callback() === false) return;
+        if (callback === onOk) dialog.close();
+      } finally { $('dlg-ok').disabled = false; }
     };
     $('modal').onclick = (e) => {
       if (e.target === $('modal')) dialog.close();
     };
     document.addEventListener('keydown', (e) => {
       if (!$('modal').classList.contains('is-on')) return;
+      if (e.key === 'Tab') {
+        const controls = [...$('modal').querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')];
+        const index = controls.indexOf(document.activeElement);
+        if (e.shiftKey && index <= 0) { e.preventDefault(); controls.at(-1)?.focus(); }
+        else if (!e.shiftKey && (index < 0 || index === controls.length - 1)) { e.preventDefault(); controls[0]?.focus(); }
+        return;
+      }
       if (e.key === 'Escape') {
         dialog.close();
         return;

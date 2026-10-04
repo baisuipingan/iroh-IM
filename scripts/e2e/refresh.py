@@ -6,8 +6,8 @@
 
 断言（本轮重点）：
   1. 发送端能看到 2 条独立通道（peers=2）
-  2. R1 关掉后，发送端**很快**只把 R1 那条标失败（peersFailed→1）
-     - 快路径：接收方 pagehide 主动广播 Reject（期望 ≤ 15s）
+  2. R1 关掉后，发送端**很快**只把 R1 那条标取消或失败
+     - 快路径：接收方 pagehide 主动广播 Reject，显示取消（期望 ≤ 15s）
      - 兜底：发送端写超时 / 无进度看门狗
   3. R2 不受牵连，继续推进直到收完
   4. 最终 R2 的文件逐字节正确
@@ -115,7 +115,7 @@ for i in range(24):                       # 最多观察 120 秒
     if not a:
         print("  TX 卡片消失", flush=True); break
     c = snap(r2)
-    failed = a.get("peersFailed", 0) or 0
+    failed = (a.get("peersFailed", 0) or 0) + (a.get("peersCancelled", 0) or 0)
     print(f"  [{time.time()-t_drop:3.0f}s] TX={a['state']} peers={a.get('peers')} "
           f"done={a.get('peersDone')} failed={failed} "
           f"bytes={round((a.get('bytes') or 0)/1048576,1)}MB | "
@@ -128,12 +128,12 @@ for i in range(24):                       # 最多观察 120 秒
 print("\n=== 最终 ===", flush=True)
 a = snap(tx); c = snap(r2)
 print(f"  TX: {a['state']} peers={a.get('peers')} peersDone={a.get('peersDone')} "
-      f"peersFailed={a.get('peersFailed')} err={str(a.get('error',''))[:60]}", flush=True)
+      f"peersFailed={a.get('peersFailed')} peersCancelled={a.get('peersCancelled')} err={str(a.get('error',''))[:60]}", flush=True)
 print(f"  R2: {c['state']} {c['done']}/{c['total']} err={str(c.get('error',''))[:60]}", flush=True)
 
 print(flush=True)
 tt.check("发送端看到 2 条独立通道", (a.get("peers") or 0) >= 2, f"peers={a.get('peers')}")
-tt.check("R1 断开被检测到（peersFailed≥1）", (a.get("peersFailed") or 0) >= 1,
+tt.check("R1 断开被检测到（取消或失败）", (a.get("peersFailed") or 0) + (a.get("peersCancelled") or 0) >= 1,
          f"耗时 {detected:.0f}s" if detected else "从未检测到")
 # 两条路径任一都算通过（都实测过）：
 #   快路径（~2s）= 接收方 pagehide 时主动广播 Reject。

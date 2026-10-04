@@ -1,0 +1,117 @@
+[
+  {
+    "label": "Chromium",
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "fileSupport": "function",
+    "modal": false,
+    "fileMessage": "",
+    "errors": []
+  },
+  {
+    "label": "WebKit",
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+    "fileSupport": "undefined",
+    "modal": true,
+    "fileMessage": "需要 Chrome / Edge（依赖文件系统访问 API，才能做到\"边收边写盘、不吃内存\"）。\nFirefox 与 Safari 暂不支持 —— 与其给一个会把内存吃满的降级方案，不如明确不支持。",
+    "errors": []
+  },
+  {
+    "label": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "members": "在线成员（2，含自己）\n用\n用户7895\n56f9eaa6 · 刚刚\n我自己\n用\n用户1907\n2b7a754e\n常驻节点\n常\n常驻节点\n5bcc4ea3 · 提供历史 · 尚未接入",
+    "state": {
+      "theme": "dark",
+      "node": "在线",
+      "phase": "online",
+      "canSend": true,
+      "myId": "2b7a754ea21e726975b65fc404263405b5f32a92892b2b68ff29a821d238e161",
+      "nick": "用户1907",
+      "room": "review-webkit-1791100709694",
+      "joined": "review-webkit-1791100709694",
+      "composerEnabled": true,
+      "peers": "用户7895",
+      "rooms": [
+        "review-webkit-1791100709694"
+      ],
+      "unread": 0,
+      "messages": [
+        "来自WebKit的中文测试 🧪"
+      ],
+      "mine": [
+        "来自Chromium的中文测试 🧪"
+      ],
+      "failed": [],
+      "imgs": 0,
+      "dividers": [
+        "今天"
+      ],
+      "notes": [
+        "已进入「review-webkit-1791100709694」"
+      ],
+      "emptyState": false,
+      "layout": {
+        "winH": 844,
+        "timelineH": 626,
+        "timelineScrollable": false,
+        "composerInViewport": true,
+        "bodyOverflow": "hidden"
+      }
+    }
+  },
+  {
+    "label": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+    "members": "在线成员（2，含自己）\n用\n用户1907\n2b7a754e · 刚刚\n我自己\n用\n用户7895\n56f9eaa6\n常驻节点\n常\n常驻节点\n5bcc4ea3 · 提供历史 · 尚未接入",
+    "state": {
+      "theme": "dark",
+      "node": "在线",
+      "phase": "online",
+      "canSend": true,
+      "myId": "56f9eaa6f36c45920a41e27e0a9344f3d9c307ee76fc093718a4c755d15603e4",
+      "nick": "用户7895",
+      "room": "review-webkit-1791100709694",
+      "joined": "review-webkit-1791100709694",
+      "composerEnabled": true,
+      "peers": "用户1907",
+      "rooms": [
+        "review-webkit-1791100709694"
+      ],
+      "unread": 0,
+      "messages": [
+        "来自Chromium的中文测试 🧪"
+      ],
+      "mine": [
+        "来自WebKit的中文测试 🧪"
+      ],
+      "failed": [],
+      "imgs": 0,
+      "dividers": [
+        "今天"
+      ],
+      "notes": [
+        "已进入「review-webkit-1791100709694」"
+      ],
+      "emptyState": false,
+      "layout": {
+        "winH": 844,
+        "timelineH": 697,
+        "timelineScrollable": false,
+        "composerInViewport": true,
+        "bodyOverflow": "hidden"
+      }
+    }
+  },
+  {
+    "case": "WebKit 接收实际文件邀约",
+    "card": "📄\nfixture.txt\n91 B · 对方发送 · 等待你确认\n✓\n✗",
+    "buttons": [
+      {
+        "text": "✓",
+        "disabled": true
+      },
+      {
+        "text": "✗",
+        "disabled": true
+      }
+    ],
+    "tip": "接收失败：window.showSaveFilePicker is not a function. (In 'window.showSaveFilePicker({ suggestedName: meta.name, startIn: 'downloads', types: meta.mime ? [{ description: ext, accept: { [meta.mime]: [`.${ext}`] } }] : undefined, })', 'window.showSaveFilePicker' is undefined)"
+  }
+]
