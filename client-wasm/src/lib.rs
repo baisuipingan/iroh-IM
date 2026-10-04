@@ -11,6 +11,13 @@ pub mod filetransfer;
 pub mod transfer_orchestrator;
 pub mod node;
 pub mod room;
+/// 历史存储的 SQLite 后端（**仅原生** roomd）。
+///
+/// ⚠️ 必须 `cfg` 掉 wasm：`rusqlite` 是 optional 依赖，只在 `cli` feature 下启用，
+///    而 wasm 构建用的是默认 feature。浏览器端不需要历史存储
+///    （历史由常驻节点提供），所以这里整个模块在 wasm 下不存在。
+#[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+pub mod sqlite_history;
 pub mod sigfmt;
 
 #[cfg(feature = "wasm")]

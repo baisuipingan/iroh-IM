@@ -43,7 +43,10 @@ wasm = [
   "dep:js-sys",
 ]
 # 原生验证客户端：--no-default-features --features cli
-cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time"]
+# 原生验证客户端：--no-default-features --features cli
+#
+# 带上 sqlite —— 历史存储用它（只在原生侧；wasm 端不存历史，见 room.rs 的 HistoryStore）
+cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "dep:rusqlite"]
 
 [dependencies]
 anyhow = "1"
@@ -61,6 +64,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 历史存储（只在原生 roomd 侧启用；`bundled` = 内置 SQLite 源码一起编译并静态链接，
+# 运行时容器里不需要任何 SQLite 库。SQLite 是 public domain。）
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 
 console_error_panic_hook = { version = "0.1", optional = true }
 getrandom = { version = "0.3", optional = true }
