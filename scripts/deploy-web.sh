@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# 把前端站点发布到 Cloudflare（Worker + Static Assets，自定义域名 im.editor.vip）。
+# 把前端站点发布到 Cloudflare（Worker + Static Assets）。
+# **自定义域名以 wrangler.toml 的 routes 为准**，本脚本不写死域名
+# （写死过一次：换域名后提示信息与实际部署的域名不一致）。
 #
 # 干什么：
 #   1) 从 frontend/ 生成一份干净的部署目录 dist/site/（排除仅供本地调试的 probe*）
@@ -138,6 +140,8 @@ echo "    使用 wrangler: $WRANGLER_BIN"
 "$WRANGLER_BIN" deploy
 
 echo
-echo "==> 完成。自定义域名：https://im.editor.vip"
+# 域名从 wrangler.toml 的 routes 里读，避免脚本里的提示与实际部署不一致
+DOMAINS=$(grep -oE 'pattern *= *"[^"]+"' "$ROOT/wrangler.toml" | sed 's/.*"\(.*\)"/\1/' | paste -sd, - | sed 's/,/, /g')
+echo "==> 完成。自定义域名：${DOMAINS:-（wrangler.toml 里没有 routes）}"
 echo "    （首次绑定证书签发通常 1~2 分钟，稍等再访问）"
 echo "    代理日志：/tmp/cf-dns-proxy.log"

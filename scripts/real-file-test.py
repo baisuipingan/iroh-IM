@@ -48,7 +48,7 @@ def main() -> int:
     print(f"== 真实文件 {FILE}：取前 {size/1024/1024:.0f} MB ==", flush=True)
 
     ROOM = "real1"
-    URL = f"https://im.editor.vip/?autostart=1&room={ROOM}&testid=1"
+    URL = f"https://im.pinkstar.cc/?autostart=1&room={ROOM}&testid=1"
 
     # ---------- 香港端：接收，写 OPFS（真磁盘） ----------
     tt.CDP = HK
@@ -94,7 +94,7 @@ def main() -> int:
     # ---------- Mac 端：发送真实数据 ----------
     tt.CDP = MAC
     for t in tt.http_json(MAC + "/json/list"):
-        if t["type"] == "page" and ("im.editor.vip" in t.get("url", "") or "8099" in t.get("url", "")):
+        if t["type"] == "page" and ("im.pinkstar.cc" in t.get("url", "") or "8099" in t.get("url", "")):
             tt.close_tab(t["id"])
     time.sleep(1)
     mac_tab = tt.open_tab(URL)

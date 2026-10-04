@@ -23,7 +23,7 @@ bash scripts/build-wasm.sh native              # → dist/roomd
 #   （按 deploy/roomd/README.md 上传 + docker compose up -d --build + 验证容器内二进制）
 
 bash scripts/build-wasm.sh release             # → frontend/pkg（必须 release，见 §2）
-bash scripts/deploy-web.sh                     # → dist/site + 发布到 im.editor.vip
+bash scripts/deploy-web.sh                     # → dist/site + 发布到 im.pinkstar.cc
 
 # 4) 验证线上（见 §6）
 ```
@@ -34,7 +34,7 @@ bash scripts/deploy-web.sh                     # → dist/site + 发布到 im.ed
 
 | | roomd（常驻节点） | 前端（浏览器站点） |
 |---|---|---|
-| 跑在哪 | 服务器 Docker：`root@189.24.68.147:15601`（key `~/Desktop/ssh/mindcrew/codex`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://im.editor.vip` |
+| 跑在哪 | 服务器 Docker：`root@189.24.68.147:15601`（key `~/Desktop/ssh/mindcrew/codex`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://im.pinkstar.cc` |
 | 构建 | `bash scripts/build-wasm.sh native` → `dist/roomd` | `bash scripts/build-wasm.sh release` → `frontend/pkg`，再 `bash scripts/deploy-web.sh` |
 | 数据 | `/opt/iroh/roomd/data`（`identity.key` + `history/`） | 无（状态在浏览器 localStorage / IndexedDB） |
 | 细节文档 | `deploy/roomd/README.md` | `scripts/deploy-web.sh` 头部注释 |
@@ -133,6 +133,54 @@ iroh 会按最近 5 分钟延迟自动选 home relay，所以"不同人落在不
 ⚠️ 注意 iroh 的选路有随机性：同一份配置、同一台机器，实测会分别落到 `eu-1` / `hk-1` / `fr-1`
 （按当时的延迟测量结果）。所以"谁在哪台"不固定，同一个人刷新后也可能换台 —— 排查时别假设。
 
+## 3c. ⚠️ 两个域名不是一回事，别一起改
+
+| 域名 | 属于 | 能不能换 |
+|---|---|---|
+| `im.pinkstar.cc` | **前端站点**（Cloudflare Worker 的自定义域名） | 能 —— 改 `wrangler.toml` 的 `routes` 重新部署即可 |
+| `iroh1/2/3.editor.vip` | **中继**（relay，`15443/tcp`，另一套独立基础设施） | **不能随手改** —— 中继换域名要同时改中继配置、证书、防火墙、`relay-config.json` 与 roomd 的 `ROOMD_RELAYS`，漏一处就全网连不上 |
+
+前端站点与中继**只是碰巧都用过 editor.vip 这个域名**，两套是完全独立的。
+
+### 换前端域名（历史只做过一次，2026-10-04 从 `im.editor.vip` → `im.pinkstar.cc`）
+
+**顺序：先并存、验证通过、再摘旧的。** 直接替换的话，新域名证书签发要 1~2 分钟，
+这期间站点不可访问。
+
+```bash
+# 1) 前提：新域名必须已加进**同一个 Cloudflare 账号**并 active。
+#    验证方法（用 wrangler 的 OAuth 凭据查 zone，别把 token 打印出来）：
+#    GET https://api.cloudflare.com/client/v4/zones?per_page=50
+
+# 2) wrangler.toml 里**同时保留**新旧两条 route：
+#    routes = [
+#      { pattern = "im新域名", custom_domain = true },
+#      { pattern = "im旧域名", custom_domain = true },
+#    ]
+bash scripts/deploy-web.sh
+
+# 3) 确认新域名真的通了（在**构建机**上验，本机 curl 会被沙箱代理做 TLS 中间人）：
+#    curl -s -o /dev/null -w 'http=%{http_code} ssl=%{ssl_verify_result}\n' https://im新域名/
+#    ssl=0 表示证书校验通过；http=200 表示站点正常
+
+# 4) 再从 wrangler.toml 里删掉旧的那条，再部署一次
+
+# 5) 更新引用：README.md、docs/deploy.md、scripts/real-file-test.py、/tmp 下的 e2e 脚本
+```
+
+**别漏的两处**：
+- `/tmp/bu-e2e2.sh` 之类的**临时测试脚本**写死了域名（它们不在版本库里，改起来容易忘）；
+  漏了它，下次跑线上回归会打到一个已经解绑的域名上，表现为页面加载不出来、
+  `window.__state is not a function`（本次就踩了）。
+- 带日期的历史文档（`docs/*-2026-*.md`）**不要改** —— 它们记录的是当时的事实。
+
+### 换中继域名（另说）
+
+涉及中继配置、证书（`deploy/relay/cert-sync.sh`）、防火墙端口、
+`frontend/relay-config.json` 的 `relays[].url` 与 `anchor.relay`、
+以及 roomd 的 `ROOMD_RELAYS`。**任何一处不一致都会导致部分客户端连不上**，
+务必按 §6 用两台中继做灰度。没做过，做之前先补文档。
+
 ## 4. 协议版本变更（破坏性，慎重）
 
 签名载荷带协议版本（`v4` / `p4` / `l4` / `q3` / `f3` …）。**改签名载荷 = bump 版本**，
@@ -185,7 +233,7 @@ iroh 会按最近 5 分钟延迟自动选 home relay，所以"不同人落在不
 for f in js/net.js js/ui/sidebar.js css/components.css pkg/iroh_web_bg.wasm; do
   printf "%s  %s\n" "$(shasum -a 256 dist/site/$f | cut -d' ' -f1)" "$f"
 done > /tmp/local.txt
-ssh root@<host> "for f in <同样的列表>; do h=\$(curl -s https://im.editor.vip/\$f | sha256sum | cut -d' ' -f1); echo \"\$h  \$f\"; done" > /tmp/remote.txt
+ssh root@<host> "for f in <同样的列表>; do h=\$(curl -s https://im.pinkstar.cc/\$f | sha256sum | cut -d' ' -f1); echo \"\$h  \$f\"; done" > /tmp/remote.txt
 # 逐行比对
 ```
 
@@ -198,7 +246,7 @@ ssh root@<host> "for f in <同样的列表>; do h=\$(curl -s https://im.editor.v
 
 ```bash
 bash scripts/e2e/run.sh                 # 本地（前置见 scripts/e2e/README.md）
-E2E_SITE=https://im.editor.vip <某个用例>  # 直接打线上（静态资源一致时等价）
+E2E_SITE=https://im.pinkstar.cc <某个用例>  # 直接打线上（静态资源一致时等价）
 ```
 
 ---

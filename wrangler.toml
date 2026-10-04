@@ -19,4 +19,13 @@ workers_dev = false
 assets = { directory = "dist/site" }
 
 # custom_domain = true → wrangler 自动建 DNS + 证书，不用去控制台手动加解析
-routes = [{ pattern = "im.editor.vip", custom_domain = true }]
+#
+# ⚠️ 换域名时的正确顺序：**先并存、验证通了、再摘旧的**。
+#    新域名的证书要 1~2 分钟签发，先并存能保证这期间站点一直可访问。
+#    （2026-10-04 从 im.editor.vip 迁到 im.pinkstar.cc 就是照这个顺序做的：
+#     先两条 route 一起部署 → 确认新域名 200 + 证书有效 → 再删掉旧的那条。）
+#
+# 域名变更史：
+#   2026-09-29 ~ 2026-10-04  im.editor.vip（cloudflare-skills 那个仓库的临时域名）
+#   2026-10-04 ~             im.pinkstar.cc（用户自购）
+routes = [{ pattern = "im.pinkstar.cc", custom_domain = true }]

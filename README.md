@@ -11,7 +11,7 @@
 
 | 组件 | 是什么 | 在哪 |
 |---|---|---|
-| **前端** | 纯静态站点 + Rust→WASM 客户端（浏览器里跑一个 iroh endpoint） | Cloudflare Worker → `https://im.editor.vip` |
+| **前端** | 纯静态站点 + Rust→WASM 客户端（浏览器里跑一个 iroh endpoint） | Cloudflare Worker → `https://im.pinkstar.cc` |
 | **中继（relay）** | 转发加密流量。看不到内容，也做不到历史 | 自建，`15443/tcp` + `7842/udp` |
 | **常驻节点（roomd）** | 房间锚点：提供**历史消息**和在线状态，让新进房的人有东西可看 | 服务器 Docker，`/opt/iroh/roomd` |
 
