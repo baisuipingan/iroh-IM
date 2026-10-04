@@ -24,6 +24,7 @@ bash scripts/e2e/run.sh room-isolation  # 单个
 | **room-isolation** | 本目录 | **文件清单按房间隔离**（切房后不再声明旧房间的 file_id） |
 | **card-revive** | 本目录 | **重发邀约让"已失效"卡片复活**（DOM 按钮回到 ✓/✗） |
 | **sidebar-pages** | 本目录 | **状态页/设置页**：中继行不叠字、不横向溢出、身份分组显示、中继计数自洽、资料卡「复制」按钮真绑定、标题未读数开关真生效 |
+| **relay-enabled** | 本目录 | 配置里的 `enabled: false` **真的排除中继**（状态页标「已禁用」、探测跳过它、全部禁用时启动被拦下） |
 
 > 加粗的三个是后加的（分别验证"历史存储资源上限 + 房间隔离 + F15"、
 > "状态页/设置页的布局与控件接线"）。
@@ -38,6 +39,11 @@ bash scripts/e2e/run.sh room-isolation  # 单个
    表现为 `peers=1` 之类。**清浏览器存储治不了这个**（污染在服务端）。
    踩过：`refresh` 写死 `rf9` 时 4 项全挂，换新房名立刻 4/4。
 2. **本机端口要清代理**（`run.sh` 已处理），否则被沙箱代理拦成 502。
-3. **剪贴板在 headless 下默认被拒**：`sidebar-pages` 会用
+3. **`relay-enabled` 会临时改写 `frontend/relay-config.json`**（dev 服务直接读该目录），
+   用 `try/finally` 保证还原。它是唯一会动磁盘文件的用例 —— 跑之前建议先 `git status` 确认干净。
+4. **`close_tab` 之后不能再读页面**：关掉标签，CDP 会话随之关闭，
+   后续 `P.ev(...)` 会报 `ConnectionError: 连接关闭`（会被误判成"环境不稳"）。
+   所有要读的数据都必须在 `close_tab` 之前取完。
+5. **剪贴板在 headless 下默认被拒**：`sidebar-pages` 会用
    `Browser.grantPermissions` 授权 `clipboardReadWrite`，否则「复制」只能验证到
    "有反馈"、验证不了"复制成功"。

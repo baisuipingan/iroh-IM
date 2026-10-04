@@ -21,19 +21,29 @@ CLEAN=(-u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy)
 export NO_PROXY=127.0.0.1,localhost
 
 # 用例：脚本名 → 说明
+# 每个用例的**完整输出**都落一份日志 —— 只打一行结果的话，失败时没法诊断
+# （踩过：套件里某个用例偶发 CRASH，只看到"CRASH"却无处看详情）。
+LOG_DIR="${E2E_LOG_DIR:-/tmp/e2e-logs}"
+
+SUMMARY_PY='import sys
+lines = open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+total = next((l.strip() for l in reversed(lines) if l.startswith("总计")), "")
+if total:
+    print(total); sys.exit(0)
+err = [l for l in lines if l.startswith(("Traceback", "TimeoutError", "urllib", "  File"))]
+print("CRASH  " + sys.argv[1])
+for l in err[-3:]:
+    print("    " + l.strip()[:150])'
+
 run_case() {            # <显示名> <脚本路径>
   local name="$1" file="$2"
   [ -f "$file" ] || { printf "%-18s (脚本不存在: %s)\n" "$name" "$file"; return 0; }
   env "${CLEAN[@]}" "$PY" scripts/e2e/clear-storage.py >/dev/null 2>&1
+  mkdir -p "$LOG_DIR"
+  local log="$LOG_DIR/$name.log"
+  env "${CLEAN[@]}" "$PY" "$file" > "$log" 2>&1
   printf "%-18s " "$name"
-  env "${CLEAN[@]}" "$PY" "$file" 2>&1 | "$PY" -c "
-import sys
-last=''
-for line in sys.stdin:
-    if line.startswith('总计'): last=line.rstrip()
-    elif 'Traceback' in line: last='CRASH（见完整输出）'
-print(last or '(无结果)')
-"
+  "$PY" -c "$SUMMARY_PY" "$log"
 }
 
 if [ "$#" -gt 0 ]; then
@@ -56,3 +66,4 @@ run_case "leave-cancel"    scripts/e2e/leave-cancel.py
 run_case "room-isolation"  scripts/e2e/room-isolation.py
 run_case "card-revive"     scripts/e2e/card-revive.py
 run_case "sidebar-pages"   scripts/e2e/sidebar-pages.py
+run_case "relay-enabled"   scripts/e2e/relay-enabled.py   # ⚠️ 会临时改 relay-config.json（自动还原）

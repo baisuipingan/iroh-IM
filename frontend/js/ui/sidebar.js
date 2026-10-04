@@ -273,12 +273,21 @@ export const sidebar = {
     const anchorId = net.config?.anchor?.id || '';
     const list = this.peers.filter((p) => hit(p.nickname) && p.id !== anchorId);
     const anchor = anchorId ? this.peers.find((p) => p.id === anchorId) : null;
+    // ⚠️ 别写「未连接」。
+    //    常驻节点不是一直挂在这个房间里 —— 它是**被拉历史时**才订阅的，
+    //    进来后要等它下一轮 presence 心跳（15 秒一轮）才看得到。
+    //    所以刚进房那十几秒显示"未连接"，用户会以为它坏了。
+    //    实测：进房后约 15 秒出现。措辞改成中性的「尚未接入」并给出预期。
     const anchorRow = anchorId
-      ? `<div class="peer">
+      ? `<div class="peer" title="${
+          anchor
+            ? '常驻节点在线，可提供这个房间的历史消息'
+            : '常驻节点不是一直挂在这里：它是被拉历史时才订阅的，通常 10~15 秒内接入。\\n（这一段是它的心跳周期，不是故障。）'
+        }">
            ${avatar('常驻节点', 'avatar--sm')}
            <div class="peer__body">
              <span class="peer__name">常驻节点</span>
-             <span class="peer__sub">${U.shortId(anchorId)} · 提供历史${anchor ? '' : ' · 未连接'}</span>
+             <span class="peer__sub">${U.shortId(anchorId)} · 提供历史${anchor ? '' : ' · 尚未接入'}</span>
            </div>
          </div>`
       : `<div class="empty">未配置常驻节点</div>`;
@@ -346,6 +355,9 @@ export const sidebar = {
         url: c.url,
         connected: statusByUrl.get(key)?.connected,
         probe: probeByUrl.get(key),
+        // 配置里 `enabled: false` 的中继**不会**被交给内核，
+        // 所以它既不会连接也谈不上"未使用"——如实标成已禁用。
+        enabled: c.enabled !== false,
       });
       seen.add(key);
     }
@@ -369,12 +381,17 @@ export const sidebar = {
     //    所以"运行时没提它" ≠ "它坏了"（探测可能明明可达）—— 只是**没在用**。
     //    写"未知"会让人以为出问题了，写"未连接"更是错的。
     const relayState = (it) => {
+      if (it.enabled === false) return '已禁用';
       if (it.connected === true) return '在用';
       if (it.connected === false) return '连接失败';
       return '未使用';
     };
     const relayTip = (it) => {
       const lines = [it.url];
+      if (it.enabled === false) {
+        lines.push('配置里已禁用（enabled: false）—— 不会参与选路');
+        return lines.join('\n');
+      }
       if (it.connected === false) lines.push('连接失败');
       else if (it.connected == null) lines.push('当前不是这台在用（浏览器版同一时刻只挂一台 home 中继）');
       if (it.probe && !it.probe.ok) lines.push(`探测不可达${it.probe.error ? `：${it.probe.error}` : ''}`);
@@ -423,11 +440,23 @@ export const sidebar = {
                 (it) => `
                 <div class="relay" title="${U.esc(relayTip(it))}">
                   <i class="relay__dot ${
-                    it.connected === true ? 'is-ok' : it.connected === false ? 'is-bad' : ''
+                    it.enabled === false
+                      ? ''
+                      : it.connected === true
+                        ? 'is-ok'
+                        : it.connected === false
+                          ? 'is-bad'
+                          : ''
                   }"></i>
                   <span class="relay__id">${U.esc(it.id)}</span>
                   <span class="relay__state ${
-                    it.connected === true ? 'is-ok' : it.connected === false ? 'is-bad' : ''
+                    it.enabled === false
+                      ? 'is-off'
+                      : it.connected === true
+                        ? 'is-ok'
+                        : it.connected === false
+                          ? 'is-bad'
+                          : ''
                   }">${relayState(it)}</span>
                   <span class="relay__rtt">${rttOf(it.probe)}</span>
                 </div>`,

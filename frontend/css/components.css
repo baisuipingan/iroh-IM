@@ -329,6 +329,9 @@ select:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
 .relay__state { flex: 1 1 auto; min-width: 0; color: var(--fg-faint); font-size: var(--fs-xs); }
 .relay__state.is-ok { color: var(--c-ok); }
 .relay__state.is-bad { color: var(--c-bad); }
+/* 配置里被禁用的中继：整行压淡，别让它看起来是个可用选项 */
+.relay__state.is-off { color: var(--fg-faint); }
+.relay:has(.relay__state.is-off) .relay__id { color: var(--fg-faint); }
 .relay__rtt {
   flex: none;
   font-family: ui-monospace, Menlo, monospace;

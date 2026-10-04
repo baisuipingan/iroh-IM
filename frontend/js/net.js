@@ -182,12 +182,23 @@ export const net = {
             .join('')
         : store.identity();
 
+    // ⚠️ 必须在这里过滤 `enabled: false`。
+    //    原来直接把全部 url 丢给 Rust，而 **Rust 侧根本没有 enabled 这个概念** ——
+    //    于是配置里把某台标成 `false` 只影响「延迟探测」的显示，
+    //    实际连接时它照样是候选、照样可能被选成 home relay。
+    //    一个看起来像开关、实际不生效的字段比没有更糟。
+    //    （`probe.js` 的 probeAll 一直是按 `enabled !== false` 过滤的，这里对齐它。）
+    const usableRelays = this.config.relays.filter((r) => r.enabled !== false);
+    if (!usableRelays.length) {
+      throw new Error('relay-config.json 里所有中继都被禁用了（enabled: false），至少留一台');
+    }
+
     this.client.post({
       type: 'boot',
       cfg: {
         baseUrl: new URL('../', import.meta.url).href,
         build: BUILD,
-        relays: this.config.relays.map((r) => r.url),
+        relays: usableRelays.map((r) => r.url),
         relayToken: this.config.relay_token ?? null,
         secretKeyHex,
         anchorId: this.config.anchor?.id ?? null,
