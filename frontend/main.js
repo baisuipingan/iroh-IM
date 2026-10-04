@@ -47,6 +47,14 @@ let pendingRoom = '';
 /** 进房期间用户又点了的房间（等当前这次结束后接着开） */
 let queuedRoom = '';
 
+function syncMyIdentity() {
+  const id = net.endpoint_id();
+  if (!id) return;
+  myId = id;
+  if (timeline.room) timeline.me = id;
+  $('rail-me').title = `${store.nick()}\n${id}`;
+}
+
 /* ------------------------------------------------------------------ 进房间 */
 
 async function openRoom(room) {
@@ -198,6 +206,7 @@ function wire() {
   bus.on(EV.ROOM_OPEN, (room) => openRoom(room));
 
   bus.on(EV.NODE_STATE, ({ ok, text, waiting }) => {
+    syncMyIdentity();
     const pill = $('node-pill');
     // 三态：连接中 / 在线 / 失败。之前只有 ok/bad 两种，"启动中"和"已断开"
     // 长得一模一样，用户分不清是在加载还是挂了。
@@ -380,14 +389,13 @@ async function main() {
     wire();
 
     await net.start();
-    myId = net.endpoint_id();
+    syncMyIdentity();
     fileTransfer.init();
     // 恢复"上次没收完的接收"（刷新/关页面后仍能看到卡片并继续）
     // 放在进房之后调，因为卡片要挂到时间线上
     if (!canTransferFiles()) {
       console.info('[filetransfer] 当前浏览器不支持发文件（需要 Chrome / Edge）');
     }
-    $('rail-me').title = `${store.nick()}\n${myId}`;
     sidebar.show('chats');
     sidebar.paintBadge();
     const storageWarning = () => dialog.info('临时存储模式', '浏览器存储不可用或已满。本次操作仅保存在当前页面，刷新后新身份、草稿和设置可能丢失。请释放浏览器空间或允许网站存储后重新打开。');

@@ -309,6 +309,7 @@ export const timeline = {
 
     const el = document.createElement('div');
     el.className = 'msg msg--file';
+    if (direction === 'send') el.classList.add('msg--me');
     el.dataset.fileId = meta.file_id;
     if (room) el.dataset.room = room;
     // 记下方向：按钮要按方向给（接收卡片不能出现"重新发送"）

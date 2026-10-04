@@ -8,6 +8,7 @@ bash scripts/e2e/run.sh                 # 全部
 bash scripts/e2e/run.sh room-isolation  # 单个
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/fix-review.mjs
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/image-layout.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/message-ownership.mjs
 ```
 
 `fix-review.mjs` 启动独立 Chrome/WebKit 进程，覆盖超限报文后的健康通信、同身份连续刷新、
@@ -23,6 +24,9 @@ Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
 覆盖发送/接收、深浅主题和320px/桌面布局，验证比例、容器边界、底栏不重叠、
 未接收占位、预览释放及放大查看。图片卡片布局通过本地blob注入，不模拟网络接收；
 真实P2P图片接收仍由`fix-review.mjs`覆盖。
+
+`message-ownership.mjs` 在Chrome/WebKit里复现刷新时节点启动未完成就选房，验证身份先于历史加载、
+自己的历史和新消息靠右、他人消息靠左，以及文件/图片卡片发送和切房重建后的方向。
 
 ## 用例
 
