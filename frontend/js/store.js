@@ -90,8 +90,16 @@ export const store = {
   },
 
   /* ---------- 主题 ---------- */
+  //
+  // 三个取值：`'auto'`（跟随系统，默认）/ `'dark'` / `'light'`。
+  //
+  // ⚠️ 默认值必须是 `'auto'` —— 原来是 `'dark'`，等于把"深色"当默认，
+  //    与用户系统设置无关。改成 auto 后，白天用浅色系统的人打开就是浅色。
+  // ⚠️ 这个 key（`iroh.theme`）在 `index.html` 的内联脚本里也读了一次
+  //    （为了在首帧前定主题），改 key 要两处一起改。
   theme() {
-    return getValue(KEYS.theme) || 'dark';
+    const v = getValue(KEYS.theme);
+    return v === 'dark' || v === 'light' || v === 'auto' ? v : 'auto';
   },
   setTheme(v) {
     setValue(KEYS.theme, v);

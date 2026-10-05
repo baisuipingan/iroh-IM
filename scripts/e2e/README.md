@@ -9,6 +9,8 @@ bash scripts/e2e/run.sh room-isolation  # 单个
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/fix-review.mjs
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/image-layout.mjs
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/message-ownership.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/roomd-storage.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/history-scroll.mjs
 ```
 
 `fix-review.mjs` 启动独立 Chrome/WebKit 进程，覆盖超限报文后的健康通信、同身份连续刷新、
@@ -27,6 +29,12 @@ Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
 
 `message-ownership.mjs` 在Chrome/WebKit里复现刷新时节点启动未完成就选房，验证身份先于历史加载、
 自己的历史和新消息靠右、他人消息靠左，以及文件/图片卡片发送和切房重建后的方向。
+
+`roomd-storage.mjs` 使用三个独立 Chrome 存储和一个 WebKit 用户，覆盖多人互发、晚加入历史、
+64 条消息的跨页读取、排序与归属、刷新恢复。可设置 `E2E_SITE`、`PLAYWRIGHT_MODULE`、`E2E_OUTPUT`。
+设置 `E2E_RESTART=1` 时，脚本在生成 `restart-ready.json` 后等待操作员重启 roomd，
+在同一输出目录写入 `restart-complete.json`（内容为 `{"ok":true}`）继续验证新浏览器能读回全部历史、
+重启后新消息仍能持久化。输出目录应为本次运行的独立目录，避免使用上一轮的重启确认文件。
 
 ## 用例
 

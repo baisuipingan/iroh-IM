@@ -1,9 +1,40 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<!-- ⚠️ `data-theme` 由下面的内联脚本**在 CSS 之前**写入。
+     不要在这里硬编码 `data-theme="dark"` —— 那会让首屏**必然先渲染深色**，
+     然后等 JS 跑完再切到浅色（用户看到"闪一下"）。
+     内联脚本是同步阻塞的，所以浏览器还没画第一帧就已经定好了主题。 -->
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>派大星聊天室</title>
+
+  <!-- 主题预置（**必须放在所有 CSS 之前**，也必须是同步内联的）-------
+       干两件事：
+         1. 读出用户的主题偏好（dark / light / auto）
+         2. 在浏览器绘制第一帧之前把 `data-theme` 定下来
+       为什么不能等 main.js：那要加载 wasm，几百毫秒后才会执行 ——
+       这期间页面已经用默认主题画完了，切主题时就会闪。
+       ⚠️ 这里读的 key 必须与 store.js 的 KEYS.theme 保持一致（`iroh.theme`）。 -->
+  <script>
+    (function () {
+      var THEME_KEY = 'iroh.theme';
+      var pref = 'auto';        // 默认跟随系统（老用户读到自己存的值）
+      try {
+        var saved = localStorage.getItem(THEME_KEY);
+        if (saved === 'dark' || saved === 'light' || saved === 'auto') pref = saved;
+      } catch (e) { /* 隐私模式 / 存储被禁 → 用默认 auto */ }
+      var dark = pref === 'dark' ||
+        (pref === 'auto' && window.matchMedia &&
+         window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      // 把偏好也挂到 dataset（便于调试）。
+      // ⚠️ 属性名**不能**叫 `data-theme-pref` —— 设置页里那个 `<select>`
+      //    用的就是这个属性名，`document.querySelector('[data-theme-pref]')`
+      //    会先匹配到 `<html>`（踩过：拿到 HTML 元素当 select 用）。
+      document.documentElement.dataset.themeSetting = pref;
+    })();
+  </script>
 
   <!-- 站点图标（浏览器标签页 / 收藏夹 / 添加到桌面）。
        `logo.png` 是从 `派大星/generated-image-1 (1)_副本.png` 裁边补方后量化的 192×192 版本

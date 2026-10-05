@@ -9,6 +9,7 @@ import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
 import { dialog } from './dialog.js';
+import { theme } from './theme.js';
 import * as U from '../util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -541,6 +542,14 @@ export const sidebar = {
   view_settings() {
     const prefs = store.prefs();
     const dark = document.documentElement.dataset.theme === 'dark';
+    // 主题：偏好（auto/dark/light）与实际生效的主题是两回事 —— 提示里都体现出来
+    const themePref = theme.pref;
+    const themeHint =
+      themePref === 'auto'
+        ? `跟随系统（当前${dark ? '深色' : '浅色'}）`
+        : themePref === 'dark'
+          ? '始终深色'
+          : '始终浅色';
     const myId = net.endpoint_id();
     const usage = store.usage();
 
@@ -611,7 +620,20 @@ export const sidebar = {
 
          <div class="set-group">
            <div class="section-title">外观</div>
-           ${toggle('theme', '深色模式', dark, dark ? '夜间更护眼' : '更接近微信桌面端')}
+           <!-- 主题三选一（原来是"深色模式"开关，只有两态、且默认写死深色）。
+                用 select 而不是开关的原因：**有三个状态**（跟随系统/深色/浅色），
+                开关装不下；而且这一行与下面的「消息密度」同款 UI，更整齐。 -->
+           <div class="set-row set-row--field">
+             <div class="set-row__text">
+               <div class="set-row__label">主题</div>
+               <div class="set-row__hint">${themeHint}</div>
+             </div>
+             <select class="mini-select" data-theme-pref>
+               <option value="auto" ${themePref === 'auto' ? 'selected' : ''}>跟随系统</option>
+               <option value="dark" ${themePref === 'dark' ? 'selected' : ''}>深色</option>
+               <option value="light" ${themePref === 'light' ? 'selected' : ''}>浅色</option>
+             </select>
+           </div>
            <div class="set-row set-row--field">
              <div class="set-row__text">
                <div class="set-row__label">消息密度</div>
@@ -688,6 +710,16 @@ export const sidebar = {
             bus.emit(EV.TIP, '已保存');
           };
         });
+        // 主题单独一条通路：它存在 `iroh.theme`（不是 prefs），
+        // 且要通知 theme 模块重算（可能从 auto 切到固定、或反过来）
+        const themeSelect = root.querySelector('[data-theme-pref]');
+        if (themeSelect) {
+          themeSelect.onchange = () => {
+            theme.apply(themeSelect.value);
+            this.render();   // 重渲染以便把提示文案（"跟随系统（当前深色）"）更新掉
+            bus.emit(EV.TIP, '已保存');
+          };
+        }
       },
     };
   },

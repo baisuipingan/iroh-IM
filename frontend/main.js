@@ -474,6 +474,14 @@ window.__net = net;
 window.__openNewRoom = () => sidebar.newRoom();
 window.__openSettings = () => sidebar.show('settings');
 window.__openTheme = () => theme.toggle();
+// 主题的调试/测试接口：`__theme('auto'|'dark'|'light')` 设偏好，
+// 不带参数则返回当前状态。测试必须能**确定性地设置偏好**，
+// 否则跑出来的主题取决于跑测试那台机器的系统设置。
+window.__theme = (pref) => {
+  if (pref) theme.apply(pref);
+  return { pref: theme.pref, current: theme.current,
+           dataset: document.documentElement.dataset.theme };
+};
 window.__openEmoji = () => $('tb-emoji').click();
 window.__sendText = (t) => {
   $('input').value = t;
