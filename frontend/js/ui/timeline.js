@@ -41,6 +41,7 @@ export const timeline = {
   _syncedMessage: null,
   _oldestMessage: null,
   _filePositions: new Map(),
+  _prepending: false,
 
   init() {
     $('timeline').addEventListener('scroll', () => {
@@ -243,18 +244,22 @@ export const timeline = {
 
   /** 前插一页历史 */
   prependPage(list) {
-    for (const m of list) {
-      this.push(m, m.from === this.me, true);
+    const anchor = this._captureReadingPosition();
+    this._prepending = true;
+    try {
+      for (const m of list) {
+        this.push(m, m.from === this.me, true);
+      }
+    } finally {
+      this._prepending = false;
+      this._restoreReadingPosition(anchor);
     }
   },
 
   _insertMessage(element, message) {
     const inner = $('tl-inner');
-    const viewport = $('timeline');
     const rows = [...inner.querySelectorAll('.msg[data-ts]')];
-    const anchor = this.atBottom ? null : rows.find((row) =>
-      row.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top);
-    const anchorTop = anchor?.getBoundingClientRect().top;
+    const anchor = this._prepending ? null : this._captureReadingPosition();
     element.dataset.ts = String(message.ts);
     element.dataset.id = String(message.id || '');
     const next = rows.find((row) => row !== element && compareMessages(message, row.dataset) < 0);
@@ -274,7 +279,7 @@ export const timeline = {
     }
     this.lastTs = previous?.ts || 0;
     this.lastDayKey = previous?.dayKey || '';
-    if (anchor?.isConnected) viewport.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+    this._restoreReadingPosition(anchor);
   },
 
   /** 文件邀约卡片：文件名 / 大小 / ✓ ✗ 按钮 / 进度条 */
@@ -850,6 +855,24 @@ export const timeline = {
 
   /* ------------------------------------------------------------------ 滚动 */
 
+  _captureReadingPosition() {
+    if (this.atBottom) return null;
+    const viewport = $('timeline');
+    const bounds = viewport.getBoundingClientRect();
+    const visible = [...$('tl-inner').querySelectorAll('.msg[data-ts]')].filter(row => {
+      const rect = row.getBoundingClientRect();
+      return rect.bottom > bounds.top && rect.top < bounds.bottom;
+    });
+    const element = visible.find(row => row.getBoundingClientRect().top >= bounds.top) || visible[0];
+    return element ? { element, offset: element.getBoundingClientRect().top - bounds.top } : null;
+  },
+
+  _restoreReadingPosition(anchor) {
+    if (!anchor?.element.isConnected) return;
+    const viewport = $('timeline');
+    viewport.scrollTop += anchor.element.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.offset;
+  },
+
   scrollBottom() {
     const el = $('timeline');
     el.scrollTop = el.scrollHeight;
@@ -866,18 +889,25 @@ export const timeline = {
     if (this.loading || this.reachStart || !this.room || !this.oldestCursor) return;
     this.loading = true;
     const hint = $('tl-hint');
+    const initialAnchor = this._captureReadingPosition();
     hint.style.display = 'block';
     hint.textContent = '正在加载更早的消息…';
+    this._restoreReadingPosition(initialAnchor);
     const generation = this._generation;
+    let responseAnchor;
     try {
       const room = this.room;
       const list = await net.history(room, PAGE, this.oldestCursor);
       if (this._generation !== generation) return;
+      responseAnchor = this._captureReadingPosition();
       if (!list.length) {
         this.reachStart = true;
         hint.textContent = '没有更早的消息了';
         setTimeout(() => {
+          if (this._generation !== generation) return;
+          const anchor = this._captureReadingPosition();
           hint.style.display = 'none';
+          this._restoreReadingPosition(anchor);
         }, 1500);
       } else {
         const cursorBefore = this.oldestCursor;
@@ -893,9 +923,13 @@ export const timeline = {
       }
     } catch (e) {
       if (this._generation !== generation) return;
+      responseAnchor = this._captureReadingPosition();
       hint.textContent = `加载失败：${e?.message ?? e}（滚动可重试）`;
     } finally {
-      if (this._generation === generation) this.loading = false;
+      if (this._generation === generation) {
+        this._restoreReadingPosition(responseAnchor);
+        this.loading = false;
+      }
     }
   },
 

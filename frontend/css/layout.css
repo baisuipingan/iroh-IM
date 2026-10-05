@@ -90,6 +90,7 @@ body {
   overflow-x: hidden;
   overscroll-behavior: contain;      /* 滚到头不要带动外层 */
   scroll-behavior: auto;             /* 自己控制滚动时机，别用平滑 */
+  overflow-anchor: none;
 }
 
 .composer { flex: none; }

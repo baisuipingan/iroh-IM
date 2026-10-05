@@ -49,28 +49,28 @@ fn main() {
     let mut cloned = original.clone();
     cloned.id = "replacement-id".to_string();
     check!("改 id 后**验签失败**", !cloned.verify(ROOM));
-    let memory = HistoryStore::new(None);
+    let memory = HistoryStore::new(None).unwrap();
     memory.append(ROOM, original.clone());
     memory.append(ROOM, cloned);
-    check!("历史里只有 1 条（重放被去重挡下）", memory.count(ROOM) == 1);
+    check!("历史里只有 1 条（重放被去重挡下）", memory.count(ROOM).unwrap() == 1);
 
     // ── 攻击 3：房间名落盘冲突 ────────────────────────────────────
     println!("\n【攻击 3】房间名映射不可逆：team_a / 研发群 / 产品群 是否互相混");
     let root = std::path::PathBuf::from(format!("/tmp/iroh-attack-verify-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     {
-        let persisted = HistoryStore::new(Some(root.clone()));
+        let persisted = HistoryStore::new(Some(root.clone())).unwrap();
         persisted.append("team_a", message(&author, "Alice", "underscore-only", 1, "team_a"));
         persisted.append("研发群", message(&author, "Alice", "engineering-only", 2, "研发群"));
         persisted.append("产品群", message(&author, "Alice", "product-only", 3, "产品群"));
     }
-    let loaded = HistoryStore::new(Some(root.clone()));
+    let loaded = HistoryStore::new(Some(root.clone())).unwrap();
     loaded.load_from_disk();
-    check!("team_a 的历史**还在自己房里**（没被改成 team-a）", loaded.count("team_a") == 1);
-    check!("不存在伪造的 team-a 房间", loaded.count("team-a") == 0);
-    check!("研发群 的历史在自己的房里", loaded.count("研发群") == 1);
-    check!("产品群 的历史在自己的房里", loaded.count("产品群") == 1);
-    check!("不存在混合房间 ---", loaded.count("---") == 0);
+    check!("team_a 的历史**还在自己房里**（没被改成 team-a）", loaded.count("team_a").unwrap() == 1);
+    check!("不存在伪造的 team-a 房间", loaded.count("team-a").unwrap() == 0);
+    check!("研发群 的历史在自己的房里", loaded.count("研发群").unwrap() == 1);
+    check!("产品群 的历史在自己的房里", loaded.count("产品群").unwrap() == 1);
+    check!("不存在混合房间 ---", loaded.count("---").unwrap() == 0);
     let _ = std::fs::remove_dir_all(&root);
 
     // ── 攻击 4：Invite 的 sender 与 ts 被改 ───────────────────────
@@ -96,19 +96,19 @@ fn main() {
 
     // ── 攻击 5：同一毫秒 51 条消息翻页漏最后一条 ──────────────────
     println!("\n【攻击 5】同一毫秒 51 条消息，翻页是否会漏掉第 51 条");
-    let paged = HistoryStore::new(None);
+    let paged = HistoryStore::new(None).unwrap();
     for index in 0..51u32 {
         paged.append(
             "burst",
             message(&author, "Alice", &format!("burst-{index}"), 123, "burst"),
         );
     }
-    let latest = paged.recent_before("burst", None, 50);
+    let latest = paged.recent_before("burst", None, 50).unwrap();
     check!("首页拿到 50 条", latest.len() == 50);
     let oldest = latest.first().expect("首页不该为空");
     // 新游标是 (ts, id)；改用复合游标继续翻
     let cursor = (oldest.ts, oldest.id.clone());
-    let next = paged.recent_before("burst", Some(cursor), 50);
+    let next = paged.recent_before("burst", Some(cursor), 50).unwrap();
     check!("用 (ts,id) 游标翻页能拿到剩下的 1 条（不再漏）", next.len() == 1);
 
     // ── 攻击 6：Presence 文件清单分隔符歧义 ───────────────────────

@@ -199,7 +199,7 @@ impl ChatMessage {
 
     pub fn verify(&self, room: &str) -> bool {
         // id 必须与载荷一致，否则"签名有效"但 id 是被人换过的
-        if !self.id_matches(room) {
+        if self.ts > i64::MAX as u64 || !self.id_matches(room) {
             return false;
         }
         let Ok(pk) = PublicKey::from_str(&self.from) else {
@@ -902,8 +902,9 @@ fn valid_history_room(room: &str) -> bool {
 
 fn valid_history_request(request: &HistoryRequest) -> bool {
     valid_history_room(&request.room)
-        && request.before.as_ref().is_none_or(|(_, id)| {
-            !id.is_empty()
+        && request.before.as_ref().is_none_or(|(timestamp, id)| {
+            *timestamp <= i64::MAX as u64
+                && !id.is_empty()
                 && id.len() <= MAX_HISTORY_CURSOR_ID_BYTES
                 && !id.chars().any(char::is_control)
         })
@@ -923,10 +924,10 @@ fn valid_history_request(request: &HistoryRequest) -> bool {
 #[derive(Clone, Default)]
 pub struct HistoryStore {
     dir: Option<std::path::PathBuf>,
-    /// 原生：SQLite 连接（`None` = 打开失败，降级为内存）
+    /// 原生：SQLite 连接（`None` = 显式选择内存存储）
     #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
     db: Option<Arc<Mutex<crate::sqlite_history::SqliteHistory>>>,
-    /// wasm（以及原生降级时）：内存后端
+    /// wasm（以及显式选择临时存储的原生客户端）：内存后端
     mem: Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>,
     /// 内存分支的写锁（原生走 SQLite 时不需要）
     append_lock: Arc<Mutex<()>>,
@@ -942,32 +943,29 @@ impl std::fmt::Debug for HistoryStore {
 }
 
 impl HistoryStore {
-    pub fn new(dir: Option<std::path::PathBuf>) -> Self {
+    pub fn new(dir: Option<std::path::PathBuf>) -> Result<Self> {
         // ⚠️ 只有"原生 + 给了目录"才用 SQLite。浏览器传 `None`，走内存分支。
         #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
         let db = match &dir {
-            Some(d) => match crate::sqlite_history::SqliteHistory::open(&d.join("history.db")) {
-                Ok(h) => {
-                    info!("历史存储：SQLite（{}/history.db）", d.display());
-                    Some(Arc::new(Mutex::new(h)))
-                }
-                Err(e) => {
-                    // 打开失败就退回内存：历史功能降级，但**不影响聊天本身**
-                    // （roomd 的核心职责是转发与快照，历史只是增强）。
-                    warn!("打开历史数据库失败，本次运行降级为内存存储：{e}");
-                    None
-                }
-            },
+            Some(directory) => {
+                let history = crate::sqlite_history::SqliteHistory::open(&directory.join("history.db"))
+                    .with_context(|| format!("打开历史数据库失败：{}/history.db", directory.display()))?;
+                info!("历史存储：SQLite（{}/history.db）", directory.display());
+                Some(Arc::new(Mutex::new(history)))
+            }
             None => None,
         };
 
-        Self {
+        #[cfg(not(all(not(target_arch = "wasm32"), feature = "cli")))]
+        anyhow::ensure!(dir.is_none(), "当前构建不支持持久化历史，请启用 cli feature");
+
+        Ok(Self {
             dir,
             #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
             db,
             mem: Arc::new(Mutex::new(HashMap::new())),
             append_lock: Arc::new(Mutex::new(())),
-        }
+        })
     }
 
     /// 追加一条消息到历史（内存 + 落盘）。
@@ -1016,8 +1014,6 @@ impl HistoryStore {
             };
         }
 
-        // ---- wasm（或原生降级）：内存 ----
-        let _message_bytes = encoded.len() as u64 + 1;
         {
             let mut map = self.mem.lock().unwrap();
             let list = map.entry(room.to_string()).or_default();
@@ -1032,32 +1028,26 @@ impl HistoryStore {
             list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
             cap_history_in_place(list, MAX_MEM_HISTORY, MAX_MEM_HISTORY_BYTES);
         }
-        // 原生早就 `return` 走了（SQLite 分支），走到这里一定是内存后端：
-        // wasm（浏览器不存历史），或原生打开数据库失败降级。
-        // 所以**没有落盘逻辑** —— 内存后端本来就是"这一趟进程内的临时历史"。
         true
     }
 
-    pub fn recent(&self, room: &str, limit: usize) -> Vec<ChatMessage> {
-        // ---- 原生：走 SQLite ----
+    pub async fn append_async(&self, room: String, message: ChatMessage) -> bool {
         #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
-        if let Some(db) = &self.db {
-            let guard = db.lock().unwrap();
-            return guard.recent_before(room, None, limit).unwrap_or_else(|e| {
-                warn!("查询历史库失败 room={room}: {e}");
-                Vec::new()
-            });
+        if self.db.is_some() {
+            let store = self.clone();
+            return match tokio::task::spawn_blocking(move || store.append(&room, message)).await {
+                Ok(stored) => stored,
+                Err(error) => {
+                    warn!("历史写入任务失败：{error}");
+                    false
+                }
+            };
         }
-        // ---- wasm / 降级：内存 ----
-        let map = self.mem.lock().unwrap();
-        let mut list = map.get(room).cloned().unwrap_or_default();
-        list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
-        let n = list.len();
-        if n > limit {
-            list.split_off(n - limit)
-        } else {
-            list
-        }
+        self.append(&room, message)
+    }
+
+    pub fn recent(&self, room: &str, limit: usize) -> Result<Vec<ChatMessage>> {
+        self.recent_before(room, None, limit)
     }
 
     /// 取 `before` 之前（不含）的最近 limit 条，按 `(ts, id)` 复合游标翻页。
@@ -1075,31 +1065,8 @@ impl HistoryStore {
         room: &str,
         before: Option<(u64, String)>,
         limit: usize,
-    ) -> Vec<ChatMessage> {
-        // ---- 原生：走 SQLite ----
-        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
-        if let Some(db) = &self.db {
-            let guard = db.lock().unwrap();
-            return guard.recent_before(room, before, limit).unwrap_or_else(|e| {
-                warn!("查询历史库失败 room={room}: {e}");
-                Vec::new()
-            });
-        }
-
-        // ---- wasm / 降级：内存 ----
-        let map = self.mem.lock().unwrap();
-        let mut list: Vec<ChatMessage> = map.get(room).cloned().unwrap_or_default();
-        // 稳定全序：先 ts 再 id。id 由签名载荷派生，等于给同毫秒消息一个稳定次序。
-        list.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.id.cmp(&b.id)));
-        if let Some((bts, bid)) = before {
-            list.retain(|m| (m.ts, &m.id) < (bts, &bid));
-        }
-        let n = list.len();
-        if n > limit {
-            list.split_off(n - limit)
-        } else {
-            list
-        }
+    ) -> Result<Vec<ChatMessage>> {
+        self.recent_before_bounded(room, before, limit, usize::MAX)
     }
 
     pub fn recent_before_bounded(
@@ -1108,23 +1075,23 @@ impl HistoryStore {
         before: Option<(u64, String)>,
         limit: usize,
         max_bytes: usize,
-    ) -> Vec<ChatMessage> {
+    ) -> Result<Vec<ChatMessage>> {
+        anyhow::ensure!(
+            before.as_ref().is_none_or(|(timestamp, _)| *timestamp <= i64::MAX as u64),
+            "历史游标时间戳超出范围"
+        );
         // ---- 原生：走 SQLite ----
         #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
         if let Some(db) = &self.db {
-            let guard = db.lock().unwrap();
+            let guard = db.lock().map_err(|_| anyhow::anyhow!("历史数据库锁已失效"))?;
             return guard
                 .recent_before_bounded(room, before, limit, max_bytes)
-                .unwrap_or_else(|e| {
-                    warn!("查询历史库失败 room={room}: {e}");
-                    Vec::new()
-                });
+                .with_context(|| format!("查询历史库失败 room={room}"));
         }
 
-        // ---- wasm / 降级：内存 ----
         let map = self.mem.lock().unwrap();
         let Some(list) = map.get(room) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let mut selected = Vec::new();
         let mut used_bytes = 0usize;
@@ -1145,22 +1112,40 @@ impl HistoryStore {
             selected.push(msg.clone());
         }
         selected.reverse();
-        selected
+        Ok(selected)
     }
 
-    pub fn count(&self, room: &str) -> usize {
+    pub async fn recent_before_bounded_async(
+        &self,
+        room: String,
+        before: Option<(u64, String)>,
+        limit: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<ChatMessage>> {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+        if self.db.is_some() {
+            let store = self.clone();
+            return tokio::task::spawn_blocking(move || {
+                store.recent_before_bounded(&room, before, limit, max_bytes)
+            })
+            .await
+            .context("历史查询任务失败")?;
+        }
+        self.recent_before_bounded(&room, before, limit, max_bytes)
+    }
+
+    pub fn count(&self, room: &str) -> Result<usize> {
         #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
         if let Some(db) = &self.db {
-            let guard = db.lock().unwrap();
-            return guard.count(room).unwrap_or(0);
+            let guard = db.lock().map_err(|_| anyhow::anyhow!("历史数据库锁已失效"))?;
+            return guard.count(room).context("统计历史条数失败");
         }
-        self.mem.lock().unwrap().get(room).map(|v| v.len()).unwrap_or(0)
+        Ok(self.mem.lock().unwrap().get(room).map(|v| v.len()).unwrap_or(0))
     }
 
     /// 启动时载入历史。
     ///
-    /// **现在只在"降级为内存后端"时才需要** —— SQLite 后端在
-    /// `HistoryStore::new()` 里就打开了数据库，数据按需从库读（分页走索引），
+    /// SQLite 后端在 `HistoryStore::new()` 里就打开了数据库，数据按需从库读（分页走索引），
     /// 不再需要"启动时全量载入内存"。
     ///
     /// 这里额外做一件事：**提醒用户旧 jsonl 已被弃用**。
@@ -1194,6 +1179,9 @@ impl HistoryStore {
 
     /// wasm 下没有文件系统，载入是空操作（保持调用点不变）。
     #[cfg(target_arch = "wasm32")]
+    pub fn load_from_disk(&self) {}
+
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "cli")))]
     pub fn load_from_disk(&self) {}
 }
 
@@ -1303,7 +1291,7 @@ impl ProtocolHandler for HistoryService {
             connection.close(0u8.into(), b"invalid history request");
             return Ok(());
         }
-        debug!("历史请求 room={} limit={} 现有={}", req.room, req.limit, self.store.count(&req.room));
+        debug!("历史请求 room={} limit={}", req.room, req.limit);
 
         // 第一次见到这个房间 → 让 controller 去订阅（常驻节点自动看住每个被访问的房间）
         let _ = self.join_tx.try_send(req.room.clone());
@@ -1315,14 +1303,27 @@ impl ProtocolHandler for HistoryService {
         } else {
             HISTORY_RESPONSE_MAX_BYTES
         };
+        let messages = n0_future::time::timeout(
+            HISTORY_REQUEST_TIMEOUT,
+            self.store.recent_before_bounded_async(
+                req.room.clone(), req.before, req.limit.min(HISTORY_PAGE_MAX), message_budget,
+            ),
+        ).await;
+        let messages = match messages {
+            Ok(Ok(messages)) => messages,
+            Ok(Err(error)) => {
+                warn!("历史存储不可用 room={}: {error:#}", req.room);
+                connection.close(0u8.into(), b"history storage unavailable");
+                return Ok(());
+            }
+            Err(_) => {
+                connection.close(0u8.into(), b"history query timeout");
+                return Ok(());
+            }
+        };
         let resp = HistoryResponse {
             room: req.room.clone(),
-            messages: self.store.recent_before_bounded(
-                &req.room,
-                req.before,
-                req.limit.min(HISTORY_PAGE_MAX),
-                message_budget,
-            ),
+            messages,
             // 顺带把房间快照给客户端 —— 他进房就能看到"屋里都有谁、谁能提供哪些文件"
             snapshot,
         };
@@ -1403,6 +1404,10 @@ pub struct RoomNode {
 
 impl RoomNode {
     pub async fn start(opts: RoomOptions) -> Result<Self> {
+        let store = HistoryStore::new(opts.history_dir.as_ref().map(std::path::PathBuf::from))?;
+        if opts.history_dir.is_some() {
+            store.load_from_disk();
+        }
         let secret_key = match &opts.secret_key_hex {
             Some(hex) => SecretKey::from_str(hex).context("私钥解析失败（需要 64 位 hex）")?,
             None => SecretKey::generate(),
@@ -1488,10 +1493,6 @@ impl RoomNode {
         .max_message_size(MAX_MESSAGE_SIZE)
         .spawn(endpoint.clone());
 
-        let store = HistoryStore::new(opts.history_dir.as_ref().map(std::path::PathBuf::from));
-        if opts.history_dir.is_some() {
-            store.load_from_disk();
-        }
         // 房间快照表：本节点若充当常驻节点（serve_history），就顺手维护它，
         // 让新进者拉历史时能立刻拿到"屋里都有谁 + 各自能提供哪些文件"。
         let snaps = new_snapshots();
@@ -2183,7 +2184,7 @@ impl RoomNode {
         anyhow::ensure!(bytes.len() < MAX_MESSAGE_SIZE.saturating_sub(1024), "消息过长，请缩短文本或作为文件发送");
         sender.lock().await.broadcast(bytes.into()).await?;
         // 自己刚签的消息必然验得过；忽略返回值（失败也会有 warn）
-        let _ = self.store.append(&room, msg.clone());
+        let _ = self.store.append_async(room, msg.clone()).await;
         Ok(msg)
     }
 
@@ -2434,7 +2435,7 @@ impl RoomNode {
         .sign(&self.secret_key, &room);
         let bytes = serde_json::to_vec(&Wire::Message { m: msg.clone() })?;
         sender.lock().await.broadcast(bytes.into()).await?;
-        let _ = self.store.append(&room, msg);
+        let _ = self.store.append_async(room, msg).await;
         Ok(())
     }
 
@@ -2900,7 +2901,7 @@ mod security_tests {
     // 那些机制在 SQLite 后端里**从根上不需要**：表里 `room` 直接是原始房间名，
     // 不存在"文件名有损映射"的问题。这里改成验证新后端真正要保证的事。
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
     #[test]
     fn 不同房间的历史互不串味() {
         // 旧实现用 sanitize() 把非 ASCII 都换成 `_`，导致
@@ -2908,7 +2909,7 @@ mod security_tests {
         // 现在 `room` 是表里的一个字段，原始名直接比较，不可能串。
         let dir = std::env::temp_dir().join(format!("iroh-rooms-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let store = HistoryStore::new(Some(dir.clone()));
+        let store = HistoryStore::new(Some(dir.clone())).unwrap();
 
         let key = kp();
         for (room, text) in [("研发群", "engineering"), ("产品群", "product"), ("team_a", "u")] {
@@ -2926,16 +2927,16 @@ mod security_tests {
         }
 
         for (room, text) in [("研发群", "engineering"), ("产品群", "product"), ("team_a", "u")] {
-            let got = store.recent(room, 10);
+            let got = store.recent(room, 10).unwrap();
             assert_eq!(got.len(), 1, "{room} 应该有且只有 1 条");
             assert_eq!(got[0].text, text, "{room} 拿到了别的房间的消息");
         }
         // 形近的房间名也不能互相污染
-        assert_eq!(store.count("team-a"), 0, "team-a 不该有内容（只有 team_a 有）");
+        assert_eq!(store.count("team-a").unwrap(), 0, "team-a 不该有内容（只有 team_a 有）");
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
     #[test]
     fn 重启后历史仍在且能分页读回() {
         // 这是 SQLite 相比内存后端最核心的价值：进程重启不丢历史。
@@ -2943,7 +2944,7 @@ mod security_tests {
         let _ = std::fs::remove_dir_all(&dir);
         let key = kp();
         {
-            let store = HistoryStore::new(Some(dir.clone()));
+            let store = HistoryStore::new(Some(dir.clone())).unwrap();
             for i in 0..30u64 {
                 let m = ChatMessage {
                     id: String::new(),
@@ -2959,22 +2960,22 @@ mod security_tests {
             }
         }
         // 新进程（新 HistoryStore）—— 模拟 roomd 重启
-        let store = HistoryStore::new(Some(dir.clone()));
+        let store = HistoryStore::new(Some(dir.clone())).unwrap();
         store.load_from_disk();
-        assert_eq!(store.count(ROOM), 30, "重启后历史应完整保留");
+        assert_eq!(store.count(ROOM).unwrap(), 30, "重启后历史应完整保留");
 
         // 分页：取最新的 10 条，游标继续往前
-        let page1 = store.recent_before_bounded(ROOM, None, 10, usize::MAX);
+        let page1 = store.recent_before_bounded(ROOM, None, 10, usize::MAX).unwrap();
         assert_eq!(page1.len(), 10);
         assert_eq!(page1.last().unwrap().text, "m29", "最后一页的最后一条应是最新消息");
         let (ts, id) = (page1[0].ts, page1[0].id.clone());
-        let page2 = store.recent_before_bounded(ROOM, Some((ts, id)), 10, usize::MAX);
+        let page2 = store.recent_before_bounded(ROOM, Some((ts, id)), 10, usize::MAX).unwrap();
         assert_eq!(page2.len(), 10);
         assert_eq!(page2.last().unwrap().text, "m19", "第二页应接在第一页之前");
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
     #[test]
     fn 超过保留数后裁掉最旧的() {
         // 保留策略：只留最近 N 条，且**裁的是最旧的**（不是随机删）。
@@ -3164,7 +3165,7 @@ mod security_tests {
 
     #[test]
     fn 历史内存同时受条数与字节上限约束() {
-        let store = HistoryStore::new(None);
+        let store = HistoryStore::new(None).unwrap();
         let key = kp();
         for index in 0..45 {
             let message = ChatMessage {
@@ -3180,7 +3181,7 @@ mod security_tests {
             assert!(store.append(ROOM, message));
         }
 
-        let retained = store.recent(ROOM, MAX_MEM_HISTORY);
+        let retained = store.recent(ROOM, MAX_MEM_HISTORY).unwrap();
         let retained_bytes = retained.iter().map(serialized_message_bytes).sum::<usize>();
         assert!(retained.len() < 45, "字节上限应先于消息条数上限生效");
         assert!(retained_bytes <= MAX_MEM_HISTORY_BYTES);
@@ -3189,7 +3190,7 @@ mod security_tests {
 
     #[test]
     fn 历史请求分页在克隆前受字节预算约束() {
-        let store = HistoryStore::new(None);
+        let store = HistoryStore::new(None).unwrap();
         let key = kp();
         for index in 0..10 {
             let message = ChatMessage {
@@ -3205,7 +3206,7 @@ mod security_tests {
             assert!(store.append(ROOM, message));
         }
 
-        let page = store.recent_before_bounded(ROOM, None, 1000, 250 * 1024);
+        let page = store.recent_before_bounded(ROOM, None, 1000, 250 * 1024).unwrap();
         let page_bytes = page.iter().map(serialized_message_bytes).sum::<usize>();
         assert_eq!(page.len(), 2);
         assert!(page_bytes <= 250 * 1024);
@@ -3228,6 +3229,10 @@ mod security_tests {
         let mut invalid_cursor = valid_history_request_fixture();
         invalid_cursor.before = Some((1, "x".repeat(MAX_HISTORY_CURSOR_ID_BYTES + 1)));
         assert!(!valid_history_request(&invalid_cursor));
+
+        let mut invalid_timestamp = valid_history_request_fixture();
+        invalid_timestamp.before = Some((u64::MAX, "id".into()));
+        assert!(!valid_history_request(&invalid_timestamp));
     }
 
     #[test]
@@ -3385,6 +3390,40 @@ mod multi_peer_tests {
     }
 
     #[tokio::test]
+    async fn history_storage_errors_reach_the_client_and_can_be_retried() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!("iroh-history-service-{}-{}", std::process::id(), now_ms()));
+        let anchor = RoomNode::start(RoomOptions {
+            relays: vec!["https://127.0.0.1:9".into()],
+            relay_token: None,
+            secret_key_hex: None,
+            anchor_id: None,
+            anchor_relay: None,
+            history_dir: Some(directory.to_string_lossy().into_owned()),
+            serve_history: true,
+        }).await?;
+        let client = node(Some(&anchor)).await?;
+        let room = "history-service-errors";
+        let author = SecretKey::generate();
+        let message = ChatMessage {
+            id: String::new(), from: author.public().to_string(), nickname: "author".into(),
+            text: "persisted".into(), ts: 1, sig: String::new(), file: None,
+        }.sign(&author, room);
+        assert!(anchor.store.append_async(room.into(), message.clone()).await);
+        assert_eq!(client.fetch_history(room, 50).await?.messages, vec![message.clone()]);
+        let connection = rusqlite::Connection::open(directory.join("history.db"))?;
+        connection.execute("UPDATE messages SET json=?1", rusqlite::params![b"invalid JSON".as_slice()])?;
+        assert!(client.fetch_history(room, 50).await.is_err());
+        connection.execute("UPDATE messages SET json=?1", rusqlite::params![serde_json::to_vec(&message)?])?;
+        assert_eq!(client.fetch_history(room, 50).await?.messages, vec![message]);
+        assert!(client.fetch_history_before(room, 50, Some((u64::MAX, "id".into()))).await.is_err());
+        drop(connection);
+        drop(client);
+        drop(anchor);
+        std::fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn three_users_exchange_messages_and_late_joiner_gets_history() -> Result<()> {
         let anchor = node(None).await?;
         let anchor_events = anchor.subscribe();
@@ -3418,7 +3457,7 @@ mod multi_peer_tests {
         assert!(first.inner.lock().unwrap().joined.as_ref().unwrap().epoch > renamed_epoch);
         let initial = first.send("before-third").await?;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while anchor.store.count(room) < 1 || snapshot_get(&anchor.snaps, room).map(|s| s.members.len()).unwrap_or(0) < 2 {
+            while anchor.store.count(room).unwrap() < 1 || snapshot_get(&anchor.snaps, room).map(|s| s.members.len()).unwrap_or(0) < 2 {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }).await?;

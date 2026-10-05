@@ -23,7 +23,7 @@
 //! `room / ts / id` 提出来做索引，消息本体整条存 JSON：
 //! **既是真索引，又不与协议耦合。**
 
-use crate::room::{serialized_message_bytes, ChatMessage, MAX_HISTORY_LINE_BYTES};
+use crate::room::{ChatMessage, MAX_HISTORY_LINE_BYTES};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use tracing::{debug, warn};
@@ -43,9 +43,6 @@ pub const HISTORY_RETAIN_PER_ROOM: usize = 100_000;
 /// 每条消息都跑一次 `DELETE` 太浪费（且要扫索引），攒一批再删。
 /// 代价是最坏情况下房间会短暂超出保留数 `TRIM_INTERVAL` 条 —— 可接受。
 const TRIM_INTERVAL: usize = 1_000;
-
-/// 带字节预算分页时的单批条数。
-const BYTES_SCAN_BATCH: usize = 256;
 
 pub struct SqliteHistory {
     conn: Connection,
@@ -79,10 +76,18 @@ impl SqliteHistory {
             "#,
         )?;
 
-        Ok(Self {
+        let rooms = conn
+            .prepare("SELECT DISTINCT room FROM messages")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut history = Self {
             conn,
             since_trim: HashMap::new(),
-        })
+        };
+        for room in rooms {
+            history.trim(&room)?;
+        }
+        Ok(history)
     }
 
     /// 追加一条（**已验签**的）消息。返回是否真的写入了（重复消息返回 false）。
@@ -100,7 +105,7 @@ impl SqliteHistory {
         // 这里是索引查找，且不再需要那个扫描。
         let affected = self.conn.execute(
             "INSERT OR IGNORE INTO messages (room, ts, id, json) VALUES (?1, ?2, ?3, ?4)",
-            params![room, msg.ts as i64, msg.id, encoded],
+            params![room, sql_timestamp(msg.ts)?, msg.id, encoded],
         )?;
         if affected == 0 {
             return Ok(false);
@@ -109,10 +114,11 @@ impl SqliteHistory {
         let counter = self.since_trim.entry(room.to_string()).or_insert(0);
         *counter += 1;
         if *counter >= TRIM_INTERVAL {
-            *counter = 0;
             if let Err(e) = self.trim(room) {
                 // 裁剪失败不该影响写入本身（历史只是"多留点"）
                 warn!("裁剪房间 {room} 的历史失败：{e}");
+            } else {
+                self.since_trim.insert(room.to_string(), 0);
             }
         }
         Ok(true)
@@ -141,7 +147,7 @@ impl SqliteHistory {
         };
 
         let deleted = self.conn.execute(
-            "DELETE FROM messages WHERE room = ?1 AND (ts, id) < (?2, ?3)",
+            "DELETE FROM messages WHERE room = ?1 AND (ts, id) <= (?2, ?3)",
             params![room, bts, bid],
         )?;
         if deleted > 0 {
@@ -161,37 +167,7 @@ impl SqliteHistory {
         before: Option<(u64, String)>,
         limit: usize,
     ) -> rusqlite::Result<Vec<ChatMessage>> {
-        let mut out = Vec::new();
-        if let Some((bts, bid)) = before {
-            let mut stmt = self.conn.prepare_cached(
-                "SELECT json FROM messages
-                 WHERE room = ?1 AND (ts, id) < (?2, ?3)
-                 ORDER BY ts DESC, id DESC LIMIT ?4",
-            )?;
-            let rows = stmt.query_map(params![room, bts as i64, bid, limit as i64], |row| {
-                row.get::<_, Vec<u8>>(0)
-            })?;
-            for r in rows {
-                if let Ok(m) = serde_json::from_slice::<ChatMessage>(&r?) {
-                    out.push(m);
-                }
-            }
-        } else {
-            let mut stmt = self.conn.prepare_cached(
-                "SELECT json FROM messages WHERE room = ?1
-                 ORDER BY ts DESC, id DESC LIMIT ?2",
-            )?;
-            let rows = stmt.query_map(params![room, limit as i64], |row| {
-                row.get::<_, Vec<u8>>(0)
-            })?;
-            for r in rows {
-                if let Ok(m) = serde_json::from_slice::<ChatMessage>(&r?) {
-                    out.push(m);
-                }
-            }
-        }
-        out.reverse(); // 数据库给的是新→旧，翻成正序
-        Ok(out)
+        self.recent_before_bounded(room, before, limit, usize::MAX)
     }
 
     /// 带字节预算的分页。
@@ -206,39 +182,52 @@ impl SqliteHistory {
         limit: usize,
         max_bytes: usize,
     ) -> rusqlite::Result<Vec<ChatMessage>> {
-        let mut selected: Vec<ChatMessage> = Vec::new();
+        let cursor = before
+            .map(|(timestamp, id)| sql_timestamp(timestamp).map(|timestamp| (timestamp, id)))
+            .transpose()?;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = if cursor.is_some() {
+            self.conn.prepare_cached(
+                "SELECT json FROM messages WHERE room = ?1 AND (ts, id) < (?2, ?3)
+                 ORDER BY ts DESC, id DESC LIMIT ?4",
+            )?
+        } else {
+            self.conn.prepare_cached(
+                "SELECT json FROM messages WHERE room = ?1
+                 ORDER BY ts DESC, id DESC LIMIT ?2",
+            )?
+        };
+        let mut rows = match cursor {
+            Some((timestamp, id)) => statement.query(params![room, timestamp, id, sql_limit])?,
+            None => statement.query(params![room, sql_limit])?,
+        };
+        let mut selected = Vec::new();
         let mut used_bytes = 0usize;
-        let mut cursor = before;
-
-        // 分批向数据库要，边取边算字节，够了就停。
-        'outer: loop {
-            let page = self.recent_before(room, cursor.clone(), BYTES_SCAN_BATCH)?;
-            if page.is_empty() {
+        while let Some(row) = rows.next()? {
+            let encoded = row.get_ref(0)?.as_blob()?;
+            if encoded.len() > MAX_HISTORY_LINE_BYTES {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Blob,
+                    "历史记录超过消息大小上限".into(),
+                ));
+            }
+            let bytes = encoded.len().saturating_add(1);
+            if !selected.is_empty() && used_bytes.saturating_add(bytes) > max_bytes {
                 break;
             }
-            // page 是正序（旧→新）；要从新往旧累加，所以反向遍历
-            for msg in page.iter().rev() {
-                if selected.len() >= limit {
-                    break 'outer;
-                }
-                let bytes = serialized_message_bytes(msg);
-                // 至少留一条：否则一条超大消息就能让整页为空，翻页永远卡住
-                if !selected.is_empty() && used_bytes.saturating_add(bytes) > max_bytes {
-                    break 'outer;
-                }
-                used_bytes = used_bytes.saturating_add(bytes);
-                selected.push(msg.clone());
-            }
-            // 下一页的游标 = 本页最旧那条
-            let oldest = page.first().expect("page 非空");
-            let next = (oldest.ts, oldest.id.clone());
-            if cursor.as_ref() == Some(&next) {
-                break; // 防御：游标没前进就别死循环
-            }
-            cursor = Some(next);
-            if page.len() < BYTES_SCAN_BATCH {
-                break;
-            }
+            let message = serde_json::from_slice(encoded).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Blob,
+                    Box::new(error),
+                )
+            })?;
+            used_bytes = used_bytes.saturating_add(bytes);
+            selected.push(message);
         }
 
         selected.reverse();
@@ -255,6 +244,7 @@ impl SqliteHistory {
     }
 }
 
-/// 让 `MAX_HISTORY_LINE_BYTES` 在这个模块里可见（供编译期断言/文档用）。
-#[allow(dead_code)]
-const _MAX_LINE: usize = MAX_HISTORY_LINE_BYTES;
+fn sql_timestamp(timestamp: u64) -> rusqlite::Result<i64> {
+    i64::try_from(timestamp)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}

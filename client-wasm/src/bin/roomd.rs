@@ -137,6 +137,8 @@ async fn main() -> Result<()> {
     let data_dir = std::env::var("ROOMD_DATA_DIR").unwrap_or_else(|_| "/data".to_string());
     std::fs::create_dir_all(&data_dir).with_context(|| format!("创建数据目录失败: {data_dir}"))?;
     let hist_dir = format!("{data_dir}/history");
+    let store = HistoryStore::new(Some(std::path::PathBuf::from(&hist_dir)))?;
+    store.load_from_disk();
 
     // ---- 身份持久化（EndpointId 必须稳定，前端配置里写的就是它）
     let key_path = format!("{data_dir}/identity.key");
@@ -178,9 +180,6 @@ async fn main() -> Result<()> {
     let gossip = Gossip::builder()
         .max_message_size(iroh_web::room::MAX_MESSAGE_SIZE)
         .spawn(endpoint.clone());
-
-    let store = HistoryStore::new(Some(std::path::PathBuf::from(&hist_dir)));
-    store.load_from_disk();
 
     // ---- 房间快照表
     //
@@ -299,7 +298,7 @@ async fn main() -> Result<()> {
                 };
                 let (sender, receiver) = t.split();
                 let sender = Arc::new(AsyncMutex::new(sender));
-                info!("已订阅房间 {room}（现有历史 {} 条）", store.count(&room));
+                info!("已订阅房间 {room}");
 
                 // 消费消息 → 落盘
                 let room_c = room.clone();
@@ -323,7 +322,7 @@ async fn main() -> Result<()> {
                                         // 这里不再自己验签：`append` 内部做兜底校验
                                         // （避免"某个调用点忘了验"就让脏数据进历史）。
                                         // 返回 false 时它已经打过 warn 了。
-                                        let _ = store_c.append(&room_c, m);
+                                        let _ = store_c.append_async(room_c.clone(), m).await;
                                     }
                                     Wire::Presence { p } => {
                                         if !p.verify(&room_c) {

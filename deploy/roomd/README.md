@@ -4,7 +4,7 @@
 
 | 能力 | 为什么中继做不到 |
 |---|---|
-| **历史消息** | 中继无状态，一转手就忘。roomd 把每个房间的消息落成 `data/history/<房间>.jsonl` |
+| **历史消息** | 中继无状态，一转手就忘。roomd 把消息存入 `data/history/history.db`（SQLite） |
 | **在线状态** | 它自己也在房间里发 presence，别人能看到"常驻节点在线" |
 | **房间锚点** | 所有人只要知道它一个地址就能进房；否则纯 gossip 得先有人在线 |
 
@@ -63,7 +63,23 @@ ssh root@<host> 'docker compose -f /opt/iroh/roomd/docker-compose.yml logs | gre
 
 历史 ALPN 没有应用层身份认证：知道 roomd EndpointId、relay 地址和房间名的客户端都可以请求对应历史。请求大小、连接并发和处理时长有资源上限，但这些限制**不是访问控制**；`relay_token` 也不是历史服务的用户白名单。不要把私密房间历史托管到不受信任的 roomd。
 
-每个房间内存最多保留 5000 条或 16 MiB（先达到者生效），单个 JSONL 文件上限为 64 MiB，超出后会压缩为内存保留的最近记录。
+roomd 使用 SQLite 持久化，每房间保留最近 100,000 条。每累计 1,000 条新写入执行裁剪，
+启动时也会裁剪既有房间，避免频繁重启绕过上限。浏览器的临时内存历史上限仍是 5,000 条或 16 MiB，
+不限制服务器历史的可读范围。
+
+数据库初始化失败时 roomd 明确退出，不自动降级为内存；查询失败会让客户端收到可重试的错误，
+不会返回正常空页。分页逐行应用字节预算，原生数据库读写在阻塞线程执行，避免阻塞网络与心跳任务。
+
+## 备份与回滚
+
+SQLite 使用 WAL，运行中不能仅复制 `history.db` 主文件。在线一致性备份可在服务器执行：
+
+```bash
+ssh root@<host> 'python3 -c '\''import sqlite3,time; source=sqlite3.connect("/opt/iroh/roomd/data/history/history.db"); backup=sqlite3.connect("/opt/iroh/roomd/history-backup-"+str(int(time.time()))+".db"); source.backup(backup); backup.close(); source.close()'\'''
+```
+
+同时备份 `data/identity.key`、当前容器内的二进制和镜像。回滚二进制不需要删除历史，
+本次存储修复没有改表结构或签名载荷；不要重新执行旧 JSONL 改造时的清数据步骤。
 
 ## 消息可信度
 
