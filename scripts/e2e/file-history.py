@@ -7,7 +7,7 @@
   4. A **主动切到别的房间**（可靠的离开广播时机）→ B/C 的卡片**很快**变"已过期"
   5. A **切回来** → 卡片**自动恢复可接收**（验证"过期是可逆的派生状态"）
 
-断言用 `window.__transfers()` 里导出的 `avail`（UI 文案就是同一个值渲染的）。
+断言用 `window.__iroh_transfers()` 里导出的 `avail`（UI 文案就是同一个值渲染的）。
 """
 import importlib.util, time, json, sys
 
@@ -41,7 +41,7 @@ def boot(url, label):
 
 def snap(p):
     try:
-        return json.loads(p.ev("JSON.stringify(window.__transfers())") or "[]")
+        return json.loads(p.ev("JSON.stringify(window.__iroh_transfers())") or "[]")
     except Exception:
         return []
 
@@ -67,12 +67,12 @@ print("  A、B 已进房", flush=True)
 #    可靠判据：发一条**探针消息**，然后轮询历史直到能看到它 ——
 #    看到就说明"消息能进历史"这条链路完全通了。
 print("  探针：验证消息能落进常驻节点…", flush=True)
-A.ev("window.__sendText('__probe__')", timeout=30)
+A.ev("window.__iroh_sendText('__probe__')", timeout=30)
 persisted = False
 for i in range(30):
     time.sleep(2)
     got = A.ev(
-        f"window.__net.history({json.dumps(ROOM)}, 10, '')"
+        f"window.__iroh_net.history({json.dumps(ROOM)}, 10, '')"
         f".then(m => JSON.stringify(m.some(x => x.text === '__probe__')))"
         f".catch(() => 'false')",
         timeout=30,
@@ -87,13 +87,13 @@ tt.check("消息能落进常驻节点（gossip 链路通）", persisted,
 if not persisted:
     print("  ⚠️ 链路不通，后续断言会连环失败 —— 继续跑完看整体", flush=True)
 
-# ⚠️ 必须在发文件**之前**清：__clearBitmaps() 里 `transfers.clear()` 会把卡片也删掉，
+# ⚠️ 必须在发文件**之前**清：__iroh_clearBitmaps() 里 `transfers.clear()` 会把卡片也删掉，
 #    放到后面调就会把刚收到的邀约一并清没（我第一版就这么错，导致 6 项连环失败）。
-B.ev("window.__useOpfs=true; window.__setTestMode(true)")
-B.ev("window.__clearBitmaps()", timeout=30)
+B.ev("window.__iroh_useOpfs=true; window.__iroh_setTestMode(true)")
+B.ev("window.__iroh_clearBitmaps()", timeout=30)
 A.ev(f"(() => {{ const u=new Uint8Array({SIZE}); window.__testFile=new File([u],'h.bin',{{type:'application/octet-stream'}}); return 1; }})()", timeout=60)
-A.ev("window.__setStopAfterChunks(0)")
-A.ev(f"window.__sendFile(window.__testFile, {json.dumps(ROOM)})")
+A.ev("window.__iroh_setStopAfterChunks(0)")
+A.ev(f"window.__iroh_sendFile(window.__testFile, {json.dumps(ROOM)})")
 
 fid = None
 for _ in range(40):
@@ -103,7 +103,7 @@ for _ in range(40):
         fid = t["file_id"]; break
 tt.check("B 收到实时邀约", bool(fid), str(fid))
 
-B.fire(f"window.__acceptFile({json.dumps(fid)})")
+B.fire(f"window.__iroh_acceptFile({json.dumps(fid)})")
 for _ in range(60):
     time.sleep(1)
     t = card(B, lambda x: x["file_id"] == fid)
@@ -149,18 +149,18 @@ tt.check("D 看到历史卡片且为「可接收」", bool(seen_d and seen_d.get
          f"avail={seen_d and seen_d.get('avail')}")
 
 print("\n=== 3) C 点「接收」→ 应拿到邀约并收完 ===", flush=True)
-C.ev("window.__useOpfs=true; window.__setTestMode(true)")
-# ⚠️ 这里**不能**调 __clearBitmaps()：它会 `transfers.clear()`，
+C.ev("window.__iroh_useOpfs=true; window.__iroh_setTestMode(true)")
+# ⚠️ 这里**不能**调 __iroh_clearBitmaps()：它会 `transfers.clear()`，
 #    把刚看到的文件卡片一起清掉，后面的断言就全断了。
 #    位图清不清对这次验证没影响（只影响"是否从断点续传"）。
-C.fire(f"window.__openArchived({json.dumps(fid)})")
+C.fire(f"window.__iroh_openArchived({json.dumps(fid)})")
 got_invite = False
 for _ in range(30):
     time.sleep(1)
     t = card(C, lambda x: x["file_id"] == fid)
     if t and t["state"] == "invited":
         got_invite = True
-        C.fire(f"window.__acceptFile({json.dumps(fid)})")
+        C.fire(f"window.__iroh_acceptFile({json.dumps(fid)})")
         break
 tt.check("点了之后收到发送方重发的邀约", got_invite, "5 秒内没收到")
 
@@ -190,7 +190,7 @@ if got_invite:
 
 print("\n=== 4) A 主动切到别的房间（可靠的离开广播）===", flush=True)
 t0 = time.time()
-A.fire(f"window.__openRoom({json.dumps(ROOM2)})")
+A.fire(f"window.__iroh_openRoom({json.dumps(ROOM2)})")
 detected = None
 for i in range(20):
     time.sleep(1)
@@ -212,7 +212,7 @@ tt.check("已收完的 B 不受影响（仍是「已完成」）",
          f"B.state={tb_done and tb_done['state']}")
 
 print("\n=== 5) A 切回来 → 卡片应自动恢复 ===", flush=True)
-A.fire(f"window.__openRoom({json.dumps(ROOM)})")
+A.fire(f"window.__iroh_openRoom({json.dumps(ROOM)})")
 time.sleep(1)
 tt.wait_until(A, f"!!(window.__state && window.__state().joined === {json.dumps(ROOM)})",
               60, label="A 回到房间")
@@ -246,7 +246,7 @@ for i in range(20):
         break
 tt.check("A 刷新后卡片变「已过期」", gone is not None,
          f"{gone:.1f}s" if gone else "20 秒内没变")
-sa = json.loads(A.ev("JSON.stringify(window.__transfers())"))
+sa = json.loads(A.ev("JSON.stringify(window.__iroh_transfers())"))
 mine_after = [x for x in sa if x.get("fromProof")]
 tt.check("发送方刷新后不再看到自己的历史文件卡片（避免点不动）",
          len(mine_after) == 0, f"{len(mine_after)} 张")

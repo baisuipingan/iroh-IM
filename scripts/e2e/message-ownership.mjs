@@ -15,6 +15,9 @@ const bubble = (page, text) => page.locator('.msg').filter({ has: page.locator('
 const ownership = async (page, text, mine) => {
   const message = bubble(page, text);
   await message.waitFor({ timeout: 45000 });
+  await message.evaluate(async element => {
+    await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
   return message.evaluate((element, mine) => {
     const row = element.getBoundingClientRect();
     const timeline = document.getElementById('timeline').getBoundingClientRect();
@@ -45,7 +48,7 @@ try {
     await send(other, theirs);
     check(`${engine}/首次发送居右`, await ownership(page, mine, true));
     check(`${engine}/他人消息居左`, await ownership(page, theirs, false));
-    await page.waitForFunction(({ room, texts }) => window.__net.history(room, 50).then(messages => texts.every(text => messages.some(message => message.text === text))), { room, texts: [mine, theirs] }, { timeout: 45000 });
+    await page.waitForFunction(({ room, texts }) => window.__iroh_net.history(room, 50).then(messages => texts.every(text => messages.some(message => message.text === text))), { room, texts: [mine, theirs] }, { timeout: 45000 });
 
     for (let attempt = 0; attempt < 2; attempt++) {
       let releaseWorker;
@@ -66,9 +69,9 @@ try {
       await send(page, next);
       check(`${engine}/刷新${attempt + 1}新消息居右`, await ownership(page, next, true));
     }
-    await page.evaluate(room => window.__openRoom(room), `${room}-other`);
+    await page.evaluate(room => window.__iroh_openRoom(room), `${room}-other`);
     await joined(page, `${room}-other`);
-    await page.evaluate(room => window.__openRoom(room), room);
+    await page.evaluate(room => window.__iroh_openRoom(room), room);
     await joined(page, room);
     check(`${engine}/切房返回仍居右`, await ownership(page, mine, true));
     check(`${engine}/切房返回他人仍居左`, await ownership(page, theirs, false));
@@ -81,7 +84,7 @@ try {
     await page.screenshot({ path: `${output}/${engine}.png` });
 
     if (engine === 'chrome') {
-      for (const current of [page, other]) await current.evaluate(() => { window.__useOpfs = true; });
+      for (const current of [page, other]) await current.evaluate(() => { window.__iroh_useOpfs = true; });
       for (const filename of ['ownership.txt', 'ownership.png']) {
         const meta = await page.evaluate(async ({ room, filename }) => {
           let file;
@@ -92,24 +95,24 @@ try {
             canvas.getContext('2d').fillRect(0, 0, 80, 120);
             file = new File([await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))], filename, { type: 'image/png' });
           } else file = new File(['ownership-transfer'], filename, { type: 'text/plain' });
-          return window.__sendFile(file, room);
+          return window.__iroh_sendFile(file, room);
         }, { room, filename });
-        await other.waitForFunction(fileId => window.__transfers().some(transfer => transfer.file_id === fileId), meta.file_id, { timeout: 45000 });
+        await other.waitForFunction(fileId => window.__iroh_transfers().some(transfer => transfer.file_id === fileId), meta.file_id, { timeout: 45000 });
         await other.evaluate(async fileId => {
           const { fileTransfer } = await import('./js/ui/filetransfer.js');
-          if (window.__transfers().find(transfer => transfer.file_id === fileId).state === 'archived') await fileTransfer.openArchived(fileId);
+          if (window.__iroh_transfers().find(transfer => transfer.file_id === fileId).state === 'archived') await fileTransfer.openArchived(fileId);
         }, meta.file_id);
-        await other.waitForFunction(fileId => window.__transfers().find(transfer => transfer.file_id === fileId)?.state === 'invited', meta.file_id, { timeout: 45000 });
-        await other.evaluate(fileId => window.__acceptFile(fileId), meta.file_id);
-        await other.waitForFunction(fileId => window.__transfers().find(transfer => transfer.file_id === fileId)?.state === 'done', meta.file_id, { timeout: 60000 });
+        await other.waitForFunction(fileId => window.__iroh_transfers().find(transfer => transfer.file_id === fileId)?.state === 'invited', meta.file_id, { timeout: 45000 });
+        await other.evaluate(fileId => window.__iroh_acceptFile(fileId), meta.file_id);
+        await other.waitForFunction(fileId => window.__iroh_transfers().find(transfer => transfer.file_id === fileId)?.state === 'done', meta.file_id, { timeout: 60000 });
         for (const [label, current, sent] of [['发送端', page, true], ['接收端', other, false]]) {
           const card = current.locator(`.msg--file[data-file-id="${meta.file_id}"]`);
           check(`${filename}/${label}按发送身份左右对齐`, await card.evaluate((element, sent) => element.classList.contains('msg--me') === sent && element.dataset.dir === (sent ? 'send' : 'recv'), sent));
         }
       }
-      await page.evaluate(room => window.__openRoom(room), `${room}-other`);
+      await page.evaluate(room => window.__iroh_openRoom(room), `${room}-other`);
       await joined(page, `${room}-other`);
-      await page.evaluate(room => window.__openRoom(room), room);
+      await page.evaluate(room => window.__iroh_openRoom(room), room);
       await joined(page, room);
       check('文件/图片切房重建保持右侧', await page.locator('.msg--file[data-dir="send"]').evaluateAll(cards => cards.length === 2 && cards.every(card => card.classList.contains('msg--me'))));
     }

@@ -8,6 +8,12 @@
 #   3) 本机端口要清代理，否则被沙箱代理拦成 502：
 #      env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy NO_PROXY=127.0.0.1,localhost
 #
+# ## ⚠️ 改过前端之后，先跑冒烟再跑这个
+#   node scripts/smoke.mjs      （~6 秒）
+#   一个未定义的引用就能让整个 main.js 挂掉，表现为**每个用例都TimeoutError**，
+#   而崩溃日志完全指不到真正的错（实测：`test-hooks.js` 里一个悬空变量，
+#   26 个用例全 CRASH，跑了 21 分钟才查到）。冒烟会直接把页面异常打出来。
+#
 # ## ⚠️ 为什么每个用例之前都要清存储
 #   这些用例用**固定房名 + 固定身份 key**，上一轮留在 IndexedDB（库 `iroh-transfers`，
 #   断点位图）与 localStorage（持久化邀约）里的数据会污染下一轮 ——
@@ -78,5 +84,9 @@ run_case "leave-cancel"    scripts/e2e/leave-cancel.py
 run_case "room-isolation"  scripts/e2e/room-isolation.py
 run_case "card-revive"     scripts/e2e/card-revive.py
 run_case "sidebar-pages"   scripts/e2e/sidebar-pages.py
-run_case "relay-enabled"   scripts/e2e/relay-enabled.py   # ⚠️ 会临时改 relay-config.json（自动还原）
+# 比奇堡视觉改造：结构/令牌尺寸/真实连接信息/两套主题对比度/图片卡片硬约束。
+# 单列一条是因为 image-layout.mjs 依赖 playwright（本机没装、不在本套件里），
+# 它钉死的 116px / 220px 需要有人守。
+run_case "redesign"        scripts/e2e/redesign.py
+run_case "relay-enabled"   scripts/e2e/relay-enabled.py
 exit "$fail"

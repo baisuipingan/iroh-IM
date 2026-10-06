@@ -1,86 +1,237 @@
 /* ============================================================================
- * 设计令牌（Design Tokens）
- * 只有这里定义"长什么样"，组件层只引用变量。换主题 = 换一组令牌。
+ * 设计令牌（Design Tokens）· 比奇堡海底通讯（Bikini Bottom Nautical IM）
+ *
+ * 来源：设计团队产出的 `stitch_bikini_bottom_chat_ui/DESIGN.md`。
+ * 组件层**只引用变量**，不出现具体色值 —— 换主题 = 换一组令牌。
+ *
+ * ## 与设计稿的对应关系
+ *
+ *   DESIGN.md 语义名              本文件变量
+ *   ----------------------------  ------------------------------------------
+ *   Sponge Sunshine Gold #FDD835  --bb-gold      （主 CTA / 已发送气泡）
+ *   Patrick Star Coral   #FF7F87  --bb-coral     （未读徽标 / 危险 / 强调）
+ *   Lagoon Biolum. Cyan  #26C6DA  --bb-cyan      （在线 / 进度 / 焦点环）
+ *   Lagoon Deep Navy     #0E2439  --bb-navy      （最左图标栏底色）
+ *   Seafoam Mist         #F0F7F6  --bb-seafoam   （中间列表底）
+ *   Sandy Pearl Canvas   #F9FAFB  --bb-canvas    （对话画布）
+ *   Deep Kelp Slate      #263238  --bb-slate     （发送气泡上的深色文字）
+ *
+ * ## 两处**有意偏离**设计稿，理由写在这里
+ *
+ * 1. **字体不引 Google Fonts。** DESIGN.md 指定 Nunito Sans，而 demo 是
+ *    `<link href="https://fonts.googleapis.com/...">`。本产品面向中文用户、
+ *    且部署在 Cloudflare 上，引 Google Fonts 会：① 国内直接超时（首屏白字）；
+ *    ② 多一次第三方连接。所以这里写成 `'Nunito Sans'` + 系统中文栈 ——
+ *    谁把 Nunito Sans 自托管进来就自动生效，没托管也有一份干净的圆润兜底。
+ *
+ * 2. **珊瑚徽标底色微调。** 设计稿是 `#FF7F87` + 纯白字，实测对比度 ~2.3:1，
+ *    10px 字号下几乎糊成一片。改成 `#F2646E`（同色相、压暗 6%），
+ *    维持珊瑚观感同时把对比度拉到 ~3.6:1。
+ *
+ * ## 深色主题是**派生**出来的
+ *
+ * 设计稿只给了浅色（"Bikini Bottom Nautical Desktop"）。深色按同一色相
+ * 重新推导：底色走深海蓝（而不是中性灰），金色气泡保持不变 ——
+ * 金色是这个产品的品牌标识，深浅两套都必须认得出来。
  * ==========================================================================*/
 
 :root {
-  /* 尺寸 */
+  /* ---------- 尺寸 ----------
+   * ⚠️ 这两条**有意偏离设计稿**，别"顺手改回去"。
+   *    DESIGN.md 写的是「导航栏 64px / 列表 280–320（默认 300）」，
+   *    我一开始照做了；但产品负责人看过之后要求**改回项目原本的比例**
+   *    （原来就是 56 / 268，仿微信那版）。总宽 324px，比设计稿窄 40px。
+   *    顶栏高度仍是设计稿的 56px（这一条没有被要求改）。 */
   --rail-w: 56px;
   --panel-w: 268px;
-  --head-h: 52px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --head-h: 56px;
 
-  /* 字号 */
+  /* 圆角：设计稿给的是 sm .25rem / DEFAULT .5rem / md .75rem /
+     lg 1rem / xl 1.5rem / full 9999px */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+
+  /* ---------- 字号 ----------
+   * 设计稿的 display-lg 28 / headline-lg 20 / headline-md 16 /
+   * body-lg 15 / body-md 14 / body-sm 13 / label 12-11 / caption 10。
+   * 现有的 --fs-* 是 11.5~15 的密集体系，直接对齐到设计稿的
+   * 四个常用档（caption / label / body / headline），其余保留原值。 */
   --fs-xs: 11.5px;
   --fs-sm: 12.5px;
   --fs-md: 13.5px;
   --fs-lg: 15px;
+  --fs-caption: 10px;
+  --fs-label: 12px;
+  --fs-headline: 16px;
+  --fs-display: 20px;
 
-  /* 语义色（两个主题共用） */
-  --c-brand: #07c160;      /* 微信绿 */
-  --c-brand-hover: #06ad56;
-  --c-danger: #fa5151;
-  --c-ok: #3fae74;         /* 在线 / 已连接 */
-  --c-bad: #e05a52;        /* 离线 / 未连接 */
+  --font-ui: 'Nunito Sans', ui-rounded, -apple-system, BlinkMacSystemFont,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
-  /* 层级 */
+  /* ---------- 比奇堡调色板 ---------- */
+  --bb-gold: #fdd835;
+  --bb-gold-dim: #e8c41d;
+  --bb-gold-soft: #ffe16e;
+  --bb-gold-pale: #ffe082;
+  --bb-on-gold: #1a252c;      /* 金色底上的文字：不要用纯黑，留一点蓝调 */
+
+  --bb-coral: #f2646e;
+  --bb-coral-soft: #fbdada;
+  --bb-on-coral: #721322;
+
+  --bb-cyan: #26c6da;
+  --bb-cyan-deep: #0e93a6;    /* 白底上可读的青色（对比度 3.2:1） */
+  --bb-cyan-soft: #6eecff;
+  --bb-on-cyan: #006a75;
+
+  --bb-emerald: #00e676;      /* 在线光点 */
+  --bb-emerald-text: #00a854; /* 白底上的"在线"文字 */
+  --bb-navy: #0e2439;
+  --bb-navy-2: #1d3247;
+  --bb-slate: #263238;
+  --bb-seafoam: #f0f7f6;
+  --bb-seafoam-2: #e8f3f1;
+  --bb-canvas: #f9fafb;
+  --bb-outline: #cfc6ac;
+  --bb-meta: #90a4ae;         /* 时间戳／元信息（设计稿指定） */
+
+  /* ---------- 语义色（两个主题共用） ---------- */
+  --c-brand: #0e93a6;         /* 焦点环 / 进度条 / 在线点 —— 走青色系 */
+  --c-brand-hover: #0b7b8b;
+  --c-danger: #ba1a1a;
+  --c-ok: #00a854;
+  --c-bad: #e05a52;
+  --c-warn: #c98a12;
+
+  /* 发送气泡的金色渐变（设计稿：135deg #FFE082 → #FFD54F） */
+  --grad-sent: linear-gradient(135deg, #ffe082 0%, #ffd54f 100%);
+  --shadow-sent: 0 3px 12px rgba(253, 216, 53, .25);
+  --shadow-sent-hover: 0 5px 18px rgba(253, 216, 53, .42);
+  --shadow-recv: 0 2px 8px rgba(14, 36, 57, .04), 0 1px 2px rgba(38, 198, 218, .06);
+  --shadow-l2: 0 12px 32px rgba(14, 36, 57, .16);
+
+  /* ---------- 层级 ---------- */
   --z-pop: 60;
   --z-dialog: 100;
 
-  /* 动效 */
+  /* ---------- 动效 ---------- */
   --ease: cubic-bezier(.2, .8, .3, 1);
+  /* 设计稿的 pop-in 弹入曲线（带一点回弹） */
+  --ease-pop: cubic-bezier(.34, 1.56, .64, 1);
+
+  /* ---------- 主题壁纸的三束柔光（设计稿 _2 的「比奇堡主题壁纸」） ----------
+   * 深浅两套的**透明度不同**：浅色下可以明快一点，深色下必须压暗，
+   * 否则柔光会盖过气泡、把正文对比度拉下来。
+   * 放在 :root 当默认（浅色值），深色块里覆盖。 */
+  --wl-sun: rgba(253, 216, 53, .30);
+  --wl-reef: rgba(242, 100, 110, .20);
+  --wl-jelly: rgba(38, 198, 218, .22);
+  --wallpaper-tint: rgba(110, 236, 255, .07);
 }
 
-/* ---------- 深色（默认） ---------- */
-html[data-theme='dark'] {
-  --bg-app: #191919;
-  --bg-rail: #1a1a1a;
-  --bg-panel: #202020;
-  --bg-head: #1f1f1f;
-  --bg-card: #2a2a2a;
-  --bg-bubble: #2c2c2c;
-  --bg-bubble-me: #3a8a63;
-  --text-on-bubble-me: #ffffff;
-  --bg-hover: #262626;
-  --bg-active: #1f4a3d;
-  --bg-active-hover: #235742;
-
-  --fg: #e6e6e6;
-  --fg-dim: #8c8c8c;
-  --fg-faint: #6a6a6a;
-  --fg-on-rail: #a8a8a8;
-  --line: #2b2b2b;
-  --line-strong: #141414;
-  --scroll-thumb: #3a3a3a;
-  --fg-on-rail-hover: #ffffff;
-  --scrim: rgba(0, 0, 0, .45);
-  color-scheme: dark;
-}
-
-/* ---------- 浅色 ---------- */
+/* ---------- 浅色：Sandy Pearl Canvas（设计稿权威） ---------- */
 html[data-theme='light'] {
-  --bg-app: #f5f5f5;
-  --bg-rail: #2e2e2e;
-  --bg-panel: #f2f2f2;
-  --bg-head: #ededed;
+  --bg-app: #f7fafc;
+  --bg-rail: #0e2439;                                   /* Lagoon Deep Navy */
+  --bg-panel: #f0f7f6;                                  /* Seafoam Mist */
+  --bg-panel-glass: rgba(240, 247, 246, .85);           /* Level 1 玻璃层 */
+  --bg-head: rgba(255, 255, 255, .9);
   --bg-card: #ffffff;
   --bg-bubble: #ffffff;
-  --bg-bubble-me: #95ec69;
-  --text-on-bubble-me: #1a1a1a;
-  --bg-hover: #e8e8e8;
-  --bg-active: #d9d9d9;
-  --bg-active-hover: #cfcfcf;
+  --bg-bubble-me: #ffd54f;                              /* 与渐变中段同色（画不出渐变的地方用它） */
+  --text-on-bubble-me: #1a252c;
+  --bg-hover: rgba(38, 198, 218, .08);                  /* 悬停：透光海沫 */
+  --bg-active: #ffffff;                                 /* 选中：实心白 */
+  --bg-active-hover: #ffffff;
 
-  --fg: #1a1a1a;
-  --fg-dim: #7a7a7a;
-  --fg-faint: #a0a0a0;
-  --fg-on-rail: #c4c4c4;
-  --line: #dedede;
-  --line-strong: #dcdcdc;
-  --scroll-thumb: #c8c8c8;
+  /* ⚠️ 设计稿把元信息定为 #90A4AE，实测它在本项目的浅底上只有 2.3~2.6:1 ——
+     连 WCAG 的最低档（3.0）都不到。所以**没有照抄**，改成三级可读体系：
+       --fg       主要文字/标题            ≈17:1
+       --fg-dim   次级信息（预览、状态、页脚、时间戳正文）≈5.2:1
+       --fg-faint 装饰性最淡文字（占位符、图标、分隔说明）≈3.7:1
+     纯装饰的保留设计稿那种"淡"，要读的必须读得清。 */
+  --fg: #061d31;
+  --fg-dim: #56697a;
+  --fg-faint: #6f8291;
+  --fg-on-rail: #78909c;
   --fg-on-rail-hover: #ffffff;
-  --scrim: rgba(0, 0, 0, .35);
+  --line: #e0f2f1;                                      /* 设计稿的气泡描边色 */
+  --line-strong: rgba(6, 29, 49, .06);
+  --scroll-thumb: rgba(6, 29, 49, .18);
+  --scrim: rgba(6, 29, 49, .4);
+  --badge-bg: #f2646e;
+  --badge-fg: #ffffff;
+
+  /* 设计稿里的玻璃层——固定用 rgba 是为了 backdrop-filter 有东西可透 */
+  --glass-border: 1px solid rgba(224, 242, 241, .6);
+  --glass-bg: rgba(240, 247, 246, .85);
+  --water-tint: rgba(110, 236, 255, .10);               /* 环境气泡的填充 */
+  --water-line: rgba(110, 236, 255, .30);
+
+  /* ⚠️ 这三个必须**随主题变**。
+     踩过的坑：药丸/进度条底色原来写的是 `color-mix(..., var(--bb-seafoam-2))`，
+     而 --bb-seafoam-2（#E8F3F1）是**固定浅色**、不随主题变 ——
+     深色下混出来是一块灰绿，上面的青色文字几乎看不见（实测截图里
+     "2 人" 药丸糊成一团）。改成主题化的语义令牌。 */
+  --bg-subtle: #e8f3f1;                                 /* 药丸/轨道/禁用按钮的底 */
+  --accent-text: #006a75;                               /* 浅底上的青色强调文字 */
+  --ok-text: #007a3d;                                   /* 浅底上的"在线"文字 */
   color-scheme: light;
+}
+
+/* ---------- 深色：Sunken Lagoon（派生，设计稿未给） ---------- */
+html[data-theme='dark'] {
+  --bg-app: #0a1b2b;
+  --bg-rail: #06131f;
+  --bg-panel: #0e2439;
+  --bg-panel-glass: rgba(14, 36, 57, .92);
+  --bg-head: rgba(12, 32, 50, .9);
+  --bg-card: #12283d;
+  --bg-bubble: #16324b;
+  --bg-bubble-me: #fdd835;                              /* 金色气泡在深色下**不变** */
+  --text-on-bubble-me: #1a252c;
+  --bg-hover: rgba(38, 198, 218, .10);
+  --bg-active: rgba(255, 255, 255, .07);
+  --bg-active-hover: rgba(255, 255, 255, .10);
+
+  --fg: #e9f1ff;
+  --fg-dim: #a9becd;
+  --fg-faint: #6e879b;
+  --fg-on-rail: #78909c;
+  --fg-on-rail-hover: #ffffff;
+  --line: rgba(255, 255, 255, .07);
+  --line-strong: rgba(0, 0, 0, .45);
+  --scroll-thumb: rgba(255, 255, 255, .16);
+  --scrim: rgba(0, 0, 0, .55);
+  --badge-bg: #f2646e;
+  --badge-fg: #ffffff;
+
+  --c-brand: #26c6da;
+  --c-brand-hover: #45d8ed;
+  --c-ok: #00e676;
+  --c-warn: #fdd835;
+
+  --glass-border: 1px solid rgba(255, 255, 255, .07);
+  --glass-bg: rgba(14, 36, 57, .72);
+  --water-tint: rgba(110, 236, 255, .06);
+  --water-line: rgba(110, 236, 255, .18);
+  --shadow-recv: 0 2px 8px rgba(0, 0, 0, .3);
+
+  /* 深色下的对应令牌：药丸底色改成"白色提亮一层"，
+     青色/绿色强调文字提亮到能在深底上读清楚。 */
+  --bg-subtle: rgba(255, 255, 255, .08);
+  --accent-text: #5cdcec;
+  --ok-text: #4be08a;
+
+  /* 深色下的壁纸柔光：整体压到浅色的一半左右，免得盖住气泡。 */
+  --wl-sun: rgba(253, 216, 53, .13);
+  --wl-reef: rgba(242, 100, 110, .12);
+  --wl-jelly: rgba(38, 198, 218, .12);
+  --wallpaper-tint: rgba(110, 236, 255, .04);
+  color-scheme: dark;
 }

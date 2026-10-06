@@ -34,10 +34,37 @@ bash scripts/deploy-web.sh                     # → dist/site + 发布到 im.pi
 
 | | roomd（常驻节点） | 前端（浏览器站点） |
 |---|---|---|
-| 跑在哪 | 服务器 Docker：`root@189.24.68.147:15601`（key `~/Desktop/ssh/mindcrew/codex`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://im.pinkstar.cc` |
+| 跑在哪 | 服务器 Docker：`root@189.24.70.253:22`（key `~/Desktop/ssh/mindcrew/codex`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://im.pinkstar.cc` |
 | 构建 | `bash scripts/build-wasm.sh native` → `dist/roomd` | `bash scripts/build-wasm.sh release` → `frontend/pkg`，再 `bash scripts/deploy-web.sh` |
-| 数据 | `/opt/iroh/roomd/data`（`identity.key` + `history/`） | 无（状态在浏览器 localStorage / IndexedDB） |
+| 数据 | `/opt/iroh/roomd/data`（`identity.key` + SQLite 历史数据库及其 WAL） | 无（状态在浏览器 localStorage / IndexedDB） |
 | 细节文档 | `deploy/roomd/README.md` | `scripts/deploy-web.sh` 头部注释 |
+
+2026-10-06 已迁移到上述新服务器，旧服务器不再作为默认构建或发布目标。
+迁移初次核查时新机尚无构建工具链；2026-10-07 已补齐 `/opt/iroh-build/cargo` / `rustup`、
+`wasm-pack`、`wasm32-unknown-unknown` 目标及原生编译依赖，native 与 WASM release 锁定依赖构建均通过。
+运行已有容器不代表能构建新版本，更换构建机后必须重新实际验证这两条构建路径。
+构建脚本会在同步源码前检查主要工具是否存在；这不是完整的构建验证。
+
+### 日志与备份
+
+roomd 与 relay Compose 配置将 Docker 日志限制为每份 10 MiB、最多 3 份。
+日志选项在容器创建时生效，更新后需通过对应项目的 `docker compose up -d` 重建容器，
+不是仅执行 `docker restart`。生产日常使用 `RUST_LOG=info`，排查时临时开启 debug。
+
+`scripts/backup-roomd.py` 使用 SQLite backup API 保存当前历史，并归档身份、配置；
+备份目录权限 0700、归档 0600，成功创建新归档后保留最近 14 份。
+`deploy/roomd-backup.service` 与 `deploy/roomd-backup.timer` 安装到 systemd 后每日运行。
+
+```bash
+scp -P 22 scripts/backup-roomd.py root@189.24.70.253:/usr/local/sbin/iroh-backup-roomd.py
+scp -P 22 deploy/roomd-backup.{service,timer} root@189.24.70.253:/etc/systemd/system/
+ssh -p 22 root@189.24.70.253 'chmod 700 /usr/local/sbin/iroh-backup-roomd.py; systemctl daemon-reload; systemctl start roomd-backup.service; systemctl enable --now roomd-backup.timer'
+```
+
+归档包含私钥，不能放到公开目录。恢复时先停止 roomd，将归档解到独立目录，
+运行 SQLite `PRAGMA quick_check` 并校验 identity，再替换数据目录；旧数据保留用于回滚。
+同一私钥不能启动两个锚点。此流程不备份二进制，回滚产物须另行保留；
+本机备份也不能抵御整机丢失，需将归档加密同步到异机存储并定期验证恢复。
 
 **顺序不能反。** 协议或接口有变时，先升 roomd 再上前端；反了会出现"新前端连旧节点"，
 表现为功能完全不生效或连接超时。
@@ -53,6 +80,8 @@ bash scripts/deploy-web.sh                     # → dist/site + 发布到 im.pi
 | `client-wasm/src/bin/roomd.rs` | — | ✅ | — | |
 | `frontend/relay-config.json` | — | — | ✅ | 改 `anchor.id` 时要与 roomd 实际 EndpointId 一致 |
 | `client-wasm/Cargo.toml` / `Cargo.lock` | ✅ | ✅ | ✅ | |
+
+中继 TCP 吞吐优化为独立的端口级策略服务，不改全局拥塞算法；安装、范围、基准与回滚见 [`relay-tcp-bbr.md`](relay-tcp-bbr.md)。
 
 ### ⚠️ wasm **必须** release 构建
 

@@ -39,7 +39,7 @@ async function observe(browser, colorScheme, storedPref) {
   const page = await context.newPage();
   // 先跑一次以取得 origin，才能写 localStorage
   await page.goto(site, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!window.__theme, undefined, { timeout: 60000 });
+  await page.waitForFunction(() => !!window.__iroh_theme, undefined, { timeout: 60000 });
   await page.evaluate((p) => {
     if (p) localStorage.setItem('iroh.theme', p);
     else localStorage.removeItem('iroh.theme');
@@ -57,7 +57,7 @@ async function observe(browser, colorScheme, storedPref) {
     await page.waitForTimeout(15);
   }
   // 等 main.js 完全跑完，再看最终值
-  await page.waitForFunction(() => !!window.__theme, undefined, { timeout: 60000 });
+  await page.waitForFunction(() => !!window.__iroh_theme, undefined, { timeout: 60000 });
   await page.waitForTimeout(500);
   const final = await page.evaluate(() => document.documentElement.dataset.theme);
   if (seen[seen.length - 1] !== final) seen.push(final);
@@ -98,11 +98,11 @@ try {
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    // `?autostart=1` 让节点自己启动；否则要等 `__openRoom` 才有完整 UI
+    // `?autostart=1` 让节点自己启动；否则要等 `__iroh_openRoom` 才有完整 UI
     await page.goto(`${site}/?autostart=1&room=theme-test`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => !!window.__theme, undefined, { timeout: 60000 });
+    await page.waitForFunction(() => !!window.__iroh_theme, undefined, { timeout: 60000 });
     // 等节点真正起来（设置页要读 endpoint_id，节点没好会渲染失败）
-    await page.waitForFunction(() => window.__net && window.__net.endpoint_id(), undefined, { timeout: 90000 });
+    await page.waitForFunction(() => window.__iroh_net && window.__iroh_net.endpoint_id(), undefined, { timeout: 90000 });
     await page.evaluate(() => document.getElementById('tab-settings').click());
     // ⚠️ 等元素**真的出现**，别用固定 sleep（面板渲染依赖节点状态）
     await page.waitForSelector('select[data-theme-pref]', { timeout: 30000 });

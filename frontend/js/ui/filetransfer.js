@@ -40,7 +40,6 @@ import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
 import { dialog } from './dialog.js';
-import * as U from '../util.js';
 
 /** 只有 Chromium 支持文件系统访问 API */
 export const canTransferFiles = () =>
@@ -164,10 +163,10 @@ function bindWorkerPushes() {
   net.client.onMessage((m) => {
     const p = m.payload || {};
     // 测试钩子：Worker 每次写入回传块序号（只回序号，不回数据）。
-    // 主线程收到后照旧塞进 `window.__writeLog`，测试断言无需改。
+    // 主线程收到后照旧塞进 `window.__iroh_writeLog`，测试断言无需改。
     if (m.type === 'transfer:chunk') {
-      window.__writeLog = window.__writeLog || [];
-      window.__writeLog.push(p.seq);
+      window.__iroh_writeLog = window.__iroh_writeLog || [];
+      window.__iroh_writeLog.push(p.seq);
       return;
     }
     switch (m.type) {
@@ -272,8 +271,8 @@ function bindWorkerPushes() {
 
 async function pickSaveHandle(meta) {
   // 自动化测试出口：无头环境没有系统对话框，可先注入
-  //   window.__mockFilePicker = (name, size) => 假句柄
-  if (window.__mockFilePicker) return await window.__mockFilePicker(meta.name, meta.size);
+  //   window.__iroh_mockFilePicker = (name, size) => 假句柄
+  if (window.__iroh_mockFilePicker) return await window.__iroh_mockFilePicker(meta.name, meta.size);
   const ext = meta.name.split('.').pop() || '';
   return await window.showSaveFilePicker({
     suggestedName: meta.name,
@@ -1096,80 +1095,94 @@ export const fileTransfer = {
 
 /* ------------------------------------------------------------------ 测试出口
  *
- * 自动化测试（scripts/transfer-test.py）通过这些钩子驱动真实传输。
- * 无头浏览器没有系统"保存位置"对话框，所以用 __mockFilePicker 注入
- * 内存假句柄，其余路径与真实用户完全一致。
+ * 自动化测试（scripts/transfer-test.py / scripts/transfer-bench.mjs）通过这些钩子
+ * 驱动真实传输。无头浏览器没有系统"保存位置"对话框，所以用 __iroh_mockFilePicker
+ * 注入内存假句柄，其余路径与真实用户完全一致。
+ *
+ * ## 为什么是「导出一个安装函数」而不是直接散在文件末尾赋值
+ *
+ * 这些钩子必须访问本模块的**闭包私有变量**（`transfers` / `INVITE_KEY` /
+ * `fileTransfer._handles`），所以函数体搬不到别的文件里去。
+ * 但"在模块顶层无条件往window 上挂 16 个 `__xxx`"本身是有代价的：
+ *   - 污染全局命名空间（任何页面脚本/扩展都能看到并调用）
+ *   - 生产环境也带着这些出口
+ * 所以改成：由 `main.js` 显式调用一次 `installTransferTestHooks(net)`，
+ * 名字也统一加 `__iroh_` 前缀。⚠️ **改名时记得同步改 scripts/e2e/*.py 与
+ * scripts/transfer-*.{py,mjs}**（那里的字符串是按名字查找的）。
  * ------------------------------------------------------------------------ */
 
-window.__transfers = () => {
-  const out = [];
-  for (const [id, t] of transfers) {
-    out.push({
-      file_id: id,
-      name: t.meta?.name,
-      size: t.meta?.size,
-      direction: t.direction,
-      state: t.state,
-      done: t.done,
-      total: t.total,
-      chunk_size: t.meta?.chunk_size,
-      root_hash: t.meta?.root_hash,
-      error: t.error,
-      // 多接收方汇总（发送侧才有意义）
-      peers: t.peers,
-      peersDone: t.peersDone,
-      peersFailed: t.peersFailed,
-      peersRejected: t.peersRejected,
-      peersCancelled: t.peersCancelled,
-      recipients: t.recipients,
-      available: t.available,
-      bytes: t.bytes,
-      // 历史文件卡片当前算出来的可用性（live / expired / unknown）。
-      // 测试要断言"发送方走了卡片就变过期"，所以把它显式导出来；
-      // UI 上的文案是从同一个值渲染的，不会出现"测的值和看到的不一致"。
-      avail: t.avail,
-      fromProof: !!t.fromProof,
-    });
-  }
-  return out;
-};
+/** 在 window 上安装文件传输相关的测试钩子。由 main.js 启动时调一次。 */
+export function installTransferTestHooks(net) {
+    window.__iroh_transfers = () => {
+    const out = [];
+    for (const [id, t] of transfers) {
+      out.push({
+        file_id: id,
+        name: t.meta?.name,
+        size: t.meta?.size,
+        direction: t.direction,
+        state: t.state,
+        done: t.done,
+        total: t.total,
+        chunk_size: t.meta?.chunk_size,
+        root_hash: t.meta?.root_hash,
+        error: t.error,
+        // 多接收方汇总（发送侧才有意义）
+        peers: t.peers,
+        peersDone: t.peersDone,
+        peersFailed: t.peersFailed,
+        peersRejected: t.peersRejected,
+        peersCancelled: t.peersCancelled,
+        recipients: t.recipients,
+        available: t.available,
+        bytes: t.bytes,
+        // 历史文件卡片当前算出来的可用性（live / expired / unknown）。
+        // 测试要断言"发送方走了卡片就变过期"，所以把它显式导出来；
+        // UI 上的文案是从同一个值渲染的，不会出现"测的值和看到的不一致"。
+        avail: t.avail,
+        fromProof: !!t.fromProof,
+      });
+    }
+    return out;
+    };
 
-window.__acceptFile = (file_id) =>
-  fileTransfer.accept(file_id, { useOpfs: !!window.__useOpfs });
+    window.__iroh_acceptFile = (file_id) =>
+      fileTransfer.accept(file_id, { useOpfs: !!window.__iroh_useOpfs });
 
-window.__clearBitmaps = async () => {
-  await net.client.call('clearBitmaps');
-  // ⚠️ 顺手把 OPFS 里的目标文件也删掉 —— 只在开测前调一次。
-  //    不能在每次 accept 时删（那等于每次从头开始，断点续传永远测不出来）。
-  await net.client.call('resetOpfs', 'resume.bin');
-  // ⚠️ **必须连邀约持久化一起清**。
-  //    测试用固定身份（?key=）时，上一轮写下的邀约会在下一轮被
-  //    `restoreInvites()` 恢复出来 —— 接收方于是对着**上一个 file_id**
-  //    点接受，发送端根本不认（它只认自己内存里的那个），
-  //    表现为「两个接收方看到的 file_id 不同」「发送端只看到 1 条通道」。
-  //    （踩过：排查了很久"多接收方 bug"，其实是测试自己污染了自己。）
-  localStorage.removeItem(INVITE_KEY);
-  transfers.clear();
-  fileTransfer._handles.clear();
-  window.__writeLog = [];
-};
+    window.__iroh_clearBitmaps = async () => {
+      await net.client.call('clearBitmaps');
+      // ⚠️ 顺手把 OPFS 里的目标文件也删掉 —— 只在开测前调一次。
+      //    不能在每次 accept 时删（那等于每次从头开始，断点续传永远测不出来）。
+      await net.client.call('resetOpfs', 'resume.bin');
+      // ⚠️ **必须连邀约持久化一起清**。
+      //    测试用固定身份（?key=）时，上一轮写下的邀约会在下一轮被
+      //    `restoreInvites()` 恢复出来 —— 接收方于是对着**上一个 file_id**
+      //    点接受，发送端根本不认（它只认自己内存里的那个），
+      //    表现为「两个接收方看到的 file_id 不同」「发送端只看到 1 条通道」。
+      //    （踩过：排查了很久"多接收方 bug"，其实是测试自己污染了自己。）
+      localStorage.removeItem(INVITE_KEY);
+      transfers.clear();
+      fileTransfer._handles.clear();
+      window.__iroh_writeLog = [];
+    };
 
-/** 诊断：Worker 内部每条出站通道（file_id:peer）的原始状态 */
-window.__outgoingDetail = (fileId) =>
-  net.client.call('outgoingDetail', fileId ?? '').then((s) => JSON.parse(s));
+    /** 诊断：Worker 内部每条出站通道（file_id:peer）的原始状态 */
+    window.__iroh_outgoingDetail = (fileId) =>
+      net.client.call('outgoingDetail', fileId ?? '').then((s) => JSON.parse(s));
 
-/** 诊断：Worker 内存里还留着的文件引用（该释放没释放 = 泄漏） */
-window.__outFileRefs = () => net.client.call('outFiles').then((s) => JSON.parse(s));
+    /** 诊断：Worker 内存里还留着的文件引用（该释放没释放 = 泄漏） */
+    window.__iroh_outFileRefs = () => net.client.call('outFiles').then((s) => JSON.parse(s));
 
-/** 诊断：发送端收到的 Accept 流水（多接收方排查用） */
-window.__accLog = () => net.client.call('accLog').then((s) => JSON.parse(s));
+    /** 诊断：发送端收到的 Accept 流水（多接收方排查用） */
+    window.__iroh_accLog = () => net.client.call('accLog').then((s) => JSON.parse(s));
 
-/** 当前 IndexedDB 里的断点位图 key（测试用） */
-window.__pendingBitmaps = async () => JSON.parse(await net.client.call('pendingBitmaps'));
+    /** 当前 IndexedDB 里的断点位图 key（测试用） */
+    window.__iroh_pendingBitmaps = async () => JSON.parse(await net.client.call('pendingBitmaps'));
 
-/** 测试用：开/关"写入日志回传"（只回块序号，不回数据） */
-window.__setTestMode = (on) => net.client.call('setTestMode', !!on);
+    /** 测试用：开/关"写入日志回传"（只回块序号，不回数据） */
+    window.__iroh_setTestMode = (on) => net.client.call('setTestMode', !!on);
 
-/** 测试用：从 OPFS 读回收到的文件做逐字节校验（只回结论） */
-window.__verifyOpfs = async (name, size, chunkSize) =>
-  JSON.parse(await net.client.call('readOpfsFile', name, size, chunkSize));
+    /** 测试用：从 OPFS 读回收到的文件做逐字节校验（只回结论） */
+    window.__iroh_verifyOpfs = async (name, size, chunkSize) =>
+      JSON.parse(await net.client.call('readOpfsFile', name, size, chunkSize));
+}

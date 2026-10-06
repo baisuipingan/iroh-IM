@@ -52,7 +52,7 @@ try {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       for (const width of [1440, 320]) {
         await page.setViewportSize({ width, height: 1000 });
-        if (width === 320) await page.evaluate(() => document.getElementById('panel').classList.remove('is-open'));
+        if (width === 320 && await page.locator('#panel-scrim').isVisible()) await page.locator('#panel-scrim').click();
         for (const shape of shapes) for (const direction of ['send', 'recv']) {
           const fileId = `${shape.name}-${direction}`;
           const card = page.locator(`.msg--img[data-file-id="${fileId}"]`);

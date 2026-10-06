@@ -56,11 +56,11 @@ tt.check("进房后输入区可用", sa["composerEnabled"] is True, str(sa["comp
 tt.check("全新房间显示空态", sa["emptyState"] is True, str(sa["emptyState"]))
 
 # ---- 2 ----
-A.ev("window.__sendText('你好-A')", timeout=20)
+A.ev("window.__iroh_sendText('你好-A')", timeout=20)
 time.sleep(3)
 tt.check("B 收到 A 的消息", "你好-A" in st(B)["messages"], str(st(B)["messages"]))
 tt.check("有消息后空态消失", st(B)["emptyState"] is False)
-B.ev("window.__sendText('收到-B')", timeout=20)
+B.ev("window.__iroh_sendText('收到-B')", timeout=20)
 time.sleep(3)
 tt.check("A 收到 B 的回复", "收到-B" in st(A)["messages"], str(st(A)["messages"]))
 
@@ -80,9 +80,9 @@ tt.check("IME 组字时 Enter 不发送", "nihao" not in sa["mine"], str(sa["min
 tt.check("IME 组字后输入框保留", inp(A) == "nihao", repr(inp(A)))
 
 # ---- 4 离线发送失败 ----
-A.ev("window.__net.phase = 'offline'")
+A.ev("window.__iroh_net.phase = 'offline'")
 time.sleep(0.3)
-A.ev("window.__sendText('会失败的消息')", timeout=20)
+A.ev("window.__iroh_sendText('会失败的消息')", timeout=20)
 time.sleep(2)
 fa = st(A)
 tt.check("失败时出现红色失败气泡", any("会失败的消息" in x for x in fa["failed"]), str(fa["failed"]))
@@ -90,7 +90,7 @@ tt.check("失败时输入框保留原文", inp(A) == "会失败的消息", repr(
 tt.check("失败气泡不混进正常消息", "会失败的消息" not in fa["mine"], str(fa["mine"]))
 
 # ---- 5 重发 ----
-A.ev("window.__net.phase = 'online'")
+A.ev("window.__iroh_net.phase = 'online'")
 time.sleep(0.3)
 A.ev("document.querySelector('.msg--failed .msg__retry .link-btn')?.click()", timeout=20)
 time.sleep(3)
@@ -101,7 +101,7 @@ tt.check("重发成功后输入框被清空（防重复发）", inp(A) == "", re
 
 # ---- 6 文字成功 + 附件失败（本轮修的缺陷）----
 A.ev("""(() => {
-  window.__addFiles([new File(['x'], 'attach.txt', {type: 'text/plain'})]);
+  window.__iroh_addFiles([new File(['x'], 'attach.txt', {type: 'text/plain'})]);
   return 1;
 })()""")
 time.sleep(0.5)

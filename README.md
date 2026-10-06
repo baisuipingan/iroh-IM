@@ -46,10 +46,62 @@ cargo test  --offline --locked --no-default-features --features cli   # 单元�
 cargo check --offline --locked --no-default-features --features cli   # 验证 Cargo.lock 同步
 
 bash scripts/security/run.sh    # 安全攻击回归（用原始攻击脚本验证修复被挡住）
+
+node scripts/smoke.mjs          # 前端冒烟（~6 秒）—— 改过前端**先跑这个**
 bash scripts/e2e/run.sh         # 浏览器端到端回归（前置见 scripts/e2e/README.md）
 ```
 
+⚠️ **`smoke.mjs` 必须在 `e2e/run.sh` 之前**。一个未定义的引用就能让整个
+`main.js` 挂掉，表现为**每个用例都 `TimeoutError`** —— 崩溃日志完全指不到真正的错。
+（实测：`test-hooks.js` 里一个悬空变量，26 个用例全 CRASH，跑了 21 分钟才查到。）
+冒烟脚本会直接把页面异常和缺失的钩子打出来，6 秒定位。
+
 前端零构建：改 `frontend/**.js|css|html` 直接刷新即可（`dev-serve.py` 强制不缓存）。
+
+### 代码风格（lint / format）
+
+本项目**零 npm 依赖**，所以工具也不进 `package.json` —— 用biome 的独立二进制：
+
+```bash
+npm i -g @biomejs/biome     # 或 npx @biomejs/biome
+cd frontend && biome check ../frontend/js main.js ../frontend/css
+biome check --write .       # 自动修
+```
+
+- **`biome.json`** —— lint + format 配置。当前状态：**0 error / 0 warning**。
+- **`.editorconfig`** —— 编辑器通用约定。Python 侧（`scripts/` 下 30+ 脚本）
+  没有任何工具管，这份文件是那边唯一的约束。
+- ⚠️ **`biome format` 不要跑在存量代码上**：项目里行尾注释是**刻意用空格对齐成列**的
+  （`EV` 事件表、配置项列表都是），biome 会把这些对齐全部拆掉，产生 21 个文件的无意义 diff。
+  formatter 只用于**新写的文件**。
+
+**biome.json 里每条被关掉的规则都写了注释说明原因**，别随手打开 ——
+比如 `noControlCharactersInRegex` 关掉是因为 `util.js` 的房间名校验
+**本来就要**匹配控制字符。
+
+### 前端代码结构
+
+```
+frontend/js/
+frontend/main.js          组装层：初始化 + 事件接线 + 进房流程
+  bus.js  store.js  util.js    内核：无 DOM 副作用
+  net.js                 网络层（唯一碰 wasm 的地方，走 postMessage RPC）
+  iroh-worker.js         Worker：wasm + blake3 + IndexedDB 断点
+  probe.js               中继探测
+  test-hooks.js          自动化钩子（window.__state / __iroh_*），main.js 显式装一次
+  ui/
+    primitives.js        跨视图共享原语（avatar / ico / regionLabel / WALLPAPERS）
+    sidebar.js           侧栏门面：只管状态、事件接线、渲染调度
+    sidebar/chats.js       会话列表页
+    sidebar/status.js      连接状态页
+    sidebar/settings.js    设置页 + 设置项动作
+    timeline.js  composer.js  filetransfer.js
+    motion.js  topology.js  theme.js  notify.js  dialog.js
+```
+
+**依赖方向单向向下**：`main → ui/* → 内核 → net → Worker`。
+⚠️ **不要在 ui/ 之间横向 import**（`timeline.js` 去 import `sidebar.js` 这类）。
+共享的东西放`primitives.js`，确实需要读另一个视图的状态就用参数把 `host` 传进去。
 
 ## 文档索引
 

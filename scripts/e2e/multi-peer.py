@@ -51,11 +51,11 @@ def boot(fail_history=False):
     if fail_history:
         page.call("Page.addScriptToEvaluateOnNewDocument", {"source": """
           const timer = setInterval(() => {
-            if (!window.__net) return;
+            if (!window.__iroh_net) return;
             clearInterval(timer);
-            const original = window.__net.history.bind(window.__net);
+            const original = window.__iroh_net.history.bind(window.__iroh_net);
             let failures = 1;
-            window.__net.history = (...args) => {
+            window.__iroh_net.history = (...args) => {
               if (failures-- > 0) return Promise.reject(new Error('injected history failure'));
               return original(...args);
             };
@@ -74,10 +74,10 @@ def texts(page):
 try:
     first = boot()
     second = boot()
-    first.ev("window.__sendText('before-first')")
-    second.ev("window.__sendText('before-second')")
-    first.ev(f"window.__sendFile(window.__makeFile('multi-peer.bin', 64), {json.dumps(room)})")
-    wait_until(first, f"window.__net.history({json.dumps(room)}, 50).then(messages => "
+    first.ev("window.__iroh_sendText('before-first')")
+    second.ev("window.__iroh_sendText('before-second')")
+    first.ev(f"window.__iroh_sendFile(window.__iroh_makeFile('multi-peer.bin', 64), {json.dumps(room)})")
+    wait_until(first, f"window.__iroh_net.history({json.dumps(room)}, 50).then(messages => "
                   "messages.some(message => message.text === 'before-second') && "
                   "messages.some(message => message.file?.name === 'multi-peer.bin'))", 40)
 
@@ -93,7 +93,7 @@ try:
     tt.check("第三人加载历史文件卡片", True)
 
     for index, page in enumerate(pages):
-        page.ev(f"window.__sendText('live-{index}')")
+        page.ev(f"window.__iroh_sendText('live-{index}')")
     for index, page in enumerate(pages):
         wait_until(page, "['live-0','live-1','live-2'].every(text => "
                       "[...window.__state().messages, ...window.__state().mine].includes(text))", 30)
@@ -101,22 +101,33 @@ try:
         wait_until(page, f"import('./js/ui/sidebar.js').then(({{sidebar}}) => "
                       f"{json.dumps([identity for identity in identities if identity != identities[index]])}"
                       ".every(identity => sidebar.peers.some(peer => peer.id === identity)))", 30)
-        page.ev("document.getElementById('tab-people').click()")
-        title = page.ev("document.querySelector('#panel-body .section-title').textContent")
-        tt.check(f"用户 {index + 1} 显示三人（排除常驻节点）", "3，含自己" in title, title)
+        # 「在线成员」页已合并进「连接状态页」：点开名单，**数真实人头**
+        # （原来是读一个小标题里的数字，现在直接数行，更结实）
         page.ev("document.getElementById('tab-status').click()")
-        count = page.ev("[...document.querySelectorAll('.kv')].find(row => "
-                        "row.querySelector('.kv__k').textContent === '房间人数').querySelector('.kv__v').textContent")
-        tt.check(f"用户 {index + 1} 状态页区分人数和邻居", count == "3 人（含自己）", count)
+        page.ev("document.querySelector('[data-expand=\"members\"]')?.click()")
+        wait_until(page, "document.querySelectorAll('#status-members .member').length === 3", 20)
+        rows = page.ev("document.querySelectorAll('#status-members .member').length")
+        tt.check(f"用户 {index + 1} 成员名单列出三人（排除常驻节点）", rows == 3, f"{rows} 行")
+        # ⚠️ 状态页改版（比奇堡设计稿 _1）后，"房间人数"从 `.kv` 行换成了
+        #    `.stat` 卡片行（标签在 `.stat__label`、取值在右侧的药丸里）。
+        #    断言的原意不变：**状态页要能区分"房间人数"和"Gossip 邻居"** ——
+        #    这两个数在旧版曾长期混为一谈。
+        count = page.ev("""(() => {
+          const row = [...document.querySelectorAll('#panel-body .stat')]
+            .find(r => r.querySelector('.stat__label')?.textContent === '在线成员');
+          return row ? row.querySelector('.state-pill')?.textContent.trim() : 'MISSING';
+        })()""")
+        # 药丸现在只有数字（"含自己"在下面那行说明里），所以这里比 "3 人"
+        tt.check(f"用户 {index + 1} 状态页区分人数和邻居", count == "3 人", count)
 
     third.ev("""(() => {
-      const original = window.__net._dispatch.bind(window.__net);
-      window.__net._dispatch = event => {
+      const original = window.__iroh_net._dispatch.bind(window.__iroh_net);
+      window.__iroh_net._dispatch = event => {
         if (event.type === 'message' && event.message.text === 'dropped-live') return;
         original(event);
       };
     })()""")
-    first.ev("window.__sendText('dropped-live')")
+    first.ev("window.__iroh_sendText('dropped-live')")
     wait_until(third, "window.__state().messages.includes('dropped-live')", 35)
     tt.check("丢失实时广播后自动从历史补齐且不重复", texts(third).count("dropped-live") == 1)
     isolated = third.ev("""(async () => {

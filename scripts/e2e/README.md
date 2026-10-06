@@ -1,5 +1,24 @@
 # 浏览器端到端回归
 
+## 测试钩子（`window.__*`）
+
+所有钩子由 `frontend/js/test-hooks.js` 的 `installTestHooks()` 装上，
+由 `main.js` 在启动时显式调一次。
+
+| 名字 | 说明 |
+|---|---|
+| `window.__state()` | **主入口**。返回应用状态 + `ui`（界面文案镜像）+ `layout`（几何自检） |
+| `window.__iroh_openRoom(r)` | 进/切房间 |
+| `window.__iroh_sendText(t)` | 填输入框并发送（等价用户操作） |
+| `window.__iroh_net` | 网络层本体（模拟掉线、强制重连） |
+| `window.__iroh_theme(pref)` | **确定性**设置主题（`auto`/`light`/`dark`），不带参数则读 |
+| `window.__iroh_view(v)` | 切视图（`chat`/`topology`） |
+| 其余 `__iroh_*` | 见 `test-hooks.js` |
+
+⚠️ **`__state` 是唯一没有 `__iroh_` 前缀的** —— 它被 130+ 处引用，改名代价大于收益。
+新增钩子请一律用 `__iroh_` 前缀。
+⚠️ 改名要同步改本目录下的 `*.py` / `*.mjs` 与 `scripts/transfer-*.{py,mjs}`（按字符串查找）。
+
 ## 跑
 
 ```bash
@@ -11,6 +30,11 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/image-layout.mj
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/message-ownership.mjs
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/roomd-storage.mjs
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/history-scroll.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/theme-sync.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/redesign-sync.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/composer-resize.mjs
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs python3 scripts/e2e/relay-enabled.py
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs python3 scripts/transfer-bench.py 8099 0.5,2,8 opfs
 ```
 
 `fix-review.mjs` 启动独立 Chrome/WebKit 进程，覆盖超限报文后的健康通信、同身份连续刷新、
@@ -56,9 +80,10 @@ Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
 | **sidebar-pages** | 本目录 | **状态页/设置页**：中继行不叠字、不横向溢出、身份分组显示、中继计数自洽、资料卡「复制」按钮真绑定、标题未读数开关真生效 |
 | **multi-user-online** | 本目录 | **线上多用户模拟**（真站点 + 真中继 + 真 roomd）：4 个固定身份互相可见、消息归属（自己靠右/他人靠左）、全局时间序、后进房者能看历史、刷新后历史完整且归属正确 |
 | **relay-enabled** | 本目录 | 配置里的 `enabled: false` **真的排除中继**（状态页标「已禁用」、探测跳过它、全部禁用时启动被拦下） |
+| **redesign** | 本目录 | **比奇堡视觉改造**：三栏骨架尺寸、环境气泡、筛选 chips、顶栏徽标/副行、连接状态页与设置页的卡片结构、**两套主题逐对量 WCAG 对比度**、**状态页不许出现设计稿编造的量**（`3000m`/`MHz`/`丢失率`）、壁纸即改即存、设置页搜索真的筛、以及 `image-layout.mjs` 那两条图片硬约束的 CDP 复刻（116px / ≤220px） |
 
-> 加粗的三个是后加的（分别验证"历史存储资源上限 + 房间隔离 + F15"、
-> "状态页/设置页的布局与控件接线"）。
+> 加粗的几个是后加的（分别验证"历史存储资源上限 + 房间隔离 + F15"、
+> "状态页/设置页的布局与控件接线"、"中继 enabled 开关"，以及比奇堡改造后的视觉与对比度）。
 
 ## 必须知道的坑
 
@@ -69,15 +94,24 @@ Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
 若历史补齐先显示文件证明，用例会实际请求可接收的历史卡片以补齐邀约，
 再完成逐字节传输检查；不会仅凭 `archived/live` 状态假定已收到文件。
 
-0. ★ **整套连跑之前，先重启 roomd。**
-   每轮用例都会新建一批房间，锚点会为每个房间累积历史与 gossip 邻居状态；
-   十几轮之后**后半段的传输/进房类用例开始超时**（实测：`file-history` 掉 2 项、
-   `file-recipients` 直接 CRASH；单独跑却分别 17/17、26/26）。
-   ```bash
-   ssh root@<host> 'docker compose -f /opt/iroh/roomd/docker-compose.yml restart roomd'
+0. **不要把重启 roomd 当作回归前置或根据超时直接归因。** 本轮修复后未重启 roomd，整套功能回归通过。
+   先检查日志、连接、实际接收进度、测试隔离与历史结果，再决定是否需要重启。
+   共享 CDP 中会关闭标签页或清存储的脚本必须串行运行；吞吐基准也应在无其他文件传输时测量。
+
+0b. **`file-recipients` 大文件超时时，要区分发送排队进度与接收交付。**
+   典型签名（失败瞬间的快照）：
    ```
-   实测：重启后整套 13 个用例 **128 项全绿**；不重启则偶发失败。
-   判断依据是"失败的用例单独跑必过、且失败形态是超时而不是结果错误"。
+   发送方视图：recipient state=sending, done=128/128, bytes=2097152   ← 已写入发送队列，尚未确认交付
+   接收方页面：state=active, done=104/128                             ← 只收到 104
+   ```
+   每次卡在不同块数本身不能排除状态机或资源问题。本轮通过独立浏览器、真实 OPFS、无写盘对照、
+   Worker计时和服务端TCP重传指标定位外层链路；端口级 BBR 修复及回滚对照见 `docs/relay-tcp-bbr.md`。
+   **HTTP 探测快 ≠ 数据面快**：浏览器数据走 `15443/tcp` 的 WSS 隧道，内部承载 QUIC；
+   `7842/udp` 的 QAD 探测不代表浏览器文件数据路径。
+
+   ⚠️ **不要用"把 45s 超时调大"来解决。** 那只会把"吞吐劣化"这个真实信号盖掉，
+   而吞吐劣化会直接影响真实用户传大文件。先用 `scripts/transfer-bench.py` 量出真实吞吐。
+
 1. **每个用例之前要清浏览器存储**（`clear-storage.py` 已封装）。
    上轮的 IndexedDB 位图与 localStorage 邀约污染下一轮，表现为"进不了房"或 `done=0`。
 2. **房名必须每个用例唯一**（用时间戳派生）。
@@ -86,8 +120,10 @@ Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
    表现为 `peers=1` 之类。**清浏览器存储治不了这个**（污染在服务端）。
    踩过：`refresh` 写死 `rf9` 时 4 项全挂，换新房名立刻 4/4。
 3. **本机端口要清代理**（`run.sh` 已处理），否则被沙箱代理拦成 502。
-4. **`relay-enabled` 会临时改写 `frontend/relay-config.json`**（dev 服务直接读该目录），
-   用 `try/finally` 保证还原。它是唯一会动磁盘文件的用例 —— 跑之前建议先 `git status` 确认干净。
+4. **`relay-enabled` 使用独立 Playwright context 拦截配置请求**，不写入磁盘配置。
+   需要安装 Playwright，或通过 `PLAYWRIGHT_MODULE` 指定现有模块路径；运行完整套件时也要导出该变量。
+   禁用中继的测试配置仅对测试浏览器生效，即使进程被杀也不会污染下次发布。
+   跑完回归仍应检查 `git status`，避免其他用例产生意外修改。
 5. **`close_tab` 之后不能再读页面**：关掉标签，CDP 会话随之关闭，
    后续 `P.ev(...)` 会报 `ConnectionError: 连接关闭`（会被误判成"环境不稳"）。
    所有要读的数据都必须在 `close_tab` 之前取完。

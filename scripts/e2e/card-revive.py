@@ -27,7 +27,7 @@ def boot(u, label, room):
     return tab, p
 
 def card(p, fid):
-    for x in json.loads(p.ev("JSON.stringify(window.__transfers())") or "[]"):
+    for x in json.loads(p.ev("JSON.stringify(window.__iroh_transfers())") or "[]"):
         if x["file_id"] == fid:
             return x
     return None
@@ -46,14 +46,14 @@ a_tab, A = boot(url(R, "a"), "A", R)
 b_tab, B = boot(url(R, "b"), "B", R)
 
 A.ev("(() => { const u=new Uint8Array(4096); window.__testFile=new File([u],'rev.bin',{type:'application/octet-stream'}); return 1; })()")
-A.ev("window.__setStopAfterChunks(0)")
-A.ev(f"window.__sendFile(window.__testFile, {json.dumps(R)})")
+A.ev("window.__iroh_setStopAfterChunks(0)")
+A.ev(f"window.__iroh_sendFile(window.__testFile, {json.dumps(R)})")
 
 fid = ""
 for _ in range(40):
     time.sleep(0.5)
     c = card(B, "") # placeholder
-    for x in json.loads(B.ev("JSON.stringify(window.__transfers())") or "[]"):
+    for x in json.loads(B.ev("JSON.stringify(window.__iroh_transfers())") or "[]"):
         if x["direction"] == "recv" and x["state"] == "invited":
             fid = x["file_id"]; break
     if fid: break
@@ -61,7 +61,7 @@ tt.check("B 收到实时邀约", bool(fid), f"file_id={fid}")
 print(f"  初始 DOM: {dom_buttons(B, fid)}", flush=True)
 
 # A 离开 → B 的卡片应变"已失效"
-A.ev(f"(() => {{ window.__openRoom({json.dumps(R2)}); return 1; }})()")
+A.ev(f"(() => {{ window.__iroh_openRoom({json.dumps(R2)}); return 1; }})()")
 gone = None
 for _ in range(60):
     time.sleep(1)
@@ -75,9 +75,9 @@ st_exp = dom_buttons(B, fid)
 print(f"  失效后 DOM: {st_exp}", flush=True)
 
 # A 回到 R 并**重发**（这正是修复 F15 的场景）
-A.ev(f"(() => {{ window.__openRoom({json.dumps(R)}); return 1; }})()")
+A.ev(f"(() => {{ window.__iroh_openRoom({json.dumps(R)}); return 1; }})()")
 tt.wait_until(A, f"!!(window.__state && window.__state().joined === {json.dumps(R)})", 90, label="A 回房")
-A.ev(f"window.__net.client.call('resend', {json.dumps(fid)})")
+A.ev(f"window.__iroh_net.client.call('resend', {json.dumps(fid)})")
 
 revived = None
 for _ in range(30):

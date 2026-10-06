@@ -1,7 +1,9 @@
 /* ============================================================================
- * 布局（Layout）
+ * 布局（Layout）· 三栏桌面 IM 架构
  *
- * 这里是整个"滚不动 / 输入框跑出屏幕"问题的根因所在。
+ * 设计稿：Primary Navigation Rail(64px) ─ Channel List(300px) ─ Chat Chamber(flex)
+ *
+ * ## ⚠️ 这里同时是"滚不动 / 输入框跑出屏幕"问题的根因所在
  *
  * 规则：在一个 flex / grid 链条里，只要某一环要"内部滚动"，那么从根到这个
  * 可滚动元素之间的**每一环**都必须能收缩 —— 即 min-height: 0（纵向）
@@ -10,6 +12,10 @@
  * 因为 flex/grid 子项默认 min-height: auto，意思是"不许小于内容高度"，
  * 于是消息一多就把容器撑高、超出视口，而 body 又是 overflow: hidden，
  * 最终表现为：不能滚、底部输入框被推到屏幕外。
+ *
+ * ## 设计稿另外两条布局约定（本文件落实）
+ *   · Level 0/1/2/3 的水下分层：画布平铺 → 列表玻璃 → 气泡浮起 → 弹窗悬空
+ *   · 响应式断点：>1440 列表 340px；<1024 图标栏收成 52px 图标条
  * ==========================================================================*/
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -21,10 +27,12 @@ body {
   overflow: hidden;                 /* 只允许内部区域滚动 */
   background: var(--bg-app);
   color: var(--fg);
-  font: 14px/1.55 -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
-        'Segoe UI', sans-serif;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-  transition: background .18s var(--ease), color .18s var(--ease);
+  text-rendering: optimizeLegibility;
+  transition: background .2s var(--ease), color .2s var(--ease);
 }
 
 /* ---------- 外壳：三栏 ---------- */
@@ -46,22 +54,29 @@ body {
   min-width: 0;
 }
 
-/* ---------- 最左图标栏 ---------- */
+/* ---------- 最左图标栏（Level 0：深海基底） ---------- */
 .rail {
   background: var(--bg-rail);
+  border-right: 1px solid rgba(255, 255, 255, .08);
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 18px 0 14px;
+  padding: 16px 0 14px;
   gap: 6px;
+  position: relative;
+  z-index: 30;                      /* 压住列表的玻璃层 */
 }
 
-/* ---------- 左二列表 ---------- */
+/* ---------- 左二列表（Level 1：半透明海沫玻璃） ---------- */
 .panel {
-  background: var(--bg-panel);
-  border-right: 1px solid var(--line);
+  background: var(--bg-panel-glass, var(--bg-panel));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-right: var(--glass-border);
   display: flex;
   flex-direction: column;
+  position: relative;
+  z-index: 20;
 }
 
 .panel-scroll {
@@ -69,7 +84,26 @@ body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 列表底部给状态条让出位置，最后一行不会被压住 */
+  padding-bottom: 6px;
 }
+
+/* 列表底部的系统状态条（设计稿的"太平洋深海 3000m 专线"位） */
+.panel-foot {
+  flex: none;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 12px;
+  border-top: var(--glass-border);
+  background: color-mix(in srgb, var(--bg-panel) 60%, transparent);
+  font-size: var(--fs-caption);
+  color: var(--fg-dim);
+}
+.panel-foot__left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.panel-foot__text {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 600;
+}
+.panel-foot__ver { flex: none; font-family: var(--font-mono); letter-spacing: .02em; }
 
 /* ---------- 右侧对话 ---------- */
 .chat {
@@ -78,9 +112,51 @@ body {
   flex-direction: column;
   overflow: hidden;                 /* 兜底：任何溢出都在内部消化 */
   position: relative;
+  /* Level 0 的水光：极缓慢的明暗流动（设计稿的 causticShimmer） */
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--bb-cyan-soft) 10%, transparent) 0%,
+    transparent 45%,
+    color-mix(in srgb, var(--bb-cyan-soft) 6%, transparent) 100%
+  );
+  background-size: 200% 200%;
+  animation: causticShimmer 24s ease infinite;
 }
 
-.chat-head { flex: none; height: var(--head-h); }
+.chat-head {
+  flex: none;
+  height: var(--head-h);
+  position: relative;
+  z-index: 10;                      /* 在环境气泡之上 */
+}
+
+/* ---------- 主题壁纸（设计稿 _2 的「比奇堡主题壁纸」） ----------
+ * 默认不设 `data-wallpaper` → 用上面那条 causticShimmer 水光，观感不变。
+ * 选了壁纸就换成一组分层柔光；`animation: none` 是因为 causticShimmer 动的是
+ * `background-position` + `background-size: 200% 200%`，套到多图层上会各层
+ * 一起漂移（看起来像糊了一层）。关掉动画，代价只是少一点流动感。 */
+html[data-wallpaper='sun'] .chat,
+html[data-wallpaper='reef'] .chat,
+html[data-wallpaper='jelly'] .chat,
+html[data-wallpaper='none'] .chat { animation: none; }
+
+html[data-wallpaper='sun'] .chat {
+  background-image:
+    radial-gradient(115% 80% at 86% 4%, var(--wl-sun) 0%, transparent 62%),
+    radial-gradient(90% 70% at 8% 98%, var(--wallpaper-tint) 0%, transparent 60%);
+}
+html[data-wallpaper='reef'] .chat {
+  background-image:
+    radial-gradient(110% 75% at 10% 94%, var(--wl-reef) 0%, transparent 60%),
+    radial-gradient(85% 65% at 92% 8%, var(--wl-jelly) 0%, transparent 58%);
+}
+/* 水母平原：点阵（像水下悬浮的小水母），比前两个更像"纹理" */
+html[data-wallpaper='jelly'] .chat {
+  background-image:
+    radial-gradient(var(--wl-jelly) 1.6px, transparent 1.8px),
+    radial-gradient(100% 70% at 50% 0%, var(--wl-jelly) 0%, transparent 55%);
+  background-size: 26px 26px, auto;
+}
 
 /* 消息区：唯一允许纵向滚动的区域 */
 .timeline {
@@ -90,10 +166,75 @@ body {
   overflow-x: hidden;
   overscroll-behavior: contain;      /* 滚到头不要带动外层 */
   scroll-behavior: auto;             /* 自己控制滚动时机，别用平滑 */
+  /* ⚠️ 关掉浏览器的**滚动锚定**。
+   *    只写在 `.timeline` 上**不够** —— 实测 Chromium 仍会在与滚动无关的重排
+   *    （比如在输入框打一个字）时把 scrollTop 顶上去几十像素：内容高度没变、
+   *    输入区高度也没变，就是它动一下又弹回来，肉眼是"抖一下"。
+   *    贴底这件事我们自己在 `timeline.js` 里用 ResizeObserver 管，
+   *    这里要的是"没人替我们乱动 scrollTop"。 */
   overflow-anchor: none;
+  position: relative;
+  z-index: 10;
 }
 
-.composer { flex: none; }
+/* ⚠️ 必须关掉时间线**内部所有**元素的滚动锚定。
+ *    锚点是逐元素判定的，只有容器和直接子元素写 `overflow-anchor: none`
+ *    挡不住更深层的元素被选为锚点 —— 实测在输入框打一个字时，
+ *    scrollTop 会被浏览器内部顶掉 26px 又弹回来（JS 一次都没写它，
+ *    抓调用栈是空的），肉眼就是"抖一下"。
+ *    代价：用户往上翻看历史时，上方内容高度变化会让视线轻微跳一下。
+ *    取舍是显然的 —— 每敲一个字抖一下远比这个糟。 */
+.timeline * { overflow-anchor: none; }
+
+.composer { flex: none; position: relative; z-index: 20; }
+
+/* ---------- 环境气泡层（设计稿 floatUp） ----------
+ * 纯装饰、不吃事件。放在 .chat 里、消息区之下，z-index 让给 .timeline。
+ * 气泡由 js/ui/motion.js 生成（数量/位置/时长随机但可复现）。 */
+.ambient {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+.ambient__b {
+  position: absolute;
+  bottom: -60px;
+  border-radius: 50%;
+  border: 1px solid var(--water-line);
+  background: var(--water-tint);
+  animation-name: floatUp;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+
+/* 设计稿里消息流中央还有一枚巨大的水滴水印 */
+.chat-watermark {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 0;
+  opacity: .035;
+}
+.chat-watermark svg { width: 260px; height: 260px; color: var(--bb-cyan-deep); }
+
+/* ==========================================================================
+ * 响应式（设计稿的三个断点）
+ * ========================================================================*/
+
+/* 超宽屏：列表加宽到 340px（设计稿 Desktop Ultrawide >1440px） */
+@media (min-width: 1441px) {
+  .app { --panel-w: 340px; }
+}
+
+/* 紧凑桌面 / 平板横屏：图标栏收成 52px 图标条（设计稿 <1024px） */
+@media (max-width: 1024px) {
+  .app { --rail-w: 52px; }
+}
 
 /* ---------- 移动端 ----------
  *
@@ -111,6 +252,7 @@ body {
 
 @media (max-width: 760px) {
   .app { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+  .chat-watermark svg { width: 180px; height: 180px; }
 
   .panel {
     position: absolute;
@@ -151,9 +293,76 @@ body {
   .emoji-pop {
     left: 8px; right: 8px;
     width: auto;
-    bottom: 96px;
+    bottom: 108px;
   }
 
-  .composer { padding: 0 10px 10px; }
+  .composer { padding: 0 10px 8px; }
   .timeline-inner { padding: 12px 12px 6px; }
+  .panel-foot { display: none; }        /* 手机上省掉这一行，把高度让给列表 */
+  .conn-foot { display: none; }
+
+  /* 顶栏：手机宽度放不下"标题 + 成员药丸 + 在线药丸 + 三个操作"。
+     砍掉提示音 / 加密说明这两个次要入口（它们在设置页里都有），
+     把宽度让给房间名 —— 房间名被截成「bb…」比少两个图标严重得多。 */
+  .chat-head { gap: 6px; padding: 0 10px; }
+  .chat-head__title { font-size: var(--fs-headline); }
+  #btn-head-sound, #btn-head-lock { display: none; }
+  .chat-head__members { max-width: 34vw; }
+}
+
+/* ==========================================================================
+ * 关键帧（设计稿定义的水下动效；放这里是为了组件层不重复声明）
+ * ========================================================================*/
+
+@keyframes floatUp {
+  0%   { transform: translateY(0) translateX(0) scale(.7); opacity: 0; }
+  15%  { opacity: .65; }
+  50%  { transform: translateY(-55vh) translateX(18px) scale(1); opacity: .55; }
+  85%  { opacity: .6; }
+  100% { transform: translateY(-110vh) translateX(-12px) scale(1.15); opacity: 0; }
+}
+
+@keyframes causticShimmer {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* 在线光点的雷达扩散（设计稿 radarPing） */
+@keyframes radarPing {
+  0%   { transform: scale(.9); box-shadow: 0 0 0 0 rgba(0, 230, 118, .7); }
+  70%  { transform: scale(1.05); box-shadow: 0 0 0 7px rgba(0, 230, 118, 0); }
+  100% { transform: scale(.9); box-shadow: 0 0 0 0 rgba(0, 230, 118, 0); }
+}
+
+/* 消息弹入（设计稿 popInBounce） */
+@keyframes popInBounce {
+  0%   { opacity: 0; transform: scale(.85) translateY(12px); }
+  60%  { opacity: 1; transform: scale(1.03) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* 头像悬停时的海绵摆动（设计稿 spongeWiggle） */
+@keyframes spongeWiggle {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  25%      { transform: rotate(-5deg) scale(1.06); }
+  75%      { transform: rotate(5deg) scale(1.06); }
+}
+
+/* 进度条高光扫过（设计稿 progressSheen） */
+@keyframes progressSheen {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* 尊重系统的"减少动态效果"——水下动效很多，必须给一个静音开关。
+   否则前庭敏感的用户会被满屏上浮的气泡晃到。 */
+@media (prefers-reduced-motion: reduce) {
+  .chat { animation: none; }
+  .ambient { display: none; }
+  .ambient__b { animation: none; }
+  .radar-ring { animation: none; }
+  .animate-pop-in { animation: none; }
 }

@@ -14,6 +14,11 @@ services:
     image: roomd:local
     container_name: roomd
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./data:/data          # 身份 + 历史都在这里，务必保留
     environment:

@@ -116,6 +116,16 @@ export const composer = {
     $('tb-voice').title = '语音消息尚未支持';
 
     this._bindDrop();
+    this._inputObserver?.disconnect();
+    let inputWidth = null;
+    this._inputObserver = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      if (width === inputWidth) return;
+      inputWidth = width;
+      cancelAnimationFrame(this._resizeFrame);
+      this._resizeFrame = requestAnimationFrame(() => this._autoGrow());
+    });
+    this._inputObserver.observe($('input'));
     this._autoGrow(); // 初始就按内容定高（不加这句会停在 CSS 默认值）
   },
 
@@ -311,7 +321,6 @@ export const composer = {
     sendBtn.disabled = true;
     sendBtn.textContent = '发送中…';
 
-    let ok = true;
     let failReason = '';
     // 失败气泡的 DOM 引用：重发成功后要能把它撤掉。
     // 用一个可变对象当"回传通道" —— pushFailed 会在同一个对象上挂 `.el`。
@@ -335,7 +344,6 @@ export const composer = {
         const r = await this._push(trimmed, room);
         textOk = r.ok;
         if (!r.ok) {
-          ok = false;
           failReason = r.reason;
         }
       }
@@ -355,7 +363,6 @@ export const composer = {
             if (p.url) URL.revokeObjectURL(p.url);
           } catch (e) {
             filesOk = false;
-            ok = false;
             failReason = e?.message ?? String(e);
             this.tip(`发起失败：${failReason}`);
           }
@@ -542,15 +549,58 @@ export const composer = {
 
   /* ================================================================== 其它 */
 
+  /**
+   * 按内容定高。
+   *
+   * ⚠️ **绝对不要"先归零再量"**（老写法：`style.height='0px'` → 量 scrollHeight → 写回）。
+   *    那个"塌下去再撑回来"的中间态会让浏览器跟着调整时间线的 scrollTop ——
+   *    实测**每敲一个字**时间线就被顶走 26px 再弹回来，肉眼是"抖一下"，
+   *    而内容高度一个像素都没变。
+   *
+   * 也不赌浏览器的 `field-sizing: content`：实测 Chrome 154 虽然
+   * `CSS.supports()` 返回 true，但高度**真的不随内容变**（1 行和 12 行都是 26px）。
+   *
+   * 所以用一个**离屏克隆体**测高度：它不参与真实布局，测量过程零副作用，
+   * 只有确定要改高度时才写一次 `style.height`。
+   */
   _autoGrow() {
     const ta = $('input');
     const MIN = 26;
     const MAX = 132;
-    // 先归零再量，否则 scrollHeight 会带着上一次的高度算
-    ta.style.height = '0px';
-    const h = Math.min(Math.max(ta.scrollHeight, MIN), MAX);
-    ta.style.height = `${h}px`;
-    ta.style.overflowY = ta.scrollHeight > MAX ? 'auto' : 'hidden';
+
+    let probe = document.getElementById('grow-probe');
+    if (!probe) {
+      probe = document.createElement('textarea');
+      probe.id = 'grow-probe';
+      probe.setAttribute('aria-hidden', 'true');
+      probe.tabIndex = -1;
+      document.body.appendChild(probe);
+    }
+    // 测量用的样式必须和真输入框一致，否则 scrollHeight 不可比。
+    // className 走同一套样式表（padding / line-height / box-sizing），
+    // width 用计算值 —— 两者 box-sizing 相同，宽度就等效。
+    const cs = getComputedStyle(ta);
+    probe.className = ta.className;
+    // ⚠️ `rows` 必须一起复制：textarea 默认 rows=2，克隆体哪怕 1 行内容
+    //    也会量出 2 行的高度（实测 1 行被量成 54px）。
+    probe.rows = ta.rows || 1;
+    probe.style.cssText = '';
+    probe.style.position = 'absolute';
+    probe.style.left = '-9999px';
+    probe.style.top = '0';
+    probe.style.visibility = 'hidden';
+    probe.style.pointerEvents = 'none';
+    probe.style.width = cs.width;
+    probe.style.height = 'auto';
+    probe.style.minHeight = '0';
+    probe.style.maxHeight = 'none';
+    probe.value = ta.value;
+
+    const need = probe.scrollHeight;
+    const h = Math.min(Math.max(need, MIN), MAX);
+    if (ta.style.height !== `${h}px`) ta.style.height = `${h}px`;   // 只在真变了才写
+    const wantOverflow = need > MAX ? 'auto' : 'hidden';
+    if (ta.style.overflowY !== wantOverflow) ta.style.overflowY = wantOverflow;
   },
 
   /** 打开系统选择器（供外部按钮调用） */

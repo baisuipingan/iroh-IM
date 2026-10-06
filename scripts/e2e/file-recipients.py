@@ -53,13 +53,13 @@ def boot(nickname):
     page.call('Emulation.setDeviceMetricsOverride', {'width': 1440, 'height': 960, 'deviceScaleFactor': 1, 'mobile': False})
     page.call('Page.navigate', {'url': f'{site}/?autostart=1&room={room}'})
     wait_until(page, f'window.__state?.().joined === {json.dumps(room)}', 120)
-    page.ev(f'window.__net.client.call("setNickname", {json.dumps(nickname)})')
-    page.ev('window.__useOpfs = true')
+    page.ev(f'window.__iroh_net.client.call("setNickname", {json.dumps(nickname)})')
+    page.ev('window.__iroh_useOpfs = true')
     return page
 
 
 def transfer_expression(file_id):
-    return f'window.__transfers().find(transfer => transfer.file_id === {json.dumps(file_id)})'
+    return f'window.__iroh_transfers().find(transfer => transfer.file_id === {json.dumps(file_id)})'
 
 
 def snapshot(page, file_id):
@@ -97,7 +97,7 @@ def send(sender, receivers, name, size=512 * 1024):
       for (let offset = 0; offset < data.length; offset += 16384) {{
         data.fill((offset / 16384) & 255, offset, Math.min(offset + 16384, data.length));
       }}
-      return window.__sendFile(new File([data], {json.dumps(name)}), {json.dumps(room)});
+      return window.__iroh_sendFile(new File([data], {json.dumps(name)}), {json.dumps(room)});
     }})()''')
     for page in receivers:
         wait_until(page, f'{transfer_expression(meta["file_id"])}?.state === "invited" || '
@@ -116,7 +116,7 @@ def reject(page, file_id):
 
 
 def accept(page, file_id):
-    page.fire(f'window.__acceptFile({json.dumps(file_id)})')
+    page.fire(f'window.__iroh_acceptFile({json.dumps(file_id)})')
 
 
 def card_snapshot(page, file_id):
@@ -178,7 +178,7 @@ try:
     tt.check('实时更新不折叠已展开的详情', view['open'])
     wait_until(sender, 'document.querySelector(".filecard__recipient-name").textContent.includes("接收者")')
     tt.check('详情显示接收者昵称', all('接收者' in row['name'] for row in card_snapshot(sender, file_id)['rows']))
-    verified = second.ev('window.__verifyOpfs("reject-before.png", 524288, 16384)')
+    verified = second.ev('window.__iroh_verifyOpfs("reject-before.png", 524288, 16384)')
     tt.check('另一人收到的文件逐字节正确', verified['ok'], str(verified))
     reject(first, file_id)
     tt.check('重复拒绝不增加人数或覆盖他人的成功', snapshot(sender, file_id)['peers'] == 2 and snapshot(sender, file_id)['peersDone'] == 1)
@@ -207,12 +207,12 @@ try:
     tt.check('全部拒绝也不是技术失败，文件仍可分享', snapshot(sender, both_id)['state'] == 'shared' and snapshot(sender, both_id)['peersFailed'] == 0)
 
     failed_id = send(sender, receivers, 'retry.bin', 2 * 1024 * 1024)
-    sender.ev('window.__setStopAfterChunks(32)')
+    sender.ev('window.__iroh_setStopAfterChunks(32)')
     accept(first, failed_id)
     wait_recipient(sender, failed_id, first_id, 'failed')
     wait_until(first, f'{transfer_expression(failed_id)}?.state === "paused"')
     tt.check('技术失败只落在对应接收者详情', card_snapshot(sender, failed_id)['rows'][0]['state'] == 'failed' and card_snapshot(sender, failed_id)['errors'] == 0)
-    sender.ev('window.__setStopAfterChunks(0)')
+    sender.ev('window.__iroh_setStopAfterChunks(0)')
     accept(second, failed_id)
     wait_recipient(sender, failed_id, second_id, 'done')
     tt.check('一人技术失败不妨碍另一人接收', snapshot(sender, failed_id)['peersDone'] == 1 and snapshot(sender, failed_id)['peersFailed'] == 1)
@@ -221,7 +221,7 @@ try:
     tt.check('重新邀请不清掉已成功接收的记录', snapshot(sender, failed_id)['peersDone'] == 1)
     accept(first, failed_id)
     wait_recipient(sender, failed_id, first_id, 'done')
-    verified = first.ev('window.__verifyOpfs("retry.bin", 2097152, 16384)')
+    verified = first.ev('window.__iroh_verifyOpfs("retry.bin", 2097152, 16384)')
     tt.check('失败者续传成功且旧失败状态清除', verified['ok'] and snapshot(sender, failed_id)['peersFailed'] == 0)
     tt.check('接收侧续传完成后也清除旧错误', card_snapshot(first, failed_id)['errors'] == 0)
 
@@ -248,16 +248,16 @@ try:
     tt.check('重建后依然没有旧拒绝错误或总进度', card_snapshot(sender, file_id)['errors'] == 0 and card_snapshot(sender, file_id)['bar'] == 'none')
     isolated = sender.ev(f'''(async () => {{
       const {{ fileTransfer }} = await import('./js/ui/filetransfer.js');
-      const before = JSON.stringify(window.__transfers());
+      const before = JSON.stringify(window.__iroh_transfers());
       fileTransfer._updateOutgoing({{file_id: {json.dumps(file_id)}, room: 'other-room'}});
-      return before === JSON.stringify(window.__transfers());
+      return before === JSON.stringify(window.__iroh_transfers());
     }})()''')
     tt.check('其他房间的汇总不能覆盖接收详情', isolated)
 except Exception:
     for label in ['sender', 'first', 'second']:
         page = locals().get(label)
         if page:
-            print(f'{label} 诊断: {json.dumps(page.ev("window.__transfers()"), ensure_ascii=False)}', flush=True)
+            print(f'{label} 诊断: {json.dumps(page.ev("window.__iroh_transfers()"), ensure_ascii=False)}', flush=True)
     raise
 finally:
     for context in contexts:

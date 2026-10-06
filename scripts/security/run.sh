@@ -7,7 +7,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 fail=0
 for ex in attack-verify attack-stream; do
   echo "========== $ex =========="
-  if cargo run --offline --no-default-features --features cli --example "$ex" 2>&1 | tail -20; then
+  if cargo run --offline --locked --no-default-features --features cli --example "$ex" 2>&1 | tail -20; then
     :
   else
     fail=1

@@ -28,7 +28,7 @@ const history = page => page.evaluate(async room => {
   let cursor = '';
   let requests = 0;
   while (true) {
-    const page = await window.__net.history(room, 50, cursor);
+    const page = await window.__iroh_net.history(room, 50, cursor);
     requests++;
     if (!page.length) break;
     messages.unshift(...page);
@@ -39,7 +39,7 @@ const history = page => page.evaluate(async room => {
   return { messages, requests };
 }, room);
 const waitForHistory = (page, count) => page.waitForFunction(async ({ room, count }) => {
-  try { return (await window.__net.history(room, 1000)).length === count; }
+  try { return (await window.__iroh_net.history(room, 1000)).length === count; }
   catch { return false; }
 }, { room, count }, { timeout: 60000 });
 
@@ -58,7 +58,7 @@ try {
   }
   check('三人互相可见', true);
   const initial = users.map((_, index) => `initial-user-${index}`);
-  for (let index = 0; index < users.length; index++) await users[index].evaluate(text => window.__sendText(text), initial[index]);
+  for (let index = 0; index < users.length; index++) await users[index].evaluate(text => window.__iroh_sendText(text), initial[index]);
   for (let index = 0; index < users.length; index++) {
     for (const text of initial) await bubble(users[index], text).waitFor({ timeout: 60000 });
     const state = await users[index].evaluate(() => window.__state());
@@ -71,12 +71,12 @@ try {
   for (const text of initial) await bubble(late, text).waitFor({ timeout: 60000 });
   check('WebKit 第四人晚加入恢复前三条历史', true);
   await users[0].evaluate(async () => {
-    for (let index = 0; index < 60; index++) await window.__sendText(`paging-${String(index).padStart(2, '0')}`);
+    for (let index = 0; index < 60; index++) await window.__iroh_sendText(`paging-${String(index).padStart(2, '0')}`);
   });
   await waitForHistory(users[0], 63);
   await bubble(users[2], 'paging-59').waitFor({ timeout: 60000 });
   check('多人连续发送与接收仍正常', true);
-  await late.evaluate(() => window.__sendText('late-user-live'));
+  await late.evaluate(() => window.__iroh_sendText('late-user-live'));
   for (const page of users) await bubble(page, 'late-user-live').waitFor({ timeout: 60000 });
   await waitForHistory(users[0], 64);
   const beforeRestart = await history(users[0]);
@@ -106,7 +106,7 @@ try {
     const fresh = await boot(chrome);
     const restored = await history(fresh);
     check('后端重启后新浏览器读回完整历史', JSON.stringify(restored.messages.map(message => message.id)) === JSON.stringify(beforeRestart.messages.map(message => message.id)));
-    await fresh.evaluate(() => window.__sendText('after-server-restart'));
+    await fresh.evaluate(() => window.__iroh_sendText('after-server-restart'));
     await waitForHistory(fresh, 65);
     check('后端重启后新消息继续持久化', (await history(fresh)).messages.some(message => message.text === 'after-server-restart'));
     await fresh.screenshot({ path: `${output}/after-restart.png` });

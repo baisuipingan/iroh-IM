@@ -27,18 +27,24 @@ tap = tt.LogTap(tab["id"])
 tt.wait_until(p, f"!!(window.__state && window.__state().joined === {json.dumps(ROOM)})", 120, label="A")
 print(f"已进房 {ROOM}", flush=True)
 
-# ---- 1. 成员页 ----
-p.ev("document.getElementById('tab-people').click()")
+# ---- 1. 成员名单 ----
+# ⚠️ 「在线成员」原本是一个独立的左栏入口，现已**合并进「连接状态页」**
+#    （名单收在「在线成员」那一行下面，默认收起）。
+#    这几条断言的原意不变：产品里不许出现「联系人 / 好友 / 私聊」这套东西。
+p.ev("document.getElementById('tab-status').click()")
 time.sleep(1)
+p.ev("document.querySelector('[data-expand=\"members\"]')?.click()")
+time.sleep(0.8)
 body = p.ev("document.getElementById('panel-body').innerText") or ""
-print("--- 成员页文本 ---\n" + body[:300], flush=True)
+print("--- 状态页（含成员名单）文本 ---\n" + body[:300], flush=True)
 html = p.ev("document.getElementById('panel-body').innerHTML") or ""
-tt.check("成员页标题是「在线成员」", "在线成员" in body, body[:40])
-tt.check("成员页不含「联系人」", "联系人" not in body, "")
-tt.check("成员页不含「私聊」", "私聊" not in body, "")
-tt.check("成员页没有加好友按钮 (data-add)", 'data-add' not in html, "")
-tt.check("成员页没有私聊按钮 (data-dm)", 'data-dm' not in html, "")
-tt.check("成员页没有联系人行 (row--contact)", 'row--contact' not in html, "")
+tt.check("状态页能展开出成员名单（「在线成员」还在）", "在线成员" in body, body[:60])
+tt.check("左栏不再有独立的「在线成员」入口", p.ev("!document.getElementById('tab-people')") is True, "")
+tt.check("成员名单不含「联系人」", "联系人" not in body, "")
+tt.check("成员名单不含「私聊」", "私聊" not in body, "")
+tt.check("成员名单没有加好友按钮 (data-add)", 'data-add' not in html, "")
+tt.check("成员名单没有私聊按钮 (data-dm)", 'data-dm' not in html, "")
+tt.check("成员名单没有联系人行 (row--contact)", 'row--contact' not in html, "")
 
 # ---- 2. 设置页 ----
 p.ev("document.getElementById('tab-settings').click()")

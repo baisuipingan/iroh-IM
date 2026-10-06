@@ -1,0 +1,10 @@
+[Unit]
+Description=Consistent private roomd SQLite and identity backup
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/sbin/iroh-backup-roomd.py
+TimeoutStartSec=10min
+Nice=10

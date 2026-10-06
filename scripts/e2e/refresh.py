@@ -52,20 +52,20 @@ print("启动 R2…", flush=True)
 r2_tab, r2 = boot(f"http://127.0.0.1:8099/?autostart=1&room={ROOM}&key={K('c')}&v={V}r2", "r2")
 print("三方就绪", flush=True)
 
-# ⚠️ 必须在发送之前清：__clearBitmaps 现在会连 localStorage 里的旧邀约一起清，
+# ⚠️ 必须在发送之前清：__iroh_clearBitmaps 现在会连 localStorage 里的旧邀约一起清，
 #    清晚了会把本次的新邀约也抹掉。
 for p in (r1, r2):
-    p.ev("window.__useOpfs=true; window.__setTestMode(true)")
-    p.ev("window.__clearBitmaps()", timeout=30)
+    p.ev("window.__iroh_useOpfs=true; window.__iroh_setTestMode(true)")
+    p.ev("window.__iroh_clearBitmaps()", timeout=30)
 
 tx.ev(f"(() => {{ const u=new Uint8Array({SIZE}); window.__testFile=new File([u],'rf9.bin',{{type:'application/octet-stream'}}); return 1; }})()", timeout=240)
-tx.ev("window.__setStopAfterChunks(0)")
-tx.ev(f"window.__sendFile(window.__testFile, {json.dumps(ROOM)})")
+tx.ev("window.__iroh_setStopAfterChunks(0)")
+tx.ev(f"window.__iroh_sendFile(window.__testFile, {json.dumps(ROOM)})")
 
 
 def snap(p):
     try:
-        s = json.loads(p.ev("JSON.stringify(window.__transfers())") or "[]")
+        s = json.loads(p.ev("JSON.stringify(window.__iroh_transfers())") or "[]")
     except Exception:
         return None
     return s[0] if s else None
@@ -79,7 +79,7 @@ for name, p in (("r1", r1), ("r2", r2)):
         s = snap(p)
         if s and s["direction"] == "recv" and s["state"] in ("invited", "active"):
             fids.append(s["file_id"])
-            p.fire(f"window.__acceptFile({json.dumps(s['file_id'])})")
+            p.fire(f"window.__iroh_acceptFile({json.dumps(s['file_id'])})")
             print(f"  {name} 已接受", flush=True)
             break
 

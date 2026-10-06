@@ -2,12 +2,17 @@
 <!-- ⚠️ `data-theme` 由下面的内联脚本**在 CSS 之前**写入。
      不要在这里硬编码 `data-theme="dark"` —— 那会让首屏**必然先渲染深色**，
      然后等 JS 跑完再切到浅色（用户看到"闪一下"）。
-     内联脚本是同步阻塞的，所以浏览器还没画第一帧就已经定好了主题。 -->
+     内联脚本是同步阻塞的，所以浏览器还没画第一帧就已经定好了主题。
+
+     ⚠️ 字体：设计稿用的是 Google Fonts 的 Nunito Sans。本产品面向中文用户、
+     部署在 Cloudflare 上，**故意不引那个 CDN**（国内会超时 → 首屏白字）。
+     css/tokens.css 里写了 `'Nunito Sans'` + 系统中文栈，谁自托管谁生效。 -->
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>派大星聊天室</title>
+  <meta name="theme-color" content="#0e2439" />
 
   <!-- 主题预置（**必须放在所有 CSS 之前**，也必须是同步内联的）-------
        干两件事：
@@ -49,21 +54,22 @@
 </head>
 <body>
 <!--
-  结构说明：
+  结构说明（对齐设计稿的三栏桌面 IM 架构）：
     .app 三栏 grid
-      .rail            最左图标栏
-      .panel           列表（会话 / 成员 / 状态 / 设置，四选一）
-      .chat            对话区
-        .chat-head     顶栏
-        .blank         未进房时的空状态
+      .rail            最左 64px 深海蓝导航栏（头像 / 聊天 / 成员 / 状态 / 设置）
+      .panel           300px 半透明海沫列表（搜索 / 筛选 chips / 列表 / 状态条）
+      .chat            对话舱
+        .ambient       环境气泡层（纯装饰，pointer-events:none）
+        .chat-head     56px 顶栏（房间名 / 成员药丸 / 在线药丸 / 快捷操作）
+        .blank         未进房时的落地页
         .timeline      唯一可滚动区域（.timeline-inner 装内容）
         .jump-btn      回到最新
-        .composer      底部输入
+        .composer      底部输入起草台 + 真实连接页脚
   每个可滚动祖先都有 min-height:0（见 css/layout.css 的注释）。
 -->
 <div class="app">
 
-  <!-- ==================== 最左图标栏 ==================== -->
+  <!-- ==================== 最左图标栏（64px） ==================== -->
   <nav class="rail">
     <div class="rail__me" id="rail-me" title="我的身份"><span id="rail-initial">·</span><span class="rail__badge" id="rail-badge"></span></div>
 
@@ -73,26 +79,19 @@
       </svg>
     </button>
 
-    <button class="rail-btn" id="tab-people" title="在线成员">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M16 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20"/>
-        <circle cx="9" cy="7.5" r="3.5"/>
-        <path d="M22 20v-1.5a4 4 0 0 0-3-3.87"/>
-        <path d="M16.5 4.1a4 4 0 0 1 0 7.8"/>
-      </svg>
-    </button>
-
-    <button class="rail-btn" id="tab-status" title="连接状态">
+    <button class="rail-btn" id="tab-status" title="连接与成员">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
         <path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>
       </svg>
     </button>
 
     <button class="rail-btn" id="tab-settings" title="设置">
-      <!-- 齿轮：一个带"齿"的外轮廓 + 中心圆，避免看起来像太阳 -->
+      <!-- 圆形齿轮：8 个齿是**轮廓的一部分**（不是分开的放射线），
+           否则看起来像太阳/罗盘。中心小圆是轴孔。
+           前两版分别是非规则多边形齿轮、放射线齿轮，都不像"设置"。 -->
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3.2l1.5 2.1a6.9 6.9 0 0 1 2.1.9l2.5-.6 1.1 1.9-1.8 1.8a6.9 6.9 0 0 1 0 2.4l1.8 1.8-1.1 1.9-2.5-.6a6.9 6.9 0 0 1-2.1.9L12 20.8l-1.5-2.1a6.9 6.9 0 0 1-2.1-.9l-2.5.6-1.1-1.9 1.8-1.8a6.9 6.9 0 0 1 0-2.4L4.8 10.5l1.1-1.9 2.5.6a6.9 6.9 0 0 1 2.1-.9z"/>
-        <circle cx="12" cy="12" r="2.6"/>
+        <circle cx="12" cy="12" r="3.1"/>
+        <path d="M18.9 14.3a1.4 1.4 0 0 0 .3 1.6l.1.1a1.7 1.7 0 1 1-2.4 2.4l-.1-.1a1.4 1.4 0 0 0-1.6-.3 1.4 1.4 0 0 0-.9 1.3v.3a1.7 1.7 0 1 1-3.4 0v-.2a1.4 1.4 0 0 0-.9-1.3 1.4 1.4 0 0 0-1.6.3l-.1.1a1.7 1.7 0 1 1-2.4-2.4l.1-.1a1.4 1.4 0 0 0 .3-1.6 1.4 1.4 0 0 0-1.3-.9h-.3a1.7 1.7 0 1 1 0-3.4h.2a1.4 1.4 0 0 0 1.3-.9 1.4 1.4 0 0 0-.3-1.6l-.1-.1a1.7 1.7 0 1 1 2.4-2.4l.1.1a1.4 1.4 0 0 0 1.6.3h.1a1.4 1.4 0 0 0 .9-1.3v-.3a1.7 1.7 0 1 1 3.4 0v.2a1.4 1.4 0 0 0 .9 1.3 1.4 1.4 0 0 0 1.6-.3l.1-.1a1.7 1.7 0 1 1 2.4 2.4l-.1.1a1.4 1.4 0 0 0-.3 1.6v.1a1.4 1.4 0 0 0 1.3.9h.3a1.7 1.7 0 1 1 0 3.4h-.2a1.4 1.4 0 0 0-1.3.9z"/>
       </svg>
     </button>
 
@@ -108,14 +107,14 @@
   <!-- 移动端：面板是覆盖层，点这层把它关掉 -->
   <div class="panel-scrim" id="panel-scrim"></div>
 
-  <!-- ==================== 列表 ==================== -->
+  <!-- ==================== 列表（300px） ==================== -->
   <aside class="panel" id="panel">
     <div class="panel-head">
       <div class="search">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
           <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
         </svg>
-        <input id="filter" placeholder="搜索" />
+        <input id="filter" placeholder="搜索房间 / 比奇堡居民…" />
       </div>
       <button class="icon-btn" id="btn-new" title="新建房间">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
@@ -126,17 +125,101 @@
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></svg>
       </button>
     </div>
+
+    <!-- 房间筛选（设计稿："全部 / 群组 / 密友"位）。
+         ⚠️ 现有数据模型**没有**群组/密友的分组字段，所以这里用真实存在的
+         三个维度：全部 / 置顶（store.room.pinned）/ 未读（sidebar.unread）。
+         想要设计稿那套分组，得先给房间加一个分组字段（见改造报告）。 -->
+    <div class="panel-tabs" id="panel-tabs">
+      <button class="tab-chip is-on" data-filter="all" type="button">全部</button>
+      <button class="tab-chip" data-filter="pinned" type="button">置顶</button>
+      <span class="panel-tabs__link" id="channel-link" title="节点连接状态">
+        <span class="radar-ring" id="channel-dot"></span>
+        <span id="channel-text">连接中</span>
+      </span>
+    </div>
+
     <div class="panel-scroll" id="panel-body"></div>
+
+    <!-- 面板底部：真实中继信息（设计稿"太平洋深海 3000m 专线"位） -->
+    <div class="panel-foot" id="panel-foot">
+      <div class="panel-foot__left">
+        <span class="radar-ring" id="panel-foot-dot"></span>
+        <span class="panel-foot__text" id="panel-foot-text">正在接入中继…</span>
+      </div>
+      <span class="panel-foot__ver" id="panel-foot-ver">iroh</span>
+    </div>
   </aside>
 
-  <!-- ==================== 对话 ==================== -->
+  <!-- ==================== 对话舱 ==================== -->
   <main class="chat">
+    <!-- 环境气泡层（设计稿 floatUp，由 js/ui/motion.js 填充） -->
+    <div class="ambient" id="ambient" aria-hidden="true"></div>
+    <!-- 中央水滴形水印 -->
+    <div class="chat-watermark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2.6s6.4 7.2 6.4 11.6a6.4 6.4 0 1 1-12.8 0C5.6 9.8 12 2.6 12 2.6Z"/>
+      </svg>
+    </div>
+
     <header class="chat-head">
-      <div class="chat-head__title" id="room-title" title="点击可改备注名">未进入房间</div>
+      <!-- 顶栏结构对齐设计稿 _1：房间号徽标 + 标题 + 成员药丸，下面一行真实连接信息。
+           徽标只在"备注名 ≠ 房间名"时出现 —— 没有备注名时它和标题一模一样，
+           显示两遍同一个名字纯属占地方。 -->
+      <div class="chat-head__id">
+        <div class="chat-head__badge" id="room-badge" hidden></div>
+        <div class="chat-head__meta">
+          <div class="chat-head__row">
+            <h1 class="chat-head__title" id="room-title" title="点击可改备注名">未进入房间</h1>
+            <button class="chat-head__members" id="room-members" title="查看房间成员" type="button" hidden>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20"/>
+                <circle cx="9" cy="7.5" r="3.5"/>
+                <path d="M22 20v-1.5a4 4 0 0 0-3-3.87"/>
+              </svg>
+              <span id="room-members-text">0 人</span>
+            </button>
+          </div>
+          <div class="chat-head__subline" id="chat-subline"><i></i><span id="chat-subline-text">正在连接中继…</span></div>
+        </div>
+      </div>
+
       <div class="chat-head__spacer"></div>
+
+      <!-- 视图切换（设计稿 _1 的「消息对话 / 声呐拓扑」）。
+           内容换成真实量，名字叫「中继拓扑」而不是「声呐拓扑」——
+           我们没有声呐数据，画出来只能是编的。 -->
+      <div class="chat-head__tabs" id="view-tabs" role="tablist">
+        <button class="view-tab is-on" data-view="chat" role="tab" aria-selected="true" type="button">消息对话</button>
+        <button class="view-tab" data-view="topology" role="tab" aria-selected="false" type="button">中继拓扑</button>
+      </div>
+
       <span class="pill" id="node-pill">
         <i class="pill__dot"></i><span class="pill__text">启动中</span>
       </span>
+
+      <div class="chat-head__actions">
+        <!-- 提示音开关（真实偏好 store.prefs().sound） -->
+        <button class="head-btn" id="btn-head-sound" title="新消息提示音" type="button">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 5 6.5 8.6H3v6.8h3.5L11 19Z"/><path d="M15.5 8.8a4.5 4.5 0 0 1 0 6.4"/><path d="M18.4 5.9a8.6 8.6 0 0 1 0 12.2"/>
+          </svg>
+        </button>
+        <!-- 加密说明（端到端确实成立，点开讲清楚边界） -->
+        <button class="head-btn" id="btn-head-lock" title="加密与隐私说明" type="button">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="10.5" width="15" height="9.5" rx="2.5"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/>
+          </svg>
+        </button>
+        <!-- 房间菜单（备注名 / 置顶 / 移出） -->
+        <button class="head-btn" id="btn-room-menu" title="房间设置" type="button">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+            <circle cx="5.5" cy="12" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="18.5" cy="12" r="1.3" fill="currentColor" stroke="none"/>
+          </svg>
+        </button>
+      </div>
     </header>
 
     <div class="blank" id="blank">
@@ -152,6 +235,12 @@
     </div>
 
     <button class="jump-btn" id="jump-btn">回到最新</button>
+
+    <!-- 中继拓扑（设计稿 _1 的「声呐拓扑」位）。
+         ⚠️ 用**覆盖层**而不是把时间线/输入区 display:none ——
+            那两个元素的可见性由 timeline.open()/close() 直接写内联样式控制，
+            这里再去改就会两处打架（切房间后拓扑页会自己消失或闪现）。 -->
+    <section class="topology" id="topology" aria-label="中继拓扑" aria-hidden="true"></section>
 
     <footer class="composer" id="composer" style="display:none">
       <div class="emoji-pop" id="emoji-pop"></div>
@@ -201,6 +290,16 @@
           <button class="btn-primary" id="send" disabled>发送</button>
         </div>
       </div>
+
+      <!-- 输入区页脚：设计稿"声纳频段 / 深度压强"位，换成真实的连接信息 -->
+      <div class="conn-foot">
+        <div class="conn-foot__left">
+          <span class="conn-foot__dot" id="conn-foot-dot"></span>
+          <span class="conn-foot__text" id="conn-foot-text">正在接入中继…</span>
+        </div>
+        <span class="conn-foot__right">端到端加密 · relay-only</span>
+      </div>
+
       <input type="file" id="file" multiple style="display:none" />
       <input type="file" id="file-img" accept="image/*" multiple style="display:none" />
     </footer>

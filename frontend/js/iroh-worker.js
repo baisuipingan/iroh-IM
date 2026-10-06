@@ -47,7 +47,7 @@ let testMode = false;
  * 与主线程的通讯
  * ------------------------------------------------------------------------ */
 
-let rpcSeq = 0;
+const rpcSeq = 0;
 const rpcPending = new Map(); // id -> {resolve, reject}
 
 /** 主线程发来的 RPC：`{type:'rpc', id, method, args}` */
@@ -424,7 +424,6 @@ async function onAccepted(ev) {
   pushOutgoing(fileId);
 
   const { file, meta } = t;
-  const CHUNK = meta.chunk_size;
 
   // ⚠️ 读回调在这里，用 File.slice() —— 数据不经过 WASM 内存，也不经过 postMessage
   const read = async (seq, size) => {

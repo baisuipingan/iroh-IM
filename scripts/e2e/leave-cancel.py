@@ -34,15 +34,15 @@ def boot(url, label):
 
 tx_tab, tx = boot(f"http://127.0.0.1:8099/?autostart=1&room={ROOM}&key={K('a')}&v={V}tx", "tx")
 rx_tab, rx = boot(f"http://127.0.0.1:8099/?autostart=1&room={ROOM}&key={K('b')}&v={V}rx", "rx")
-rx.ev("window.__useOpfs=true; window.__setTestMode(true)")
-rx.ev("window.__clearBitmaps()", timeout=30)
+rx.ev("window.__iroh_useOpfs=true; window.__iroh_setTestMode(true)")
+rx.ev("window.__iroh_clearBitmaps()", timeout=30)
 tx.ev(f"(() => {{ const u=new Uint8Array({SIZE}); window.__testFile=new File([u],'lc.bin',{{type:'application/octet-stream'}}); return 1; }})()", timeout=240)
-tx.ev("window.__setStopAfterChunks(0)")
-tx.ev(f"window.__sendFile(window.__testFile, {json.dumps(ROOM)})")
+tx.ev("window.__iroh_setStopAfterChunks(0)")
+tx.ev(f"window.__iroh_sendFile(window.__testFile, {json.dumps(ROOM)})")
 
 def snap(p):
     try:
-        s = json.loads(p.ev("JSON.stringify(window.__transfers())") or "[]")
+        s = json.loads(p.ev("JSON.stringify(window.__iroh_transfers())") or "[]")
     except Exception:
         return None
     return s[0] if s else None
@@ -51,7 +51,7 @@ for _ in range(60):
     time.sleep(0.8)
     s = snap(rx)
     if s and s["direction"] == "recv" and s["state"] in ("invited", "active"):
-        rx.fire(f"window.__acceptFile({json.dumps(s['file_id'])})")
+        rx.fire(f"window.__iroh_acceptFile({json.dumps(s['file_id'])})")
         break
 
 t0 = time.time()

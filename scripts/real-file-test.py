@@ -66,18 +66,18 @@ def main() -> int:
     hk.ev(
         r"""
         (async () => {
-          window.__writeLog = [];
+          window.__iroh_writeLog = [];
           const root = await navigator.storage.getDirectory();
           try { await root.removeEntry('out.bin'); } catch {}
           const CHUNK = 16384;
-          window.__mockFilePicker = async (name, size) => {
+          window.__iroh_mockFilePicker = async (name, size) => {
             const fh = await root.getFileHandle('out.bin', { create: true });
             const orig = fh.createWritable.bind(fh);
             fh.createWritable = async (opts) => {
               const w = await orig(opts);
               const ow = w.write.bind(w);
               w.write = async (arg) => {
-                window.__writeLog.push([arg.position / CHUNK, performance.now()]);
+                window.__iroh_writeLog.push([arg.position / CHUNK, performance.now()]);
                 return ow(arg);
               };
               return w;
@@ -130,9 +130,9 @@ def main() -> int:
     )
     print(f"Mac 端已装载 {mac.ev('window.__testFile.size')} 字节（真实数据）", flush=True)
 
-    mac.ev("window.__setStopAfterChunks(0)")
+    mac.ev("window.__iroh_setStopAfterChunks(0)")
     t0 = time.time()
-    mac.ev("window.__sendFile(window.__testFile, '" + ROOM + "')")
+    mac.ev("window.__iroh_sendFile(window.__testFile, '" + ROOM + "')")
     print("已发起传输", flush=True)
 
     accepted = False
@@ -141,12 +141,12 @@ def main() -> int:
     for _ in range(400):
         time.sleep(3)
         try:
-            st = json.loads(hk.ev("JSON.stringify(window.__transfers())") or "[]")
+            st = json.loads(hk.ev("JSON.stringify(window.__iroh_transfers())") or "[]")
         except Exception:
             continue
         inv = [x for x in st if x["direction"] == "recv" and x["state"] == "invited"]
         if inv and not accepted:
-            hk.fire(f"window.__acceptFile({json.dumps(inv[0]['file_id'])})")
+            hk.fire(f"window.__iroh_acceptFile({json.dumps(inv[0]['file_id'])})")
             accepted = True
             print("香港端已接受", flush=True)
             continue

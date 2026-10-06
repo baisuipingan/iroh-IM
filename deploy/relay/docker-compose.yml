@@ -27,6 +27,11 @@ services:
     container_name: ${CONTAINER_NAME:-iroh-relay}
     network_mode: host
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./relay-docker.toml:/etc/iroh-relay/relay.toml:ro
       # 证书目录：由 cert-sync.sh 按 default.crt/default.key 放好，Reloading 会自动重读

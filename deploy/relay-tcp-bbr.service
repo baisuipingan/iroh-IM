@@ -1,0 +1,13 @@
+[Unit]
+Description=Scoped TCP BBR for iroh relay IPv4 responses
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/iroh-relay-tcp-bbr start
+ExecStop=/usr/local/sbin/iroh-relay-tcp-bbr stop
+
+[Install]
+WantedBy=multi-user.target

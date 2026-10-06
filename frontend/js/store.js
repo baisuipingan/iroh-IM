@@ -167,7 +167,9 @@ export const store = {
       keys
         .sort((a, b) => (all[b]?.ts || 0) - (all[a]?.ts || 0))
         .slice(40)
-        .forEach((k) => delete all[k]);
+        .forEach((k) => {
+          delete all[k];
+        });
     }
     writeJSON(KEYS.previews, all);
   },

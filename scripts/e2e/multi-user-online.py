@@ -64,7 +64,7 @@ tt.check("三方互相可见", all(len(v) > 5 for v in seen.values()), f"{seen}"
 print("\n=== 3) 各自发消息 + 验证归属 ===", flush=True)
 texts = {"小明": "我是小明", "小红": "我是小红", "小刚": "我是小刚"}
 for n, txt in texts.items():
-    tabs[n][1].ev(f"window.__sendText({json.dumps(txt)})")
+    tabs[n][1].ev(f"window.__iroh_sendText({json.dumps(txt)})")
     time.sleep(1.5)
 
 time.sleep(4)
@@ -103,7 +103,7 @@ tt.check("后进房者能看到全部 3 条历史（SQLite 落库成功）",
 
 # ── 6) 小美发言，其他人都应收到 ────────────────────────────────
 print("\n=== 6) 小美发言，其他人收到 ===", flush=True)
-p4.ev(f"window.__sendText('我是小美')")
+p4.ev(f"window.__iroh_sendText('我是小美')")
 got = 0
 for n, (_, pp) in tabs.items():
     if n == "小美": continue

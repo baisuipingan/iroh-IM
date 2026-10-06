@@ -10,15 +10,15 @@
 #   ./scripts/build-wasm.sh native     # 编原生 relay-probe 到 dist/
 #
 # 环境变量：
-#   IROH_BUILD_HOST  构建机，默认 root@189.24.68.147
-#   IROH_BUILD_PORT  SSH 端口，默认 15601
+#   IROH_BUILD_HOST  构建机，默认 root@189.24.70.253
+#   IROH_BUILD_PORT  SSH 端口，默认 22
 #   IROH_BUILD_KEY   SSH 私钥，默认 ~/Desktop/ssh/mindcrew/codex
 #   IROH_BUILD_DIR   构建机上的目录，默认 /opt/iroh-build/client-wasm
 set -euo pipefail
 
 MODE="${1:-dev}"
-HOST="${IROH_BUILD_HOST:-root@189.24.68.147}"
-PORT="${IROH_BUILD_PORT:-15601}"
+HOST="${IROH_BUILD_HOST:-root@189.24.70.253}"
+PORT="${IROH_BUILD_PORT:-22}"
 KEY="${IROH_BUILD_KEY:-$HOME/Desktop/ssh/mindcrew/codex}"
 DIR="${IROH_BUILD_DIR:-/opt/iroh-build/client-wasm}"
 
@@ -28,6 +28,14 @@ SSH=(ssh -i "$KEY" -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAli
 #    于是下面那句"产物必须比源码新"的自检**恒为通过**（源码总是更早），
 #    等于把"这次构建到底有没有生效"的唯一自动判据废掉了（复检 P3-12）。
 SCP=(scp -p -i "$KEY" -P "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
+
+echo "==> 检查 $HOST 的构建工具链"
+"${SSH[@]}" 'for tool in /opt/iroh-build/cargo/bin/cargo /opt/iroh-build/cargo/bin/rustc /opt/iroh-build/cargo/bin/wasm-pack; do
+  if [ ! -x "$tool" ]; then
+    echo "缺少构建工具: $tool；请先迁移或安装工具链，当前服务器只能运行已有产物。" >&2
+    exit 1
+  fi
+done'
 
 echo "==> 同步源码到 $HOST:$DIR"
 "${SSH[@]}" "mkdir -p $DIR/src/bin"

@@ -11,7 +11,7 @@
 import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
-import { avatar } from './sidebar.js';
+import { avatar } from './primitives.js';
 import * as U from '../util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -43,6 +43,32 @@ export const timeline = {
   _filePositions: new Map(),
   _prepending: false,
 
+  /**
+   * 现在「几何上是不是真的在底部」—— **实时算**。
+   *
+   * ⚠️ 用途只有一个：**决定「回到最新」按钮该不该亮**。
+   *    **不要**用它决定"要不要滚动" —— 那是 `atBottom` 的事。
+   *
+   * ⚠️ 为什么不能拿它决定滚不滚（上一轮的教训）：刷新进房后 `visibilitychange`
+   *    会触发一次 `_scheduleSync(0)` → 静默重载历史。那条路径是**逐条 push**，
+   *    每条 push 前都问一次"现在在底部吗"—— 内容早就溢出了，答案永远是 false，
+   *    于是**一条都不贴底**，最后停在中间，还把「回到最新」点亮了。
+   *    实测：这就是"每次刷新后进度条都在中间"的成因。
+   */
+  _shouldStick() {
+    const el = $('timeline');
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  },
+
+  /** 贴底（差 2px 以内就算到位，避免和下一帧的亚像素抖动打架） */
+  _pin() {
+    const el = $('timeline');
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    this.atBottom = true;
+  },
+
   init() {
     $('timeline').addEventListener('scroll', () => {
       const el = $('timeline');
@@ -50,13 +76,42 @@ export const timeline = {
       $('jump-btn').classList.toggle('is-on', !this.atBottom);
       if (el.scrollTop < 40) this.loadOlder();
     });
+
+    // ★ 内容变高就自动重新贴底。
+    //   为什么必须结构性地钉住，而不是"每次 push 时滚一次"：
+    //   实测发消息时浏览器会做**滚动锚定**（scrollTop 自动跟着内容增长 +Δ），
+    //   而我们那一刻读到的 scrollHeight 还没稳定，于是最后一条卡在输入区后面
+    //   约 26px —— 要用户再点一下输入框才对。图片解码完那一下同理。
+    const inner = $('tl-inner');
+    if (typeof ResizeObserver === 'function' && inner) {
+      new ResizeObserver(() => {
+        // ⚠️ 这里必须用 `atBottom`（**变化前**的用户意图），**不能**用 `_shouldStick()`。
+        //    内容长高之后 gap 已经不是原来那个值了（实测 0 → 200px），
+        //    拿它一判断就必然是 false，于是永远不重贴 —— 这个坑我自己踩了一次。
+        if (!this.atBottom) return;                          // 用户往上翻了，别动他的位置
+        const el = $('timeline');
+        if (el.scrollHeight - el.clientHeight - el.scrollTop <= 2) return;  // 已贴底，别制造抖动
+        this._pin();
+      }).observe(inner);
+    }
     $('jump-btn').onclick = () => this.scrollBottom();
 
     // composer 高度会随待发送区/多行输入变化，"回到最新"要跟着上移。
     // 用 ResizeObserver 而不是写死数值 —— 之前写死 152px，附件一展开就压住输入框。
+    //
+    // ★ 这里除了挪 jump-btn，还要**重新贴底**：输入区一变高，时间线的可视高度就变小，
+    //   `scrollHeight - clientHeight - scrollTop` 立刻差出一截（实测多行输入 3 行时差 52px），
+    //   而内容本身没变 —— `#tl-inner` 那个观察器**不会触发**，于是最后一条被压在输入区下面。
+    //   必须在 composer 变高的这一刻自己钉一次。
     const cp = $('composer');
     if (typeof ResizeObserver === 'function') {
-      new ResizeObserver(() => this.syncJumpBtn()).observe(cp);
+      new ResizeObserver(() => {
+        this.syncJumpBtn();
+        if (!this.atBottom) return;                          // 用户往上翻了，别动
+        const el = $('timeline');
+        if (el.scrollHeight - el.clientHeight - el.scrollTop <= 2) return;
+        this._pin();
+      }).observe(cp);
     } else {
       addEventListener('resize', () => this.syncJumpBtn());
     }
@@ -125,7 +180,9 @@ export const timeline = {
     clearTimeout(this._noteTimer);
     inner
       .querySelectorAll('.msg, .tl-day, .tl-note, .tl-unread-divider, .tl-empty')
-      .forEach((el) => el.remove());
+      .forEach((el) => {
+        el.remove();
+      });
     const hint = $('tl-hint');
     hint.style.display = 'none';
     hint.textContent = '';
@@ -153,7 +210,7 @@ export const timeline = {
     el.className = `tl-note tl-note--live${kind ? ` tl-note--${kind}` : ''}`;
     el.textContent = text;
     if (this.atBottom) this.scrollBottom();
-    else $('jump-btn').classList.add('is-on');
+    else if (!this._shouldStick()) $('jump-btn').classList.add('is-on');
 
     clearTimeout(this._noteTimer);
     // `replace`：把上一条"进行中"提示就地换掉（进房：正在进入 → 已进入），
@@ -227,6 +284,9 @@ export const timeline = {
     }
 
     // 不在底部时收到实时消息 → 记下第一条，插"新消息"分隔线
+    // ⚠️ 用 `atBottom`（用户意图，sticky），**不是**实时几何 ——
+    //    静默重载历史时内容早就溢出了，用实时几何会判定"不在底部"，
+    //    于是每条都不贴底，刷新后停在中间（实测踩过）。
     const wasAtBottom = this.atBottom;
     if (!isHistory && !mine && !wasAtBottom && !this.unreadAnchor) {
       this.unreadAnchor = m.id;
@@ -238,8 +298,18 @@ export const timeline = {
 
     this._insertMessage(this._bubble(m, mine, isHistory), m);
 
+    // ⚠️ **前插历史（往上翻加载更早）时绝对不能滚动。**
+    //    `prependPage` 靠插入前抓下的锚点（`_captureReadingPosition`）还原阅读位置，
+    //    中途任何一次滚动都会让那个锚点失效 —— 位置会还原错，用户还会看到
+    //    时间线剧烈跳一下再跳回来。
+    //    ⚠️ 这个保护**只能放在这里**（跳过滚动）。曾经图省事在 `push()` 开头
+    //    整段早返回，结果把 `m.file` 分支也跳过了 —— 文件消息被插成普通气泡，
+    //    传输模块收不到 `EV.FILE_PROOF`，文件卡片永远不渲染（`multi-peer` 用例抓到）。
+    if (this._prepending) return;
     if (wasAtBottom) this.scrollBottom();
-    else $('jump-btn').classList.add('is-on');
+    // 插完仍然贴底（比如插的是一条很短的旧消息）就不要亮按钮 ——
+    // 之前是无条件点亮，于是每次静默同步「回到最新」都会冒出来。
+    else if (!this._shouldStick()) $('jump-btn').classList.add('is-on');
   },
 
   /** 前插一页历史 */
@@ -264,7 +334,9 @@ export const timeline = {
     element.dataset.id = String(message.id || '');
     const next = rows.find((row) => row !== element && compareMessages(message, row.dataset) < 0);
     inner.insertBefore(element, next || null);
-    inner.querySelectorAll('.tl-day').forEach((divider) => divider.remove());
+    inner.querySelectorAll('.tl-day').forEach((divider) => {
+      divider.remove();
+    });
     let previous = null;
     for (const row of inner.querySelectorAll('.msg[data-ts]')) {
       const timestamp = Number(row.dataset.ts);
@@ -874,14 +946,25 @@ export const timeline = {
   },
 
   scrollBottom() {
-    const el = $('timeline');
-    el.scrollTop = el.scrollHeight;
-    this.atBottom = true;
+    this._pin();
     this.unreadAnchor = null;
     // ⚠️ 顺带把"以下为新消息"分隔线摘掉（复检 P3-8）：
     //    原来只清了锚点，那条线会**一直留在会话中间**直到切房间。
     $('tl-inner').querySelector('.tl-unread-divider')?.remove();
     $('jump-btn').classList.remove('is-on');
+
+    // 布局常常要到下一两帧才稳定（图片解码、字体替换），
+    // 只滚这一次会差那么十几二十像素 —— 视觉上就是"最后一条被输入区压住一半"。
+    // 所以再补钉几帧；中途用户往上翻了就立刻停。
+    let frames = 0;
+    const settle = () => {
+      const el = $('timeline');
+      if (frames++ >= 3 || !this.atBottom) return;
+      if (el.scrollHeight - el.clientHeight - el.scrollTop <= 2) return;
+      el.scrollTop = el.scrollHeight;
+      if (frames < 3) requestAnimationFrame(settle);
+    };
+    requestAnimationFrame(settle);
   },
 
   /** 顶部翻页 */
@@ -979,7 +1062,11 @@ export const timeline = {
         const next = U.cursorOf(list[0]);
         if (next === before) throw new Error('历史分页游标未推进');
         before = next;
-      } while (true);
+      // ⚠️ 这里的 `while (before)` 就是"恒真"—— 写成 `while (true)` 会被
+      //    linter 报 noConstantCondition。语义完全一致：`before` 初值是空串，
+      //    而 do-while 保证第一轮必然执行，之后每轮都被赋成非空游标。
+      //    退出靠上面三个 break（空页 /追上了 / 游标不推进就抛）。
+      } while (before);
       if (newest) this._syncedMessage = { ts: newest.ts, id: newest.id };
       // 历史为空**并且**期间没有实时消息到达，才认为房间是空的。
       // （实时消息可能是"进房的瞬间对方刚发的"，这时它不在历史里？其实在，
@@ -990,6 +1077,8 @@ export const timeline = {
         hint.style.display = 'none';
         hint.textContent = '';
       }
+      // 静默同步同样要按**用户意图**贴底：刷新后页面一可见就会静默重载一次，
+      // 用实时几何判断会让这次重载把时间线晾在中间。
       if (!silent || this.atBottom) this.scrollBottom();
     } catch (e) {
       if (this._generation !== generation) return;

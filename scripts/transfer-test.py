@@ -150,7 +150,7 @@ class Page:
 
     def fire(self, expr, timeout=15):
         """只触发、不等 Promise —— 用于「整个传输才 resolve」的调用
-        （如 __acceptFile）。等它会把调用方卡死到传输结束。"""
+        （如 __iroh_acceptFile）。等它会把调用方卡死到传输结束。"""
         r = self.call(
             "Runtime.evaluate",
             {"expression": expr, "awaitPromise": False, "returnByValue": True},
@@ -276,9 +276,9 @@ MOCK_JS = r"""
   //   "could not be cloned"
   // （因为函数不是可克隆类型）。所以这里不造假句柄，
   // 只把开关打开，让 Worker 自己用 OPFS 造一个真句柄（同类型、同 API）。
-  window.__useOpfs = true;
-  window.__writeLog = window.__writeLog || [];
-  window.__mockFilePicker = async () => {
+  window.__iroh_useOpfs = true;
+  window.__iroh_writeLog = window.__iroh_writeLog || [];
+  window.__iroh_mockFilePicker = async () => {
     throw new Error('本测试走 OPFS，不应调用 picker');
   };
   return true;
@@ -291,8 +291,8 @@ _LEGACY_MOCK_JS = r"""
 (() => {
   const CHUNK = 16384;
   const files = (window.__mockFiles = window.__mockFiles || new Map());
-  window.__writeLog = window.__writeLog || [];
-  window.__mockFilePicker = async (name, size) => {
+  window.__iroh_writeLog = window.__iroh_writeLog || [];
+  window.__iroh_mockFilePicker = async (name, size) => {
     let f = window.__mockFiles.get(name);
     if (!f) {
       f = { buf: new Uint8Array(size), high: 0 };
@@ -305,7 +305,7 @@ _LEGACY_MOCK_JS = r"""
           const { position, data } = arg;
           f.buf.set(data, position);
           f.high = Math.max(f.high, position + data.length);
-          window.__writeLog.push(Math.round(position / CHUNK));
+          window.__iroh_writeLog.push(Math.round(position / CHUNK));
         },
         async close() {},
       }),
@@ -318,7 +318,7 @@ _LEGACY_MOCK_JS = r"""
 # 只重置「本轮写入日志」，保留文件内容
 COUNT_JS = r"""
 (() => {
-  window.__writeLog = [];
+  window.__iroh_writeLog = [];
   return true;
 })()
 """
@@ -363,7 +363,7 @@ def main():
 
     # ② 设置测试模式（走 OPFS 真实句柄）+ 开写入日志
     rx.ev(MOCK_JS)
-    rx.ev("window.__setTestMode(true)")
+    rx.ev("window.__iroh_setTestMode(true)")
     print("  接收端已开启测试模式（OPFS 真实句柄 + 写入日志）", flush=True)
 
     # ③ 发送端构造确定性文件：第 i 块填充 (i & 0xff)
@@ -378,26 +378,26 @@ def main():
         """,
         timeout=30,
     )
-    # ⚠️ `__clearBitmaps` 现在是异步的（要走 Worker RPC），必须 await
-    rx.ev("window.__clearBitmaps && window.__clearBitmaps()", timeout=30)
+    # ⚠️ `__iroh_clearBitmaps` 现在是异步的（要走 Worker RPC），必须 await
+    rx.ev("window.__iroh_clearBitmaps && window.__iroh_clearBitmaps()", timeout=30)
     print(f"  已构造 {SIZE} 字节测试文件（{TOTAL} 块）", flush=True)
 
     # ---------------------------------------------------------------- 第 1 轮
     print(f"\n== 第 1 轮：发送方只发 {STOP}/{TOTAL} 块后异常断开 ==", flush=True)
-    tx.ev(f"window.__setStopAfterChunks({STOP})")
-    tx.ev("window.__sendFile(window.__testFile, 'xfer-test')")
+    tx.ev(f"window.__iroh_setStopAfterChunks({STOP})")
+    tx.ev("window.__iroh_sendFile(window.__testFile, 'xfer-test')")
 
     wait_until(
         rx,
-        "window.__transfers().some(t => t.direction==='recv' && t.state==='invited')",
+        "window.__iroh_transfers().some(t => t.direction==='recv' && t.state==='invited')",
         30,
         label="接收端收到邀约",
     )
-    fid = rx.ev("window.__transfers().find(t => t.direction==='recv').file_id")
+    fid = rx.ev("window.__iroh_transfers().find(t => t.direction==='recv').file_id")
     print(f"  收到邀约 file_id = {fid}", flush=True)
 
     rx.ev(COUNT_JS)  # 重置写入统计
-    rx.fire(f"window.__acceptFile({json.dumps(fid)})")
+    rx.fire(f"window.__iroh_acceptFile({json.dumps(fid)})")
 
     # ⚠️ 必须轮询等「第 1 轮真的结束」，不能固定 sleep：
     #    实测传输速度受日志/回调往返影响，6 秒可能连一半都没走完，
@@ -411,32 +411,32 @@ def main():
             return False
 
     settled(
-        "!window.__transfers().some(t => t.state === 'active')",
+        "!window.__iroh_transfers().some(t => t.state === 'active')",
         120,
         "第 1 轮结束（两端都不再 active）",
     )
     time.sleep(1)
-    r1_writes = rx.ev("window.__writeLog.length")
+    r1_writes = rx.ev("window.__iroh_writeLog.length")
     print(f"  第 1 轮实际写入块数 = {r1_writes}", flush=True)
     check("第 1 轮：只收到部分块（不是全部）", 0 < (r1_writes or 0) < TOTAL, f"{r1_writes}/{TOTAL}")
-    print("  发送端传输状态:", tx.ev("JSON.stringify(window.__transfers())"), flush=True)
-    print("  接收端传输状态:", rx.ev("JSON.stringify(window.__transfers())"), flush=True)
+    print("  发送端传输状态:", tx.ev("JSON.stringify(window.__iroh_transfers())"), flush=True)
+    print("  接收端传输状态:", rx.ev("JSON.stringify(window.__iroh_transfers())"), flush=True)
     txlog.dump("发送端", keep="测试钩子|开始发送|补发|发送完成|失败|ERROR|WARN")
     rxlog.dump("接收端", keep="数据不完整|校验|失败|中断|ERROR|WARN")
 
-    keys = rx.ev("window.__pendingBitmaps()")
+    keys = rx.ev("window.__iroh_pendingBitmaps()")
     print(f"  IndexedDB 断点位图 key = {keys}", flush=True)
     check("第 1 轮：断点位图已落盘", bool(keys), f"{len(keys or [])} 条")
 
     # ---------------------------------------------------------------- 第 2 轮
     print(f"\n== 第 2 轮：解除限制重发，应只补缺的块 ==", flush=True)
-    tx.ev("window.__setStopAfterChunks(0)")
+    tx.ev("window.__iroh_setStopAfterChunks(0)")
 
     # 记录第 1 轮结束时接收端已确认的块数（来自位图，最可信）
     have1 = rx.ev(
         r"""
         (async () => {
-          const keys = await window.__pendingBitmaps();
+          const keys = await window.__iroh_pendingBitmaps();
           if (!keys.length) return 0;
           const b64 = await new Promise((res) => {
             const req = indexedDB.open('iroh-transfers', 1);
@@ -456,14 +456,14 @@ def main():
     print(f"  第 1 轮位图记录块数 = {have1}", flush=True)
 
     rx.ev(COUNT_JS)  # 重置本轮写入统计（不动文件内容）
-    rx.fire(f"window.__acceptFile({json.dumps(fid)})")
+    rx.fire(f"window.__iroh_acceptFile({json.dumps(fid)})")
 
     # 等第 2 轮真正收完（状态变 done，或长时间不再有新的写入）
     deadline = time.time() + 180
     last_n, stable = -1, 0
     while time.time() < deadline:
-        st = rx.ev("JSON.stringify(window.__transfers().map(t=>t.state))")
-        n = rx.ev("window.__writeLog.length")
+        st = rx.ev("JSON.stringify(window.__iroh_transfers().map(t=>t.state))")
+        n = rx.ev("window.__iroh_writeLog.length")
         if "done" in st and n == last_n:
             break
         stable = stable + 1 if n == last_n else 0
@@ -472,12 +472,12 @@ def main():
         last_n = n
         time.sleep(0.5)
 
-    r2_writes = rx.ev("window.__writeLog.length")
-    seqs = json.loads(rx.ev("JSON.stringify(window.__writeLog)") or "[]")
+    r2_writes = rx.ev("window.__iroh_writeLog.length")
+    seqs = json.loads(rx.ev("JSON.stringify(window.__iroh_writeLog)") or "[]")
     print(f"  第 2 轮实际写入块数 = {r2_writes}", flush=True)
     print(f"  第 2 轮写入的块序号 = {sorted(seqs)}", flush=True)
-    print("  接收端最终状态:", rx.ev("JSON.stringify(window.__transfers())"), flush=True)
-    print("  发送端最终状态:", tx.ev("JSON.stringify(window.__transfers())"), flush=True)
+    print("  接收端最终状态:", rx.ev("JSON.stringify(window.__iroh_transfers())"), flush=True)
+    print("  发送端最终状态:", tx.ev("JSON.stringify(window.__iroh_transfers())"), flush=True)
 
     # ⚠️ 关心点：接收端 done 之后，发送端要多久才变 done？
     # 这是「接收端已完成、发送端还显示传输中」那个体感问题的量化。
@@ -486,7 +486,7 @@ def main():
     try:
         wait_until(
             tx,
-            "window.__transfers().every(t => t.state !== 'active')",
+            "window.__iroh_transfers().every(t => t.state !== 'active')",
             130,
             interval=0.5,
             label="发送端脱离 active",
@@ -496,7 +496,7 @@ def main():
         settled_ok = True
     except TimeoutError as e:
         print(f"  ⚠️ {e}", flush=True)
-    tx_final = json.loads(tx.ev("JSON.stringify(window.__transfers())") or "[]")
+    tx_final = json.loads(tx.ev("JSON.stringify(window.__iroh_transfers())") or "[]")
     print("  发送端脱离后状态:", json.dumps(tx_final, ensure_ascii=False), flush=True)
 
     check(
@@ -524,7 +524,7 @@ def main():
     # ---------------------------------------------------------- 逐字节校验
     print("\n== 逐字节校验最终文件 ==", flush=True)
     # Worker 化之后文件存在 OPFS 里（接收在 Worker 内完成），由 Worker 读回并校验
-    res = rx.ev(f"window.__verifyOpfs('resume.bin', {SIZE}, {CHUNK})")
+    res = rx.ev(f"window.__iroh_verifyOpfs('resume.bin', {SIZE}, {CHUNK})")
     print(f"  校验结果: {res}", flush=True)
     check("最终文件逐字节正确", bool(res and res.get("ok")), str(res))
 

@@ -26,9 +26,9 @@ tt.wait_until(p, f"!!(window.__state && window.__state().joined === {json.dumps(
 print(f"已进房 {R1}", flush=True)
 
 print("\n=== 模拟断线，然后在断线状态下点另一个房间 ===", flush=True)
-p.ev("window.__net.ready = false; window.__net.phase = 'reconnecting'")
+p.ev("window.__iroh_net.ready = false; window.__iroh_net.phase = 'reconnecting'")
 time.sleep(0.3)
-p.ev(f"window.__openRoom({json.dumps(R2)})", timeout=30)
+p.ev(f"window.__iroh_openRoom({json.dumps(R2)})", timeout=30)
 time.sleep(2)
 s = json.loads(p.ev("JSON.stringify(window.__state())"))
 print(f"  phase={s['phase']} joined={s['joined']} room={s['room']} notes={s['notes'][-1:]}",
@@ -37,7 +37,7 @@ tt.check("断线时点房间：界面切过去但确实没进房", s["joined"] i
          f"joined={s['joined']} room={s['room']}")
 
 print("\n=== 恢复网络（走真实 reconnect 流程）===", flush=True)
-p.ev("window.__net.reconnect()")
+p.ev("window.__iroh_net.reconnect()")
 time.sleep(5)
 s2 = json.loads(p.ev("JSON.stringify(window.__state())"))
 print(f"  phase={s2['phase']} joined={s2['joined']} composer={s2['composerEnabled']} "
@@ -50,7 +50,7 @@ tt.check("恢复后输入区可用", s2["composerEnabled"] is True, str(s2["comp
 hi = tt.open_tab(BASE + "&room=" + R2)
 hp = tt.Page(hi["id"]); hp.call("Runtime.enable")
 tt.wait_until(hp, f"!!(window.__state && window.__state().joined === {json.dumps(R2)})", 120, label="B")
-hp.ev("window.__sendText('进房验证')", timeout=20)
+hp.ev("window.__iroh_sendText('进房验证')", timeout=20)
 time.sleep(4)
 msgs = json.loads(p.ev("JSON.stringify(window.__state())"))["messages"]
 tt.check("确实已加入房间（能收到该房间的消息）", "进房验证" in msgs, str(msgs))

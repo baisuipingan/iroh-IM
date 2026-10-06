@@ -21,7 +21,13 @@ import { theme } from './js/ui/theme.js';
 import { sidebar } from './js/ui/sidebar.js';
 import { timeline } from './js/ui/timeline.js';
 import { composer } from './js/ui/composer.js';
+import { motion } from './js/ui/motion.js';
+import { topology } from './js/ui/topology.js';
+import { notify } from './js/ui/notify.js';
 import { fileTransfer, canTransferFiles } from './js/ui/filetransfer.js';
+//自动化钩子（`window.__state` / `__iroh_*`）全部收在 test-hooks.js，
+// 由下面的 installTestHooks() 显式装一次。见文件末尾的说明。
+import { installTestHooks } from './js/test-hooks.js';
 // 注意：**不要在主线程 import wasm**。iroh 已经整体搬进 Worker
 // （`js/iroh-worker.js`），主线程再 import 一次会白加载 3.4MB 的 wasm
 // 而且那份实例和应用用的是两套状态（踩过：`set_stop_after_chunks` 报 undefined）。
@@ -98,6 +104,8 @@ async function openRoom(room) {
       //    醒来发现自己被拽回了旧房间（offline-room 回归实测）。
       net.noteDesiredRoom(room);
       sidebar.render();
+      // 没真的 join 上，顶栏的成员药丸要收起来（否则显示一个假的人数）
+      motion.paintMembers();
       return;
     }
 
@@ -114,6 +122,12 @@ async function openRoom(room) {
       timeline.note(`已进入「${label}」`, { replace: true });
       composer.setEnabled(true);
       composer.focus();
+      // 顶栏成员药丸（"N 人"）只有真的 join 成功才显示
+      motion.paintMembers();
+      // 副行要说明"当前在哪个房间"，进房后重画一次
+      motion.paintConnection();
+      // 拓扑页脚也会写"当前房间"，同样要跟着走
+      topology.paint();
       await timeline.loadLatest();
       // ⚠️ 顺序有讲究：
       //   1) rebuildCardsForRoom 先把**本房间已有**的传输状态重新画出来
@@ -193,6 +207,9 @@ function wire() {
     timeline.close();
     store.setLastRoom('');
     $('room-title').textContent = '未进入房间';
+    motion.paintMembers();
+    motion.paintConnection();
+    topology.paint();
     bus.emit(EV.ROOM_LEFT, room);
   };
   for (const id of ['rail-me', 'room-title']) {
@@ -248,6 +265,9 @@ function wire() {
       // 否则等网络层的 REJOINED 事件把 joinedRoom 设上
     }
     if (sidebar.tab === 'status') sidebar.render();
+    // 节点态一变，"进没进成房"的判断也可能变（canSend / _room），
+    // 成员药丸跟着重算，别让它停在上一轮的判断上。
+    motion.paintMembers();
   });
   $('node-pill').onclick = () => {
     if (net.phase === 'online') return;
@@ -267,6 +287,7 @@ function wire() {
     timeline.note(`已重新连接并回到「${label}」`);
     if (timeline.room === room) composer.setEnabled(true);
     sidebar.render();
+    motion.paintMembers();
   });
 
   // 提示默认 5 秒后自动消失；文案里带"失败/出错/超时"这类词的按错误样式显示。
@@ -382,6 +403,14 @@ async function main() {
     sidebar.init();
     timeline.init();
     composer.init();
+    // 视觉/演出层（环境气泡、顶栏成员药丸、连接状态三处信息）。
+    // 放在 net.start() **之前**：它自带空状态渲染，节点起来后会由
+    // NODE_STATE 事件自动补上真实数据，首屏不会先空一块。
+    motion.init();
+    // 视图切换（消息对话 / 中继拓扑）+ 桌面通知。
+    // 两个都是"订阅事件 + 读真实状态"，不需要等 net.start()。
+    topology.init();
+    notify.init();
 
     if (!store.nick()) store.setNick(`用户${Math.floor(Math.random() * 9000 + 1000)}`);
     paintMyAvatar();
@@ -390,6 +419,8 @@ async function main() {
 
     await net.start();
     syncMyIdentity();
+    // 节点起来后立刻刷一次连接信息（首屏 motion.init 时还是"正在接入…"）
+    motion.paintConnection();
     fileTransfer.init();
     // 恢复"上次没收完的接收"（刷新/关页面后仍能看到卡片并继续）
     // 放在进房之后调，因为卡片要挂到时间线上
@@ -433,77 +464,27 @@ async function autostart() {
   }
 }
 
-window.__state = () => {
-  const tl = $('timeline');
-  const cp = $('composer');
-  const r = cp.getBoundingClientRect();
-  return {
-    theme: document.documentElement.dataset.theme,
-    node: $('node-pill')?.querySelector('.pill__text')?.textContent,
-    phase: net.phase,
-    canSend: net.canSend,
-    myId,
-    nick: store.nick(),
-    room: sidebar.currentRoom,
-    /** 房间确实 join 完成（不是只有 UI 切过去了）——测试必须等它 */
-    joined: joinedRoom,
-    composerEnabled: composer.enabled,
-    peers: sidebar.peers.map((x) => x.nickname).join(' / '),
-    rooms: store.rooms().map((x) => x.name),
-    unread: sidebar.totalUnread(),
-    messages: [...document.querySelectorAll('.msg:not(.msg--me):not(.msg--failed) .bubble')].map((e) => e.textContent),
-    mine: [...document.querySelectorAll('.msg--me:not(.msg--failed) .bubble')].map((e) => e.textContent),
-    failed: [...document.querySelectorAll('.msg--failed .bubble')].map((e) => e.textContent),
-    imgs: document.querySelectorAll('.bubble img').length,
-    dividers: [...document.querySelectorAll('.tl-day')].map((e) => e.textContent),
-    notes: [...document.querySelectorAll('.tl-note')].map((e) => e.textContent).slice(-5),
-    emptyState: !!document.querySelector('.tl-empty'),
-    // 布局自检：这些值直接反映"滚不动 / 输入框出屏"
-    layout: {
-      winH: innerHeight,
-      timelineH: tl.clientHeight,
-      timelineScrollable: tl.scrollHeight > tl.clientHeight,
-      composerInViewport: r.bottom <= innerHeight + 1 && r.top >= 0,
-      bodyOverflow: getComputedStyle(document.body).overflow,
-    },
-  };
-};
-window.__openRoom = (r) => openRoom(r);
-/** 测试/自动化：直接操作网络层（模拟掉线、强制重连等） */
-window.__net = net;
-window.__openNewRoom = () => sidebar.newRoom();
-window.__openSettings = () => sidebar.show('settings');
-window.__openTheme = () => theme.toggle();
-// 主题的调试/测试接口：`__theme('auto'|'dark'|'light')` 设偏好，
-// 不带参数则返回当前状态。测试必须能**确定性地设置偏好**，
-// 否则跑出来的主题取决于跑测试那台机器的系统设置。
-window.__theme = (pref) => {
-  if (pref) theme.apply(pref);
-  return { pref: theme.pref, current: theme.current,
-           dataset: document.documentElement.dataset.theme };
-};
-window.__openEmoji = () => $('tb-emoji').click();
-window.__sendText = (t) => {
-  $('input').value = t;
-  composer._autoGrow();
-  composer._syncSendBtn();
-  return composer.send();
-};
-/** 测试/自动化：把文件塞进待发送区（等价于粘贴或拖拽） */
-window.__addFiles = (files) => composer.addFiles(files);
-/** 测试/自动化：点发送（会先发文字再逐个发起附件） */
-window.__send = () => composer.send();
-
-// ---- 文件传输测试钩子（scripts/transfer-test.mjs 用）----
-/** 让发送方只发前 n 块就主动断连（0 = 恢复正常） */
-window.__setStopAfterChunks = (n) => net.client.post({ type: 'stopAfterChunks', n });
-/** 直接发起一次文件发送（绕过 <input type=file>） */
-window.__sendFile = (file, room) => fileTransfer.pickAndSend(file, room);
-/** 测试/自动化：点历史文件卡片上的「接收」 */
-window.__openArchived = (fileId) => fileTransfer.openArchived(fileId);
-/** isSecureContext 在 http://127.0.0.1 下为 true，可用；这里给测试一个明确开关 */
-window.__canTransferFiles = () => canTransferFiles();
-/** 构造一个内存文件（测试用） */
-window.__makeFile = (name, bytes) => new File([new Uint8Array(bytes)], name, { type: 'application/octet-stream' });
+/* ------------------------------------------------------------------ 自动化钩子
+ *
+ * ⚠️ 全部搬到了 `js/test-hooks.js`，并统一加了 `__iroh_` 前缀。
+ *    原因：原来这里是 19 个 `window.__xxx = ...` 无条件挂在模块顶层，
+ *    污染全局命名空间、控制台里一堆 `__xxx` 看不出是干什么的、
+ *    而且改个名字要同时翻 main.js 和 filetransfer.js 两个文件。
+ *    现在集中在test-hooks.js 一处，要彻底不带上这些出口就把下面这行删掉。
+ *
+ * ⚠️ 改名时记得同步改调用方：`scripts/e2e/*.{py,mjs}`、
+ *    `scripts/transfer-test.py`、`scripts/transfer-bench.mjs`（按字符串查找）。
+ */
+installTestHooks({
+  openRoom,
+  composerInternals: {
+    autoGrow: () => composer._autoGrow(),
+    syncSendBtn: () => composer._syncSendBtn(),
+  },
+  readers: {
+    myId: () => myId,
+    joinedRoom: () => joinedRoom,
+  },
+});
 
 main();

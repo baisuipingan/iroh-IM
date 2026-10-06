@@ -28,7 +28,7 @@ def boot(u, label, room):
 
 def snapshot(p, room):
     """拿常驻节点返回的原始快照（含每个成员的 files 清单）。"""
-    raw = p.ev(f"window.__net.client.call('history', {json.dumps(room)}, 5, '')")
+    raw = p.ev(f"window.__iroh_net.client.call('history', {json.dumps(room)}, 5, '')")
     return json.loads(raw)
 
 a_tab, A = boot(url(R1, "a"), "A@R1", R1)
@@ -36,15 +36,15 @@ print(f"A 进了 R1={R1}", flush=True)
 
 # A 发一个文件（证明会进 R1 历史）
 A.ev("(() => { const u=new Uint8Array(4096); window.__testFile=new File([u],'iso.bin',{type:'application/octet-stream'}); return 1; })()")
-A.ev("window.__setStopAfterChunks(0)")
-A.ev(f"window.__sendFile(window.__testFile, {json.dumps(R1)})")
+A.ev("window.__iroh_setStopAfterChunks(0)")
+A.ev(f"window.__iroh_sendFile(window.__testFile, {json.dumps(R1)})")
 time.sleep(5)
-t_all = json.loads(A.ev("JSON.stringify(window.__transfers())") or "[]")
+t_all = json.loads(A.ev("JSON.stringify(window.__iroh_transfers())") or "[]")
 fid = t_all[0]["file_id"] if t_all else ""
 tt.check("A 在 R1 发出了文件", bool(fid), f"file_id={fid}")
 
 # A 切到 R2
-A.ev(f"(() => {{ window.__openRoom({json.dumps(R2)}); return 1; }})()")
+A.ev(f"(() => {{ window.__iroh_openRoom({json.dumps(R2)}); return 1; }})()")
 tt.wait_until(A, f"!!(window.__state && window.__state().joined === {json.dumps(R2)})", 90, label="A@R2")
 print(f"A 已切到 R2={R2}", flush=True)
 
@@ -71,7 +71,7 @@ tt.check("R1 的历史里仍有该文件的证明（文件没丢，只是不再�
          bool(proofs), f"找到 {len(proofs)} 条证明")
 
 # 切回 R1 → 应当重新声称持有它
-A.ev(f"(() => {{ window.__openRoom({json.dumps(R1)}); return 1; }})()")
+A.ev(f"(() => {{ window.__iroh_openRoom({json.dumps(R1)}); return 1; }})()")
 tt.wait_until(A, f"!!(window.__state && window.__state().joined === {json.dumps(R1)})", 90, label="A@R1-again")
 time.sleep(14)
 snap2 = snapshot(A, R1)

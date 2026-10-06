@@ -65,7 +65,7 @@ try {
   }
 
   const rejected = await sender.evaluate(async () => {
-    try { await window.__net.send('长'.repeat(180000)); return false; }
+    try { await window.__iroh_net.send('长'.repeat(180000)); return false; }
     catch (error) { return /消息过长/.test(error.message); }
   });
   check('Rust拒绝超限完整报文', rejected);
@@ -77,8 +77,8 @@ try {
   await sender.locator('#input').fill('');
 
   await sender.evaluate(() => {
-    window.__originalSend = window.__net.send;
-    window.__net.send = async function(...args) { const result = await window.__originalSend.apply(this, args); await new Promise(resolve => { window.__releaseSend = resolve; }); return result; };
+    window.__originalSend = window.__iroh_net.send;
+    window.__iroh_net.send = async function(...args) { const result = await window.__originalSend.apply(this, args); await new Promise(resolve => { window.__releaseSend = resolve; }); return result; };
   });
   await send(sender, 'first-draft');
   await sender.locator('#input').fill('next-draft');
@@ -87,9 +87,9 @@ try {
   await sender.evaluate(() => window.__releaseSend());
   await sender.waitForFunction(() => document.getElementById('send').textContent === '发送');
   check('异步发送保留新草稿与新附件', await sender.locator('#input').inputValue() === 'next-draft' && await sender.locator('.pending__item').count() === 1);
-  await sender.evaluate(() => { window.__net.send = window.__originalSend; });
+  await sender.evaluate(() => { window.__iroh_net.send = window.__originalSend; });
   await sender.evaluate(() => {
-    window.__net.send = () => new Promise((resolve, reject) => { window.__failSend = () => reject(new Error('模拟失败')); });
+    window.__iroh_net.send = () => new Promise((resolve, reject) => { window.__failSend = () => reject(new Error('模拟失败')); });
   });
   await sender.locator('.pending__x').click();
   await send(sender, 'failed-original');
@@ -98,14 +98,14 @@ try {
   await sender.evaluate(() => window.__failSend());
   await sender.waitForFunction(() => document.getElementById('send').textContent === '发送');
   check('异步失败不覆盖新草稿', await sender.locator('#input').inputValue() === 'new-after-failure');
-  await sender.evaluate(() => { window.__net.send = window.__originalSend; });
+  await sender.evaluate(() => { window.__iroh_net.send = window.__originalSend; });
   await chooseFile(sender, { name: 'room-draft.txt', mimeType: 'text/plain', buffer: Buffer.from('room draft') });
   await sender.locator('#input').fill('room-A-draft');
-  await sender.evaluate(target => window.__openRoom(target), `${room}-other`);
+  await sender.evaluate(target => window.__iroh_openRoom(target), `${room}-other`);
   await joined(sender, `${room}-other`);
   check('切房不泄露草稿/附件', await sender.locator('#input').inputValue() === '' && await sender.locator('.pending__item').count() === 0);
   await sender.locator('#input').fill('room-B-draft');
-  await sender.evaluate(target => window.__openRoom(target), room);
+  await sender.evaluate(target => window.__iroh_openRoom(target), room);
   await joined(sender);
   check('回房恢复原草稿/附件', await sender.locator('#input').inputValue() === 'room-A-draft' && await sender.locator('.pending__item').count() === 1);
   await sender.locator('.pending__x').click();
@@ -153,8 +153,8 @@ try {
   check('保存位置异常恢复接收控件', /无法选择保存位置/.test(await receiver.locator('#composer-tip').innerText()));
   await receiver.evaluate(() => { window.showSaveFilePicker = async () => { throw new DOMException('cancelled', 'AbortError'); }; });
   await receiver.locator('.msg--img button[title="接收（会弹出保存位置）"]').click();
-  await receiver.waitForFunction(fileId => window.__transfers().find(transfer => transfer.file_id === fileId)?.state === 'cancelled', fileId);
-  await sender.waitForFunction(() => window.__transfers().some(transfer => transfer.direction === 'send' && transfer.peersCancelled === 1 && transfer.peersRejected === 1));
+  await receiver.waitForFunction(fileId => window.__iroh_transfers().find(transfer => transfer.file_id === fileId)?.state === 'cancelled', fileId);
+  await sender.waitForFunction(() => window.__iroh_transfers().some(transfer => transfer.direction === 'send' && transfer.peersCancelled === 1 && transfer.peersRejected === 1));
   check('取消保存与明确拒绝分开统计', true);
   check('取消保存清掉旧权限错误', await receiver.locator('.msg--img .filecard__err').count() === 0);
   await sender.locator('.msg--img button[title^="重新邀请"]').click();
@@ -162,7 +162,7 @@ try {
   check('重邀取消者恢复接收入口', true);
   await receiver.evaluate(() => { window.showSaveFilePicker = async () => (await navigator.storage.getDirectory()).getFileHandle('preview.png', { create: true }); });
   await receiver.locator('.msg--img button[title="接收（会弹出保存位置）"]').click();
-  await receiver.waitForFunction(fileId => window.__transfers().find(transfer => transfer.file_id === fileId)?.state === 'done', fileId, { timeout: 60000 });
+  await receiver.waitForFunction(fileId => window.__iroh_transfers().find(transfer => transfer.file_id === fileId)?.state === 'done', fileId, { timeout: 60000 });
   await receiver.locator('.imgcard__ph img').waitFor();
   await sender.locator('.imgcard__ph img').waitFor();
   check('真实文件传输后双方图片预览', true);
@@ -224,7 +224,7 @@ try {
       const fileId = `proof-order-${isHistory}`;
       fileTransfer._onFileProof(room, { id: fileId, ts: Date.now(), from: sender, file: { file_id: fileId, name: 'order.txt', size: 32 } }, isHistory);
       fileTransfer._onInvite(room, { file_id: fileId, name: 'order.txt', size: 32, sender, chunk_size: 16384, root_hash: 'b'.repeat(64) });
-      states.push(window.__transfers().find(transfer => transfer.file_id === fileId).state);
+      states.push(window.__iroh_transfers().find(transfer => transfer.file_id === fileId).state);
     }
     return states;
   });

@@ -33,8 +33,8 @@ print(f"已进房，myId={my_id[:16]}…", flush=True)
 
 # 注入三条记录
 p.ev(f"""(() => {{
-  const anchor = (window.__net && window.__net.config && window.__net.config.anchor)
-    ? window.__net.config.anchor.id : '';
+  const anchor = (window.__iroh_net && window.__iroh_net.config && window.__iroh_net.config.anchor)
+    ? window.__iroh_net.config.anchor.id : '';
   const mk = (fid, ts, sender) => ({{
     room: {json.dumps(ROOM)}, ts, owner: {json.dumps(my_id)}, senderId: sender,
     meta: {{
@@ -65,7 +65,7 @@ print("已重新加载并进房", flush=True)
 
 
 def snapshot():
-    return json.loads(p.ev("JSON.stringify(window.__transfers())") or "[]")
+    return json.loads(p.ev("JSON.stringify(window.__iroh_transfers())") or "[]")
 
 
 # 立刻看一次（presence 可能还没到）

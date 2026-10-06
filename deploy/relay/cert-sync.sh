@@ -34,7 +34,7 @@ sum() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1 || echo none; }
 BEFORE="$(sum "$DST/default.crt")"
 
 install -m 644 "$SRC/$SRC_CRT" "$DST/default.crt"
-install -m 644 "$SRC/$SRC_KEY" "$DST/default.key"
+install -m 600 "$SRC/$SRC_KEY" "$DST/default.key"
 AFTER="$(sum "$DST/default.crt")"
 
 if [ "$BEFORE" = "$AFTER" ]; then

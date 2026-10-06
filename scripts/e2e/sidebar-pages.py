@@ -55,8 +55,18 @@ overlap = P.ev("""(() => {
     const st = row.querySelector('.relay__state');
     if (!id || !st) continue;
     const a = id.getBoundingClientRect(), b = st.getBoundingClientRect();
-    // id 的右边界越过 status 的左边界 = 叠字
-    if (a.right > b.left + 1) bad.push(id.textContent + ' 与 ' + st.textContent + ' 重叠 ' + Math.round(a.right - b.left) + 'px');
+    // ⚠️ 「叠字」= 两个矩形**两个轴都相交**，不能只比横轴。
+    //    原来是 `a.right > b.left + 1` 就算重叠 —— 那是在"id 和状态同一行横排"
+    //    的前提下才成立的近似。设计稿的中继行是**两行**（名称在上、状态在下），
+    //    横轴区间天然重叠、纵轴完全分开，旧判据会把正常布局报成叠字。
+    //    改成真交集：横竖都压在一起才算。
+    const crossX = a.right > b.left + 1 && b.right > a.left + 1;
+    const crossY = a.bottom > b.top + 1 && b.bottom > a.top + 1;
+    if (crossX && crossY) {
+      bad.push(id.textContent + ' 与 ' + st.textContent
+        + ' 重叠 x=' + Math.round(Math.min(a.right, b.right) - Math.max(a.left, b.left))
+        + ' y=' + Math.round(Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)));
+    }
   }
   return JSON.stringify(bad);
 })()""")
