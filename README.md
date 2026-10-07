@@ -120,6 +120,7 @@ frontend/
 |---|---|
 | [`docs/README.md`](docs/README.md) | **文档总索引** —— 按主题分组，并标明哪份是权威 |
 | [`docs/deploy.md`](docs/deploy.md) | **部署与变更**（先看这个） |
+| [`docs/agent-cli.md`](docs/agent-cli.md) | **无头命令行成员** `iroh-agent`：让没有浏览器/Node 的机器（CI、agent）也能进聊天室发文字、发文件 |
 | [`deploy/roomd/README.md`](deploy/roomd/README.md) | 常驻节点：部署细节、环境变量、容量上限、历史访问边界 |
 | [`deploy/relay/README.md`](deploy/relay/README.md) · [`docs/relay-deploy-minimal.md`](docs/relay-deploy-minimal.md) | 中继部署 |
 | [`deploy/install/README.md`](deploy/install/README.md) | 中继一键安装脚本 |

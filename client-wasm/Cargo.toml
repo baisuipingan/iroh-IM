@@ -28,6 +28,12 @@ name = "roomd"
 path = "src/bin/roomd.rs"
 required-features = ["cli"]
 
+# 无头命令行客户端：让没有浏览器/Node 的机器（CI、agent）也能作为成员进房收发。
+[[bin]]
+name = "agent"
+path = "src/bin/agent.rs"
+required-features = ["cli"]
+
 [features]
 # 默认构建 wasm（wasm-pack 用默认 feature）
 default = ["wasm"]
