@@ -60,7 +60,7 @@ bash scripts/e2e/run.sh         # 浏览器端到端回归（前置见 scripts/e
 
 ### 代码风格（lint / format）
 
-项目将 Biome 和 Playwright 固定在 `package.json` 的开发依赖中，使用 `npm ci` 保证工具版本一致：
+项目把 **Biome、Playwright、Wrangler** 全部固定（精确版本）在 `package.json` 的开发依赖中，用 `npm ci` 保证工具版本一致：
 
 ```bash
 npm ci
@@ -75,6 +75,10 @@ bash scripts/verify.sh all  # 需要本地服务和带 CDP 的 Chrome
 `all` 包含两者。共享 CDP 9222 的脚本必须串行运行，前置步骤见 `scripts/e2e/README.md`。
 
 - **`biome.json`** —— lint 配置。当前 JS 代码：0 error / 0 warning；HTML 页面同样纳入检查。
+- **`wrangler`**（4.147.0，精确锁定）—— 发布前端到 Cloudflare。
+  刻意**不用** `npx --yes wrangler@4`：npx 缓存会被 npm 自动清理，缓存里那份消失后
+  `scripts/deploy-web.sh` 就找不到可执行文件、部署直接失败（实测踩过）。
+  现在它的第一优先路径就是 `node_modules/.bin/wrangler`，npx 缓存只作兜底。
 - **`.editorconfig`** —— 编辑器通用约定。Python 侧（`scripts/` 下 30+ 脚本）
   没有任何工具管，这份文件是那边唯一的约束。
 - ⚠️ **`biome format` 不要跑在存量代码上**：项目里行尾注释是**刻意用空格对齐成列**的

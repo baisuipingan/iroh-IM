@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "playwright": "1.63.0"
+    "playwright": "1.63.0",
+    "wrangler": "4.147.0"
   }
 }

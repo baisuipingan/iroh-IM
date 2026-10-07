@@ -22,7 +22,7 @@
 ## 跑
 
 ```bash
-npm ci
+npm ci          # 含 wrangler（发布前端用，见 README 的工具链说明）
 npx playwright install webkit
 # 前置：本地静态服务 + 带 CDP 的 Chrome（见 run.sh 顶部注释）
 bash scripts/e2e/run.sh                 # 全部

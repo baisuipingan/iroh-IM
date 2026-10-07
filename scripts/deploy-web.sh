@@ -118,7 +118,11 @@ export NO_PROXY="127.0.0.1,localhost"
 # ⚠️ 不用 `npx --yes wrangler@4 deploy`（复检 P2-22）：
 #    1) 每次部署都去 npm 拉"当前最新的 4.x"—— 工具链没固定，行为可能随版本变；
 #    2) 本机 npm registry 时常不通，`npx --yes` 会直接 ECONNRESET 失败（实测）。
-#    改为**优先用已经装好的那个 wrangler**（可用 WRANGLER 环境变量覆盖）。
+#    3) npx 缓存会被 npm 自动清理 —— 缓存里那份消失后脚本就找不到 wrangler，
+#       部署直接失败（实测踩过一次）。
+#    现在 wrangler 已**精确锁定**在 devDependencies（4.147.0），
+#    `npm ci` 之后第一优先路径 `node_modules/.bin/wrangler` 就能命中；
+#    后面的 npx 缓存只作为兜底。
 resolve_wrangler() {
   if [[ -n "${WRANGLER:-}" && -x "${WRANGLER}" ]]; then echo "$WRANGLER"; return; fi
   if [[ -x "$ROOT/node_modules/.bin/wrangler" ]]; then echo "$ROOT/node_modules/.bin/wrangler"; return; fi
@@ -132,8 +136,9 @@ resolve_wrangler() {
 }
 WRANGLER_BIN="$(resolve_wrangler)"
 if [[ -z "$WRANGLER_BIN" ]]; then
-  echo "!! 找不到可用的 wrangler（本机 npm 也不通）。先装一个再部署：" >&2
-  echo "   npm i -g wrangler@4     # 或 export WRANGLER=/path/to/wrangler" >&2
+  echo "!! 找不到可用的 wrangler。装项目依赖即可（wrangler 已固定在 devDependencies）：" >&2
+  echo "   npm ci                  # 或 npm install" >&2
+  echo "   # 仍找不到时：export WRANGLER=/path/to/wrangler" >&2
   exit 1
 fi
 echo "    使用 wrangler: $WRANGLER_BIN"
