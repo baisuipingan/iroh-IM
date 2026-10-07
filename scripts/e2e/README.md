@@ -22,6 +22,8 @@
 ## 跑
 
 ```bash
+npm ci
+npx playwright install webkit
 # 前置：本地静态服务 + 带 CDP 的 Chrome（见 run.sh 顶部注释）
 bash scripts/e2e/run.sh                 # 全部
 bash scripts/e2e/run.sh room-isolation  # 单个
@@ -36,6 +38,13 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/e2e/composer-resize
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs python3 scripts/e2e/relay-enabled.py
 PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs python3 scripts/transfer-bench.py 8099 0.5,2,8 opfs
 ```
+
+Node.js 22+ 提供冒烟脚本使用的内置 WebSocket。安装开发依赖后，无需设置
+`PLAYWRIGHT_MODULE` 即可运行 `.mjs` 用例；该变量仍可覆盖现有安装路径。
+`bash scripts/verify.sh all` 串行执行静态/单元/Rust/安全/浏览器验证。
+`npm run test:polish` 覆盖 Chrome/WebKit 的通知权限撤回、Worker 致命故障与按人文件状态、
+模态异步失败保留输入、草稿宽度自适应、隐私文案及诊断页真实中继鉴权。
+故障回归使用隔离上下文注入异常，正常收发和诊断连接仍使用真实中继。
 
 `fix-review.mjs` 启动独立 Chrome/WebKit 进程，覆盖超限报文后的健康通信、同身份连续刷新、
 异步草稿/附件保护、按房草稿、房名校验、本地隐藏、取消/拒绝/重邀、图片预览、

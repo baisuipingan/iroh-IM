@@ -20,21 +20,15 @@ import { net } from '../../net.js';
 import { store } from '../../store.js';
 import * as U from '../../util.js';
 import { avatar, ico, regionLabel } from '../primitives.js';
-
-/** URL 归一化：运行时那份带结尾斜杠，配置与探测结果不带 */
-const normUrl = (u) => String(u || '').trim().replace(/\/+$/, '');
-const hostOf = (u) => normUrl(u).replace(/^https?:\/\//, '');
+import { collectRelayModel, probeLatency } from '../../relay-model.js';
 
 /**
  * ⚠️ 判"探通没探通"用 `p.ok`，不能用 `p.rtt`：中继**可达但读不到计时**时
  *    （缺 Timing-Allow-Origin）ok=true、rtt=null，只看 rtt 会误标成不可达。
  */
 export function rttOf(pr) {
-  if (!pr) return { text: '—', cls: '', plain: '—' };
-  if (!pr.ok) return { text: '不可达', cls: 'is-bad', plain: '不可达' };
-  return pr.rtt
-    ? { text: `${Math.round(pr.rtt)}ms`, cls: 'is-ok', plain: `${Math.round(pr.rtt)}ms` }
-    : { text: '可达', cls: 'is-ok', plain: '可达' };
+  const latency = probeLatency(pr);
+  return { text: latency.text, plain: latency.text, cls: latency.reachable === null ? '' : latency.reachable ? 'is-ok' : 'is-bad' };
 }
 
 /**
@@ -70,33 +64,7 @@ function relayTip(it) {
  *    （实测踩到：标题写着「1/1 已连接」，下面三行却全是「未知」）。
  */
 export function collectRelays() {
-  const relays = net.relayStatus();
-  const cfg = net.config?.relays || [];
-  const statusByUrl = new Map(relays.map((r) => [normUrl(r.url), r]));
-  const probeByUrl = new Map((net.probes || []).map((pr) => [normUrl(pr.url), pr]));
-  const items = [];
-  const seen = new Set();
-  for (const c of cfg) {
-    const key = normUrl(c.url);
-    items.push({
-      id: c.id || hostOf(c.url),
-      region: c.region || '',
-      url: c.url,
-      connected: statusByUrl.get(key)?.connected,
-      probe: probeByUrl.get(key),
-      // 配置里 `enabled: false` 的中继**不会**被交给内核，
-      // 所以它既不会连接也谈不上"未使用"——如实标成已禁用。
-      enabled: c.enabled !== false,
-    });
-    seen.add(key);
-  }
-  // 运行时存在、但配置里没有的中继也要显示 —— 不能因为"不在名单里"就吞掉
-  for (const r of relays) {
-    const key = normUrl(r.url);
-    if (seen.has(key)) continue;
-    items.push({ id: hostOf(r.url), region: '', url: r.url, connected: r.connected, probe: probeByUrl.get(key), enabled: true });
-  }
-  return { items, okCount: relays.filter((r) => r.connected).length, cfgCount: cfg.length };
+  return collectRelayModel(net.config, net.relayStatus(), net.probes);
 }
 
 /** 成员头像叠层 —— 真实 presence（自己 + 其他成员），超出 3 个就 +N */

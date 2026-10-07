@@ -257,11 +257,11 @@ try {
     const { loadRelayConfig } = await import('./js/probe.js');
     const { store } = await import('./js/store.js');
     const cacheKey = 'iroh.config-timeout-test';
-    store.setValue(cacheKey, JSON.stringify({ version: 987, relays: [] }));
+    store.setValue(cacheKey, JSON.stringify({ ...window.__iroh_net.config, version: 987 }));
     const cached = await loadRelayConfig('./stalled-config.json', cacheKey);
     store.setValue(cacheKey, null);
     try { await loadRelayConfig('./stalled-config.json', cacheKey); return [cached.version, false]; }
-    catch (error) { return [cached.version, /no cache/.test(error.message)]; }
+    catch (error) { return [cached.version, /中继配置加载失败.*请求超时/.test(error.message)]; }
   });
   check('配置请求超时回落已有缓存', configTimeout[0] === 987);
   check('配置请求超时无缓存明确失败', configTimeout[1]);

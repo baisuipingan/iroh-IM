@@ -51,10 +51,12 @@ class WorkerClient {
     this.worker = new Worker(url, { type: 'module' });
     this.seq = 0;
     this.pending = new Map();
+    this.error = null;
     /** 事件订阅者（扇出，避免多个消费者互相抢） */
     this.subs = new Set();
 
     this.worker.onmessage = (e) => {
+      if (this.error) return;
       const m = e.data;
       if (m.type === 'rpc:reply') {
         const p = this.pending.get(m.id);
@@ -74,9 +76,26 @@ class WorkerClient {
       }
     };
     this.worker.onerror = (e) => {
+      this.fail(new Error(`后台线程出错：${e.message || '请刷新页面后重试'}`));
       console.error('[net] Worker 错误', e.message, e.filename, e.lineno);
-      bus.emit(EV.TIP, `后台线程出错：${e.message}`);
+      bus.emit(EV.TIP, '后台线程出错，请刷新页面后重试。未发出的草稿会保留在当前页面');
     };
+    this.worker.onmessageerror = () => {
+      this.fail(new Error('后台线程消息无法读取，请刷新页面后重试'));
+      bus.emit(EV.TIP, '后台线程消息无法读取，请刷新页面后重试');
+    };
+  }
+
+  fail(error) {
+    if (this.error) return;
+    this.error = error;
+    this.worker.terminate();
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    for (const subscriber of this.subs) {
+      try { subscriber({ type: 'worker:error', payload: { error: error.message } }); }
+      catch (failure) { console.warn('[net] Worker 故障处理异常', failure); }
+    }
   }
 
   /** 订阅 Worker 的主动推送 */
@@ -86,14 +105,21 @@ class WorkerClient {
   }
 
   call(method, ...args) {
+    if (this.error) return Promise.reject(this.error);
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.worker.postMessage({ type: 'rpc', id, method, args });
+      try {
+        this.worker.postMessage({ type: 'rpc', id, method, args });
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
   post(msg) {
+    if (this.error) throw this.error;
     this.worker.postMessage(msg);
   }
 }
@@ -152,7 +178,7 @@ export const net = {
   },
 
   async start() {
-    this.config = await loadRelayConfig('../relay-config.json');
+    this.config = await loadRelayConfig(new URL('../relay-config.json', import.meta.url).href);
     if (!this.config) throw new Error('中继名单加载失败');
 
     const url = new URL('./iroh-worker.js', import.meta.url).href;
@@ -162,6 +188,14 @@ export const net = {
     this.client.onMessage((m) => {
       if (m.type === 'event') {
         this._dispatch(m.payload);
+      } else if (m.type === 'worker:error') {
+        this.ready = false;
+        this.phase = 'offline';
+        this._relayJson = '[]';
+        clearTimeout(this._retryTimer);
+        this._retryTimer = null;
+        bus.emit(EV.NODE_STATE, { ok: false, text: '后台线程出错，请刷新页面重试' });
+        bus.emit(EV.RELAYS, []);
       } else if (m.type === 'transfer:error') {
         bus.emit(EV.TIP, `传输出错：${m.payload.error}`);
       }
@@ -209,26 +243,22 @@ export const net = {
 
     // 等启动结果（成功或失败都从这条消息来）
     let stopBoot;
-    let onBootError;
     const bootResult = new Promise((resolve, reject) => {
       stopBoot = this.client.onMessage((m) => {
         if (m.type === 'booted') {
           resolve(m.payload.endpointId);
-        } else if (m.type === 'boot:error') {
+        } else if (m.type === 'boot:error' || m.type === 'worker:error') {
           reject(new Error(m.payload.error));
         }
       });
-      onBootError = (event) => reject(new Error(`后台线程启动失败：${event.message || 'Worker 加载失败'}`));
-      this.client.worker.addEventListener('error', onBootError, { once: true });
     });
     try {
       this.endpointId = await withTimeout(bootResult, BOOT_TIMEOUT, '启动 Worker/wasm');
     } catch (error) {
-      this.client.worker.terminate();
+      this.client.fail(error);
       throw error;
     } finally {
       stopBoot();
-      this.client.worker.removeEventListener('error', onBootError);
     }
 
     // 监听浏览器网络恢复：网络回来立刻重试一次，不用等退避计时器
@@ -244,10 +274,15 @@ export const net = {
 
   /** 尝试连上中继；成功则进入 online，失败则安排重连 */
   async _goOnline() {
+    if (this.client?.error) {
+      bus.emit(EV.TIP, '后台线程已停止，请刷新页面重新连接');
+      return;
+    }
     try {
       this.phase = 'starting';
       bus.emit(EV.NODE_STATE, { ok: false, text: '连接中继…', waiting: true });
       await withTimeout(this.client.call('online'), ONLINE_TIMEOUT, '连接中继');
+      if (this.client.error) return;
       this.ready = true;
       this.phase = 'online';
       this._retryIdx = 0;
@@ -291,6 +326,7 @@ export const net = {
         }
       }
     } catch (e) {
+      if (this.client.error) return;
       this.ready = false;
       this.phase = 'reconnecting';
       bus.emit(EV.NODE_STATE, { ok: false, text: '连接中继失败，重试中' });
@@ -300,6 +336,7 @@ export const net = {
   },
 
   _scheduleRetry() {
+    if (this.client?.error) return;
     if (this._retryTimer) return;
     const delay = BACKOFF[Math.min(this._retryIdx, BACKOFF.length - 1)];
     this._retryIdx++;

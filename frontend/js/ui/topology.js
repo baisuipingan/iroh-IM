@@ -24,20 +24,18 @@
 
 import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
-import { sidebar } from './sidebar.js';
 import { ico, regionLabel } from './primitives.js';
 import * as U from '../util.js';
+import { collectRelayModel, probeLatency } from '../relay-model.js';
 
 const $ = (id) => document.getElementById(id);
-
-/** url 归一化：运行时那份带结尾斜杠，配置与探测结果不带 */
-const normUrl = (u) => String(u || '').trim().replace(/\/+$/, '');
 
 export const topology = {
   /** 'chat' | 'topology' */
   view: 'chat',
 
-  init() {
+  init(host) {
+    this.host = host;
     const tabs = $('view-tabs');
     if (tabs) {
       tabs.querySelectorAll('.view-tab').forEach((tab) => {
@@ -70,43 +68,10 @@ export const topology = {
 
   /* ---------------------------------------------------------------- 数据 */
   _model() {
-    const runtime = net.relayStatus?.() || [];
-    const cfg = net.config?.relays || [];
-    const statusByUrl = new Map(runtime.map((r) => [normUrl(r.url), r]));
-    const probeByUrl = new Map((net.probes || []).map((p) => [normUrl(p.url), p]));
-
-    const items = cfg.map((c) => ({
-      id: c.id || normUrl(c.url).replace(/^https?:\/\//, ''),
-      region: c.region || '',
-      url: c.url,
-      connected: statusByUrl.get(normUrl(c.url))?.connected ?? null,
-      probe: probeByUrl.get(normUrl(c.url)) || null,
-      enabled: c.enabled !== false,
-    }));
-    // 运行时存在但配置里没有的，也要显示（不能因为"不在名单里"就吞掉）
-    for (const r of runtime) {
-      if (items.some((it) => normUrl(it.url) === normUrl(r.url))) continue;
-      items.push({
-        id: normUrl(r.url).replace(/^https?:\/\//, ''),
-        region: '',
-        url: r.url,
-        connected: r.connected,
-        probe: probeByUrl.get(normUrl(r.url)) || null,
-        enabled: true,
-      });
-    }
-
-    const home = items.find((it) => it.connected === true) || null;
-    const standbys = items.filter((it) => it !== home);
     return {
-      items,
-      home,
-      standbys,
-      okCount: runtime.filter((r) => r.connected).length,
-      // ⚠️ 判"探通没探通"用 `ok`，不能只看 `rtt`：可达但读不到计时（缺
-      //    Timing-Allow-Origin）时 ok=true、rtt=null，只看 rtt 会误标成不可达。
-      rtt: (pr) => (!pr ? '—' : !pr.ok ? '不可达' : pr.rtt ? `${Math.round(pr.rtt)}ms` : '可达'),
-      rttNum: (pr) => (pr?.ok && pr.rtt ? Math.round(pr.rtt) : null),
+      ...collectRelayModel(net.config, net.relayStatus(), net.probes),
+      rtt: (probe) => probeLatency(probe).text,
+      rttNum: (probe) => probeLatency(probe).milliseconds,
     };
   },
 
@@ -116,11 +81,11 @@ export const topology = {
     if (!panel || this.view !== 'topology') return;   // 没显示就别白算
 
     const m = this._model();
-    const state = sidebar.currentNodeState || { ok: false, text: '启动中', waiting: true };
+    const state = this.host.currentNodeState || { ok: false, text: '启动中', waiting: true };
     const stCls = state.waiting ? 'is-wait' : state.ok ? 'is-ok' : 'is-bad';
-    const room = sidebar.currentRoom;
+    const room = this.host.currentRoom;
     const myId = net.endpoint_id() || '';
-    const peers = sidebar.neighbors.size;
+    const peers = this.host.neighbors.size;
     const homeRtt = m.rtt(m.home?.probe);
     const homeRttNum = m.rttNum(m.home?.probe);
     const cfgTotal = m.items.length || 1;

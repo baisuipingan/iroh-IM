@@ -1,0 +1,22 @@
+{
+  "name": "iroh-chat",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "python3 scripts/dev-serve.py 8099",
+    "lint": "biome lint frontend",
+    "test": "node --test scripts/test-frontend.mjs && python3 scripts/test-backup-roomd.py",
+    "test:e2e": "bash scripts/e2e/run.sh",
+    "test:polish": "node scripts/e2e/production-polish.mjs && node scripts/e2e/composer-resize.mjs && node scripts/e2e/redesign-sync.mjs && node scripts/e2e/diagnostic-probe.mjs",
+    "check:modules": "python3 scripts/check-site-modules.py frontend",
+    "check:release": "bash scripts/deploy-web.sh --dry",
+    "verify": "bash scripts/verify.sh local"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "playwright": "1.63.0"
+  }
+}

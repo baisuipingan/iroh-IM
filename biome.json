@@ -1,133 +1,133 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
-	"vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": true },
-	"files": {
-		"ignoreUnknown": true,
-		"includes": [
-			"**",
-			"!**/node_modules/**",
-			"!**/dist/**",
-			"!**/output/**",
-			"!**/frontend/pkg/**",
-			"!**/client-wasm/target/**",
-			"!**/__pycache__/**",
-			"!**/.workbuddy/**"
-		]
-	},
-	"formatter": {
-		"enabled": true,
-		"indentStyle": "space",
-		"indentWidth": 2,
-		"lineWidth": 100
-	},
-	"javascript": {
-		"formatter": {
-			"quoteStyle": "single",
-			"semicolons": "always",
-			"trailingCommas": "all",
-			"arrowParentheses": "always"
-		},
-		"globals": [
-			"window",
-			"document",
-			"navigator",
-			"location",
-			"localStorage",
-			"console",
-			"Notification",
-			"crypto",
-			"CustomEvent",
-			"Event",
-			"matchMedia",
-			"innerWidth",
-			"innerHeight",
-			"getComputedStyle",
-			"fetch",
-			"Blob",
-			"URL",
-			"File",
-			"FileReader",
-			"Intl",
-			"CSS",
-			"AudioContext",
-			"Image",
-			"requestAnimationFrame",
-			"cancelAnimationFrame",
-			"setTimeout",
-			"clearTimeout",
-			"setInterval",
-			"clearInterval",
-			"performance",
-			"ResizeObserver",
-			"IntersectionObserver",
-			"structuredClone",
-			"showSaveFilePicker",
-			"webkitAudioContext",
-			"self",
-			"postMessage",
-			"TextEncoder",
-			"TextDecoder",
-			"Uint8Array",
-			"IndexedDB",
-			"IDBKeyRange",
-			"caches",
-			"DOMPurify",
-			"alert"
-		]
-	},
-	"css": {
-		"formatter": { "enabled": true },
-		"linter": { "enabled": false }
-	},
-	"linter": {
-		"enabled": true,
-		"rules": {
-			"preset": "recommended",
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!**/node_modules/**",
+      "!**/dist/**",
+      "!**/output/**",
+      "!**/frontend/pkg/**",
+      "!**/client-wasm/target/**",
+      "!**/__pycache__/**",
+      "!**/.workbuddy/**"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always"
+    },
+    "globals": [
+      "window",
+      "document",
+      "navigator",
+      "location",
+      "localStorage",
+      "console",
+      "Notification",
+      "crypto",
+      "CustomEvent",
+      "Event",
+      "matchMedia",
+      "innerWidth",
+      "innerHeight",
+      "getComputedStyle",
+      "fetch",
+      "Blob",
+      "URL",
+      "File",
+      "FileReader",
+      "Intl",
+      "CSS",
+      "AudioContext",
+      "Image",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "performance",
+      "ResizeObserver",
+      "IntersectionObserver",
+      "structuredClone",
+      "showSaveFilePicker",
+      "webkitAudioContext",
+      "self",
+      "postMessage",
+      "TextEncoder",
+      "TextDecoder",
+      "Uint8Array",
+      "IndexedDB",
+      "IDBKeyRange",
+      "caches",
+      "DOMPurify",
+      "alert"
+    ]
+  },
+  "css": {
+    "formatter": { "enabled": true },
+    "linter": { "enabled": false }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
 
-"suspicious": {
-			"noAssignInExpressions": "off",
-			"noGlobalAssign": "off",
-			"noRedeclare": "off",
-			"noShadowRestrictedNames": "off",
-			"noExplicitAny": "off",
-			"noConsole": "off",
-			"noTemplateCurlyInString": "off",
-			"noControlCharactersInRegex": "off"
-		},
+      "suspicious": {
+        "noAssignInExpressions": "off",
+        "noGlobalAssign": "off",
+        "noRedeclare": "off",
+        "noShadowRestrictedNames": "off",
+        "noExplicitAny": "off",
+        "noConsole": "off",
+        "noTemplateCurlyInString": "off",
+        "noControlCharactersInRegex": "off"
+      },
 
-"complexity": {
-			"noForEach": "off",
-			"noBannedTypes": "off",
-			"useOptionalChain": "off",
-			"noExcessiveCognitiveComplexity": "off"
-		},
+      "complexity": {
+        "noForEach": "off",
+        "noBannedTypes": "off",
+        "useOptionalChain": "off",
+        "noExcessiveCognitiveComplexity": "off"
+      },
 
-			"correctness": {
-				"noUnusedVariables": "warn",
-				"noUnusedImports": "warn",
-				"noUndeclaredVariables": "off",
-				"noUnusedFunctionParameters": "off",
-				"useUniqueElementIds": "off"
-			},
+      "correctness": {
+        "noUnusedVariables": "warn",
+        "noUnusedImports": "warn",
+        "noUndeclaredVariables": "error",
+        "noUnusedFunctionParameters": "off",
+        "useUniqueElementIds": "off"
+      },
 
-			"style": {
-				"useConst": "warn",
-				"noParameterAssign": "off",
-				"useTemplate": "off",
-				"noNonNullAssertion": "off",
-				"useNodejsImportProtocol": "error"
-			},
+      "style": {
+        "useConst": "warn",
+        "noParameterAssign": "off",
+        "useTemplate": "off",
+        "noNonNullAssertion": "off",
+        "useNodejsImportProtocol": "error"
+      },
 
-			"performance": {
-				"noDelete": "off",
-				"noAccumulatingSpread": "off"
-			},
+      "performance": {
+        "noDelete": "off",
+        "noAccumulatingSpread": "off"
+      },
 
-			"a11y": {
-				"useKeyWithClickEvents": "off",
-				"noSvgWithoutTitle": "off",
-				"useSemanticElements": "off"
-			}
-		}
-	}
+      "a11y": {
+        "useKeyWithClickEvents": "off",
+        "noSvgWithoutTitle": "off",
+        "useSemanticElements": "off"
+      }
+    }
+  }
 }

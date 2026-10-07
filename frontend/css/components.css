@@ -1143,6 +1143,7 @@ html[data-density='compact'] .composer__input { height: 24px; line-height: 24px;
 }
 .dialog__field:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-brand) 40%, transparent); }
 .dialog__hint { margin-top: 8px; font-size: var(--fs-xs); line-height: 1.7; color: var(--fg-dim); }
+.dialog__error { margin-top: 8px; font-size: var(--fs-xs); color: var(--c-bad); overflow-wrap: anywhere; }
 .dialog__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .dialog__actions button { padding: 7px 16px; border-radius: var(--radius-lg); font-size: var(--fs-md); }
 .btn-ghost {

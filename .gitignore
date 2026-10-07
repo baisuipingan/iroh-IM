@@ -15,6 +15,7 @@ deploy/relay/.env
 
 # ---- 构建产物 ----
 client-wasm/target/
+node_modules/
 frontend/pkg/
 dist/
 # roomd 二进制由 `build-wasm.sh native` 生成，用完即弃（部署时 scp 到服务器）
@@ -47,3 +48,9 @@ output/
 # ---- 说明 ----
 # docs/*.png 是审查用的截图，**有意保留**（它们是文档的一部分）。
 # 若要压缩仓库体积，可以单独移出 docs/ 再用 git rm。
+
+# ---- 本地 AI 协作记忆（含服务器地址/密钥路径等运维信息，不进公开仓库）----
+.workbuddy/
+
+# ---- 内部分析报告（含服务器地址、安全发现），不进公开仓库 ----
+docs/internal-review-*.md

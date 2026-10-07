@@ -43,13 +43,27 @@ export function permission() {
 
 export const notify = {
   init() {
+    this.syncPermission();
+    window.addEventListener('focus', () => this.syncPermission());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this.syncPermission();
+    });
     bus.on(EV.MSG, ({ room, message, mine, isHistory }) => {
       if (mine || isHistory) return;               // 自己发的不提醒，历史回填更不提醒
       if (!document.hidden) return;                // 页面在前台 → 有气泡 + 提示音，够了
       if (store.prefs().notify !== true) return;
-      if (permission() !== 'granted') return;      // 权限被撤了就静默跳过（别弹错）
+      if (!this.syncPermission()) return;
       this.fire(room, message);
     });
+  },
+
+  syncPermission() {
+    const allowed = permission() === 'granted';
+    if (!allowed && store.prefs().notify === true) {
+      store.setPref('notify', false);
+      document.dispatchEvent(new CustomEvent('prefchange', { detail: { key: 'notify' } }));
+    }
+    return allowed;
   },
 
   /**
@@ -63,6 +77,7 @@ export const notify = {
     }
     let perm = Notification.permission;
     if (perm !== 'granted') {
+      this.syncPermission();
       try {
         // ⚠️ 现代浏览器返回 Promise；老 Safari 只有回调式签名（返回 undefined）。
         perm = await Notification.requestPermission();

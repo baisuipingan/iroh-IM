@@ -170,6 +170,31 @@ function bindWorkerPushes() {
       return;
     }
     switch (m.type) {
+      case 'worker:error': {
+        pendingOutgoing.clear();
+        for (const [file_id, transfer] of transfers) {
+          if (transfer.direction === 'send') {
+            transfer.available = false;
+            transfer.state = 'expired';
+            transfer.error = '后台线程已停止，请刷新后重新分享';
+            for (const recipient of transfer.recipients || []) {
+              if (!['sending', 'waiting'].includes(recipient.state)) continue;
+              recipient.state = 'failed';
+              recipient.error = transfer.error;
+            }
+            transfer.peersFailed = (transfer.recipients || []).filter((recipient) => recipient.state === 'failed').length;
+            fileTransfer._renderOutgoing(file_id, transfer);
+          } else if (!['done', 'rejected', 'expired', 'failed'].includes(transfer.state)) {
+            transfer.state = 'failed';
+            transfer.error = '后台线程已停止，请刷新后继续接收';
+            bus.emit(EV.FILE_CARD_UPDATE, {
+              room: transfer.room, file_id, state: transfer.state,
+              done: transfer.done, total: transfer.total, error: transfer.error,
+            });
+          }
+        }
+        break;
+      }
       case 'transfer:hash':
         bus.emit(EV.TIP, `正在计算校验值… ${p.pct}%`);
         break;
@@ -527,7 +552,7 @@ export const fileTransfer = {
       state: transfer.state,
       available: transfer.available,
       recipients: transfer.recipients,
-      error: '',
+      error: transfer.error || '',
     });
   },
 

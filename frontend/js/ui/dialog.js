@@ -27,6 +27,12 @@ export const dialog = {
     }
     $('dlg-title').textContent = title;
     $('dlg-body').innerHTML = body;
+    const error = document.createElement('div');
+    error.id = 'dlg-error';
+    error.className = 'dialog__error';
+    error.setAttribute('role', 'alert');
+    error.hidden = true;
+    $('dlg-body').appendChild(error);
     $('dlg-ok').textContent = okText;
     $('dlg-cancel').textContent = cancelText;
     onOk = cb || null;
@@ -69,8 +75,13 @@ export const dialog = {
       const callback = onOk;
       $('dlg-ok').disabled = true;
       try {
+        $('dlg-error').hidden = true;
         if (callback && await callback() === false) return;
         if (callback === onOk) dialog.close();
+      } catch (error) {
+        if (callback !== onOk) return;
+        $('dlg-error').textContent = error?.message || '操作失败，请重试';
+        $('dlg-error').hidden = false;
       } finally { $('dlg-ok').disabled = false; }
     };
     $('modal').onclick = (e) => {

@@ -42,7 +42,7 @@ const rowToggle = (act, label, on, hint = '') => ({
          ${hint ? `<div class="set-row__hint">${U.esc(hint)}</div>` : ''}
        </div>
        <button class="switch ${on ? 'is-on' : ''}" data-toggle="${act}" role="switch"
-               aria-checked="${on}" title="${on ? '点击关闭' : '点击开启'}" type="button"><i></i></button>
+               aria-checked="${on}" aria-label="${U.esc(label)}" title="${on ? '点击关闭' : '点击开启'}" type="button"><i></i></button>
      </div>`,
 });
 

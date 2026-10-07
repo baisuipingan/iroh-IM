@@ -43,7 +43,7 @@
   <div class="card">
     <h2>1 · 中继探测 <span id="probe-state" class="pill wait">未开始</span></h2>
     <div class="row" style="margin-bottom:10px">
-      <button id="btn-probe">探测全部中继</button>
+      <button id="btn-probe" type="button">探测全部中继</button>
       <span class="muted" id="probe-note"></span>
     </div>
     <table>
@@ -57,9 +57,9 @@
     <div class="id-box" style="margin:10px 0">
       <span class="muted" style="min-width:64px">我的 ID</span>
       <span class="mono" id="my-id">—</span>
-      <button id="btn-copy">复制</button>
+      <button id="btn-copy" type="button">复制</button>
     </div>
-    <div class="row"><button id="btn-start" class="primary">启动 iroh 节点</button><button id="btn-stop" disabled>关闭</button></div>
+    <div class="row"><button id="btn-start" class="primary" type="button">启动 iroh 节点</button><button id="btn-stop" type="button" disabled>关闭</button></div>
   </div>
 
   <div class="card">
@@ -72,12 +72,12 @@
 
   <div class="card">
     <h2>4 · 发消息</h2>
-    <label>对端 ID</label>
+    <label for="peer-id">对端 ID</label>
     <input id="peer-id" class="mono" placeholder="对方的 64 位 hex ID" />
-    <label>对端当前所在中继（必须填对，中继之间不互转）</label>
+    <label for="peer-relay">对端当前所在中继（必须填对，中继之间不互转）</label>
     <input id="peer-relay" class="mono" value="" />
-    <label>消息</label>
-    <div class="row"><input id="msg" placeholder="输入内容后点发送" /><button id="btn-send" disabled>发送</button></div>
+    <label for="msg">消息</label>
+    <div class="row"><input id="msg" placeholder="输入内容后点发送" /><button id="btn-send" type="button" disabled>发送</button></div>
   </div>
 
   <div class="card">

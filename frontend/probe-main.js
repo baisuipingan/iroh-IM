@@ -1,8 +1,9 @@
 import init, { WebNode } from './pkg/iroh_web.js';
 import { loadRelayConfig, probeAll, buildRelayMap, diagnoseRelay } from './probe.js';
+import { store } from './js/store.js';
+import { esc, withTimeout } from './js/util.js';
 
 const $ = (id) => document.getElementById(id);
-const KEY_STORE = 'iroh.secret-key';
 let node = null;
 let relayCfg = null;
 let probeResults = [];
@@ -31,15 +32,7 @@ function log(msg, cls = '') {
 
 /** 身份持久化：不做这一步，每次刷新都会换一个 EndpointId。 */
 function loadOrCreateSecretKey() {
-  let hex = localStorage.getItem(KEY_STORE);
-  if (!hex || !/^[0-9a-f]{64}$/.test(hex)) {
-    const buf = new Uint8Array(32);
-    crypto.getRandomValues(buf);
-    hex = [...buf].map((b) => b.toString(16).padStart(2, '0')).join('');
-    localStorage.setItem(KEY_STORE, hex);
-    log('已生成本机身份密钥并存入 localStorage');
-  }
-  return hex;
+  return store.identity();
 }
 
 function renderProbe(results) {
@@ -47,10 +40,10 @@ function renderProbe(results) {
   $('relay-rows').innerHTML = results
     .map(
       (r) => `<tr>
-        <td><span class="mono">${r.url.replace('https://', '')}</span><br><span class="muted">${r.id}</span></td>
+        <td><span class="mono">${esc(r.url.replace('https://', ''))}</span><br><span class="muted">${esc(r.id || '')}</span></td>
         <td>${r.ok && r.rtt !== null ? Math.round(r.rtt * 10) / 10 + ' ms' : '—'}</td>
         <td>${r.ok ? '<span class="pill ok">可达</span>' : '<span class="pill bad">不可达</span>'}
-            ${r.error ? `<br><span class="muted">${r.error}</span>` : ''}</td>
+            ${r.error ? `<br><span class="muted">${esc(r.error)}</span>` : ''}</td>
       </tr>`,
     )
     .join('');
@@ -62,7 +55,7 @@ function renderProbe(results) {
     ? `最快的 ${timed[0].url}（预测 iroh 会选它做 home relay）`
     : alive.length
       ? '中继可达但拿不到细粒度计时（多半是缺 CORS/Timing-Allow-Origin），交给 iroh 自己择优'
-      : '检查域名解析 / 8443 端口 / 证书；若错误是 Failed to fetch，多看上面的诊断行';
+      : '检查域名解析 / 配置的中继端口 / 证书；若错误是 Failed to fetch，多看上面的诊断行';
 }
 
 function renderStatus(relays) {
@@ -73,9 +66,9 @@ function renderStatus(relays) {
   $('status-rows').innerHTML = relays
     .map(
       (r) => `<tr>
-        <td class="mono">${r.url.replace('https://', '')}</td>
+        <td class="mono">${esc(r.url.replace('https://', ''))}</td>
         <td>${r.connected ? '<span class="pill ok">已连接</span>' : '<span class="pill wait">未连接</span>'}</td>
-        <td class="muted">${r.authDenied ? '鉴权被拒：' + r.authDenied : r.lastError ?? ''}</td>
+        <td class="muted">${esc(r.authDenied ? '鉴权被拒：' + r.authDenied : r.lastError ?? '')}</td>
       </tr>`,
     )
     .join('');
@@ -96,7 +89,7 @@ async function boot() {
   });
   if (relayCfg) {
     log(`中继名单 v${relayCfg.version}：${relayCfg.relays.map((r) => r.id).join(', ')}`);
-    $('peer-relay').value = relayCfg.relays[0].url;
+    $('peer-relay').value = relayCfg.relays.find((relay) => relay.enabled !== false)?.url || '';
   }
 }
 
@@ -106,7 +99,7 @@ $('btn-probe').onclick = async () => {
   $('probe-state').textContent = '探测中…';
   const results = await probeAll(relayCfg.relays, { samples: 3, timeoutMs: 2500 });
   renderProbe(results);
-  const map = buildRelayMap(results, { k: 3, fallback: relayCfg.relays.map((r) => ({ url: r.url })) });
+  const map = buildRelayMap(results, { k: 3, fallback: relayCfg.relays.filter((relay) => relay.enabled !== false) });
   log(
     `探测完成，交给 iroh 的候选名单：${map.map((m) => m.url).join(', ')}` +
       (results.some((r) => r.ok && r.rtt === null) ? '（拿不到计时，已回退为全量名单）' : ''),
@@ -115,18 +108,20 @@ $('btn-probe').onclick = async () => {
 
 $('btn-start').onclick = async () => {
   if (!relayCfg) return log('中继名单未就绪', '#96201d');
+  const usableRelays = relayCfg.relays.filter((relay) => relay.enabled !== false);
+  if (!usableRelays.length) return log('所有中继都已禁用，至少启用一台后重试', '#96201d');
   $('btn-start').disabled = true;
   $('node-state').className = 'pill wait';
   $('node-state').textContent = '启动中…';
 
   // 用探测结果排前 K 台；没探测过就全给（让 iroh 自己选）
   const candidates = probeResults.length
-    ? buildRelayMap(probeResults, { k: 3, fallback: relayCfg.relays.map((r) => ({ url: r.url })) })
-    : relayCfg.relays.map((r) => ({ url: r.url }));
+    ? buildRelayMap(probeResults, { k: 3, fallback: usableRelays })
+    : usableRelays;
 
   try {
     node = await WebNode.start(
-      JSON.stringify({ relays: candidates.map((c) => c.url), secret_key_hex: loadOrCreateSecretKey() }),
+      JSON.stringify({ relays: candidates.map((c) => c.url), relay_token: relayCfg.relay_token ?? null, secret_key_hex: loadOrCreateSecretKey() }),
     );
     $('my-id').textContent = node.endpoint_id();
     $('my-id').title = node.endpoint_id();
@@ -141,16 +136,18 @@ $('btn-start').onclick = async () => {
         if (done) break;
         handleEvent(value);
       }
-    })();
+    })().catch((error) => log('节点事件读取失败：' + (error?.message ?? error), '#96201d'));
 
     // 等待至少一台中继握手完成（JS 侧自己 race 超时）
-    await Promise.race([node.online(), new Promise((_, rej) => setTimeout(() => rej(new Error('10s 超时')), 10000))]);
+    await withTimeout(node.online(), 15000, '连接中继');
     $('node-state').className = 'pill ok';
     $('node-state').textContent = '在线';
     $('btn-send').disabled = false;
     $('btn-stop').disabled = false;
     log('已连上至少一台中继，可以收发消息了');
   } catch (e) {
+    if (node) node.shutdown();
+    node = null;
     $('node-state').className = 'pill bad';
     $('node-state').textContent = '失败';
     $('btn-start').disabled = false;
@@ -208,8 +205,12 @@ $('btn-stop').onclick = () => {
 $('btn-copy').onclick = async () => {
   const id = $('my-id').textContent;
   if (!id || id === '—') return;
-  await navigator.clipboard.writeText(id);
-  log('已复制本机 ID');
+  try {
+    await navigator.clipboard.writeText(id);
+    log('已复制本机 ID');
+  } catch (error) {
+    log('复制失败：' + (error?.message ?? error), '#96201d');
+  }
 };
 
 // 无头浏览器/自动化用：访问 ?autostart=1 时自动探测并启动节点
@@ -242,12 +243,12 @@ async function reportState(tag) {
 }
 
 async function autostart() {
-  if (!AUTOSTART) return;
+  if (!AUTOSTART || !relayCfg) return;
   log('autostart：开始探测中继');
   await $('btn-probe').onclick();
   await reportState('probed');
   // 诊断：为什么拿到/拿不到 RTT（CORS 头 + Resource Timing 明细）
-  for (const r of relayCfg.relays) {
+  for (const r of relayCfg.relays.filter((relay) => relay.enabled !== false)) {
     const d = await diagnoseRelay(r);
     log('诊断 ' + r.id + '：' + JSON.stringify(d));
   }

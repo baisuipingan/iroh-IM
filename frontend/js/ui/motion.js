@@ -20,8 +20,8 @@
 import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
-import { sidebar } from './sidebar.js';
 import { dialog } from './dialog.js';
+import { collectRelayModel } from '../relay-model.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -37,7 +37,8 @@ const BUBBLES = [
 ];
 
 export const motion = {
-  init() {
+  init(host) {
+    this.host = host;
     this._paintAmbient();
     this._wireHead();
     this._wireChips();
@@ -46,7 +47,7 @@ export const motion = {
     bus.on(EV.NODE_STATE, () => this.paintConnection());
     bus.on(EV.RELAYS, () => this.paintConnection());
     bus.on(EV.PRESENCE, ({ room }) => {
-      if (room === sidebar.currentRoom) this.paintMembers();
+      if (room === this.host.currentRoom) this.paintMembers();
     });
     // 设置页改了会影响到顶栏的偏好（目前只有提示音），同步一次图标
     document.addEventListener('prefchange', () => this._syncSoundBtn());
@@ -79,7 +80,7 @@ export const motion = {
     // 成员药丸 → 成员页（没进房时它是隐藏的，不会点到这里）
     const members = $('room-members');
     // 「在线成员」页已合并进连接状态页（名单收在「在线成员」那一行下面）
-    if (members) members.onclick = () => sidebar.show('status');
+    if (members) members.onclick = () => this.host.show('status');
 
     // 提示音开关：直接改真实偏好（设置页里那个开关的另一个入口）
     const sound = $('btn-head-sound');
@@ -115,11 +116,11 @@ export const motion = {
     const menu = $('btn-room-menu');
     if (menu) {
       menu.onclick = () => {
-        if (!sidebar.currentRoom) {
+        if (!this.host.currentRoom) {
           bus.emit(EV.TIP, '先进一个房间');
           return;
         }
-        sidebar.roomMenu(sidebar.currentRoom);
+        this.host.roomMenu(this.host.currentRoom);
       };
     }
   },
@@ -141,8 +142,8 @@ export const motion = {
         box.querySelectorAll('.tab-chip').forEach((c) => {
           c.classList.toggle('is-on', c === chip);
         });
-        sidebar.roomFilter = chip.dataset.filter || 'all';
-        sidebar.render();
+        this.host.roomFilter = chip.dataset.filter || 'all';
+        this.host.render();
       };
     });
   },
@@ -155,27 +156,15 @@ export const motion = {
 
   /** 当前"正在用"的中继（取第一台 connected 的；否则取第一台配置的） */
   _homeRelay() {
-    const runtime = net.relayStatus?.() || [];
-    const cfg = net.config?.relays || [];
-    const live = runtime.find((r) => r.connected);
-    const url = live?.url || '';
-    const id =
-      cfg.find((r) => String(r.url).replace(/\/+$/, '') === String(url).replace(/\/+$/, ''))?.id ||
-      String(url).replace(/^https?:\/\//, '').split(':')[0] ||
-      '—';
-    // ⚠️ 判"探通没探通"要用 `ok`，不能只看 `rtt`：
-    //    中继可达但读不到计时（缺 Timing-Allow-Origin）时 ok=true、rtt=null。
-    const probe = (net.probes || []).find(
-      (p) => String(p.url).replace(/\/+$/, '') === String(url).replace(/\/+$/, ''),
-    );
-    return { id, url, connected: !!live, probe };
+    const { home } = collectRelayModel(net.config, net.relayStatus(), net.probes);
+    return home || { id: '—', url: '', connected: false, probe: null };
   },
 
   paintConnection() {
-    const state = sidebar.currentNodeState || { ok: false, text: '启动中', waiting: true };
-    const runtime = net.relayStatus?.() || [];
-    const total = (net.config?.relays || []).length || runtime.length;
-    const okCount = runtime.filter((r) => r.connected).length;
+    const state = this.host.currentNodeState || { ok: false, text: '启动中', waiting: true };
+    const model = collectRelayModel(net.config, net.relayStatus(), net.probes);
+    const total = model.items.length;
+    const okCount = model.okCount;
     const { id, connected, probe } = this._homeRelay();
 
     // ① 列表右上角"信道"指示
@@ -199,7 +188,7 @@ export const motion = {
       chip.title = state.ok
         ? `中继已连接（${okCount}/${total}）· 点这里看连接诊断`
         : `${state.text} · 点这里看连接诊断`;
-      chip.onclick = () => sidebar.show('status');
+      chip.onclick = () => this.host.show('status');
     }
 
     // ② 列表底部状态条
@@ -244,7 +233,7 @@ export const motion = {
     const sub = $('chat-subline');
     const subText = $('chat-subline-text');
     if (sub && subText) {
-      const room = sidebar.currentRoom;
+      const room = this.host.currentRoom;
       const rtt = probe?.ok && probe.rtt ? ` · HTTP ${Math.round(probe.rtt)}ms` : '';
       sub.classList.remove('is-ok', 'is-bad', 'is-wait');
       if (state.waiting) {
@@ -278,7 +267,7 @@ export const motion = {
     const pill = $('room-members');
     const text = $('room-members-text');
     const badge = $('room-badge');
-    const room = sidebar.currentRoom;
+    const room = this.host.currentRoom;
 
     // 顺手把标题规范化到"备注名 || 房间名"。
     // ⚠️ 为什么要在这里重复一遍 main.js 的赋值：改备注名走的是
@@ -304,7 +293,7 @@ export const motion = {
     const joined = !!room && net.canSend && net._room === room;
     pill.hidden = !joined;
     if (!joined) return;
-    const n = sidebar.memberCount();
+    const n = this.host.memberCount();
     text.textContent = `${n} 人`;
     pill.title = `当前房间在线 ${n} 人（含自己）· 点击查看成员`;
   },

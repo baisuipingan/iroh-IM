@@ -87,11 +87,18 @@ export function sleep(ms) {
 }
 
 /** 带超时的 Promise */
-export function withTimeout(promise, ms, label = '操作') {
-  return Promise.race([
-    promise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error(`${label}超时（${ms / 1000}s）`)), ms)),
-  ]);
+export async function withTimeout(promise, ms, label = '操作') {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}超时（${ms / 1000}s）`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 字节数 → 人类可读（与 Rust 侧 `human_size` 保持一致的口径） */

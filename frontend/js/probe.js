@@ -18,6 +18,7 @@
  */
 
 import { store } from './store.js';
+import { validateRelayConfig } from './relay-model.js';
 
 const PROBE_PATH = '/ping';
 
@@ -27,7 +28,8 @@ async function timedFetch(url, timeoutMs) {
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const res = await fetch(url, { cache: 'no-store', signal: ac.signal });
-    return res.ok;
+    if (!res.ok) throw new Error(`中继探测返回 HTTP ${res.status}`);
+    return true;
   } finally {
     clearTimeout(t);
   }
@@ -144,13 +146,16 @@ export async function loadRelayConfig(url, cacheKey = 'iroh.relay-config') {
   try {
     const res = await fetch(url, { cache: 'no-cache', signal: controller.signal });
     if (!res.ok) throw new Error(String(res.status));
-    const cfg = await res.json();
+    const cfg = validateRelayConfig(await res.json());
     store.setValue(cacheKey, JSON.stringify(cfg));
     return cfg;
-  } catch {
+  } catch (error) {
     const cached = store.getValue(cacheKey);
-    if (cached) return JSON.parse(cached);
-    throw new Error('relay config unavailable and no cache');
+    if (cached) {
+      try { return validateRelayConfig(JSON.parse(cached)); }
+      catch { store.setValue(cacheKey, null); }
+    }
+    throw new Error(`中继配置加载失败：${error?.name === 'AbortError' ? '请求超时' : error?.message || '无法连接配置服务'}。请刷新后重试`);
   } finally {
     clearTimeout(timer);
   }

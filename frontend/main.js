@@ -406,10 +406,10 @@ async function main() {
     // 视觉/演出层（环境气泡、顶栏成员药丸、连接状态三处信息）。
     // 放在 net.start() **之前**：它自带空状态渲染，节点起来后会由
     // NODE_STATE 事件自动补上真实数据，首屏不会先空一块。
-    motion.init();
+    motion.init(sidebar);
     // 视图切换（消息对话 / 中继拓扑）+ 桌面通知。
     // 两个都是"订阅事件 + 读真实状态"，不需要等 net.start()。
-    topology.init();
+    topology.init(sidebar);
     notify.init();
 
     if (!store.nick()) store.setNick(`用户${Math.floor(Math.random() * 9000 + 1000)}`);

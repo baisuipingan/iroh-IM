@@ -60,48 +60,55 @@ bash scripts/e2e/run.sh         # 浏览器端到端回归（前置见 scripts/e
 
 ### 代码风格（lint / format）
 
-本项目**零 npm 依赖**，所以工具也不进 `package.json` —— 用biome 的独立二进制：
+项目将 Biome 和 Playwright 固定在 `package.json` 的开发依赖中，使用 `npm ci` 保证工具版本一致：
 
 ```bash
-npm i -g @biomejs/biome     # 或 npx @biomejs/biome
-cd frontend && biome check ../frontend/js main.js ../frontend/css
-biome check --write .       # 自动修
+npm ci
+npx playwright install webkit
+npm run lint
+npm test
+bash scripts/verify.sh all  # 需要本地服务和带 CDP 的 Chrome
 ```
 
-- **`biome.json`** —— lint + format 配置。当前状态：**0 error / 0 warning**。
+开发验证需要 Node.js 22+、Python 3、Rust；生产前端不依赖 Node.js。
+`verify.sh local` 跑静态检查、单元测试和 Rust/安全回归；`browser` 跑浏览器回归；
+`all` 包含两者。共享 CDP 9222 的脚本必须串行运行，前置步骤见 `scripts/e2e/README.md`。
+
+- **`biome.json`** —— lint 配置。当前 JS 代码：0 error / 0 warning；HTML 页面同样纳入检查。
 - **`.editorconfig`** —— 编辑器通用约定。Python 侧（`scripts/` 下 30+ 脚本）
   没有任何工具管，这份文件是那边唯一的约束。
 - ⚠️ **`biome format` 不要跑在存量代码上**：项目里行尾注释是**刻意用空格对齐成列**的
   （`EV` 事件表、配置项列表都是），biome 会把这些对齐全部拆掉，产生 21 个文件的无意义 diff。
   formatter 只用于**新写的文件**。
 
-**biome.json 里每条被关掉的规则都写了注释说明原因**，别随手打开 ——
-比如 `noControlCharactersInRegex` 关掉是因为 `util.js` 的房间名校验
-**本来就要**匹配控制字符。
+`biome.json` 保留与现有代码约定相关的规则例外，例如房名校验需要匹配控制字符、
+日志允许 console。未声明变量检查保持开启；调整规则时应先运行完整 lint 和回归。
 
 ### 前端代码结构
 
 ```
-frontend/js/
-frontend/main.js          组装层：初始化 + 事件接线 + 进房流程
-  bus.js  store.js  util.js    内核：无 DOM 副作用
-  net.js                 网络层（唯一碰 wasm 的地方，走 postMessage RPC）
-  iroh-worker.js         Worker：wasm + blake3 + IndexedDB 断点
-  probe.js               中继探测
-  test-hooks.js          自动化钩子（window.__state / __iroh_*），main.js 显式装一次
-  ui/
-    primitives.js        跨视图共享原语（avatar / ico / regionLabel / WALLPAPERS）
-    sidebar.js           侧栏门面：只管状态、事件接线、渲染调度
-    sidebar/chats.js       会话列表页
-    sidebar/status.js      连接状态页
-    sidebar/settings.js    设置页 + 设置项动作
-    timeline.js  composer.js  filetransfer.js
-    motion.js  topology.js  theme.js  notify.js  dialog.js
+frontend/
+  main.js                组装层：初始化 + 事件接线 + 进房流程
+  js/
+    bus.js  store.js  util.js    内核：无 DOM 副作用
+    net.js                 网络层（走 postMessage RPC）
+    iroh-worker.js         Worker：wasm + blake3 + IndexedDB 断点
+    probe.js               中继探测
+    relay-model.js         中继配置校验与共享状态模型
+    test-hooks.js          自动化钩子（window.__state / __iroh_*）
+    ui/
+      primitives.js        跨视图共享原语（avatar / ico / regionLabel / WALLPAPERS）
+      sidebar.js           侧栏门面：状态、事件接线、渲染调度
+      sidebar/chats.js     会话列表页
+      sidebar/status.js    连接状态页
+      sidebar/settings.js 设置页 + 设置项动作
+      timeline.js  composer.js  filetransfer.js
+      motion.js  topology.js  theme.js  notify.js  dialog.js
 ```
 
-**依赖方向单向向下**：`main → ui/* → 内核 → net → Worker`。
-⚠️ **不要在 ui/ 之间横向 import**（`timeline.js` 去 import `sidebar.js` 这类）。
-共享的东西放`primitives.js`，确实需要读另一个视图的状态就用参数把 `host` 传进去。
+**组装与依赖边界**：`main` 组装 UI，视图通过 `net`/`store`/`bus` 访问状态与动作，
+`net` 通过 RPC 驱动 Worker。不要让视图反向依赖 `main` 或导入另一个视图的门面；
+需要侧栏状态时注入 `host`，共享图标、对话框、主题等服务可以复用。
 
 ## 文档索引
 
@@ -120,6 +127,6 @@ frontend/main.js          组装层：初始化 + 事件接线 + 进房流程
 
 - **软状态是唯一事实来源**：成员靠心跳（10s）与超时（35s）派生，事件只加速、不决定事实
 - **每条消息都用作者私钥签名**，`id` 由载荷派生并参与签名；签名载荷里带房间标识（v4）
-- **历史落盘文件名是 `blake3(房间名)`**，原始房间名存在文件头并自校验 —— 绝不从文件名反推
+- **文本历史保存在 SQLite `history.db`**，以房间名隔离，按 `(ts, id)` 游标分页；备份使用 SQLite 一致性快照，不能运行中只复制主库文件
 - **文件传输走 P2P（QUIC）**，内容走增量 BLAKE3 校验；`file_id` 是公开广播的，**不是授权凭据**
 - 常驻节点的历史 ALPN **没有应用层鉴权**（房间名就是全部凭据），不要托管私密历史
