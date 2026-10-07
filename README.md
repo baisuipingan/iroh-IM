@@ -114,6 +114,7 @@ frontend/
 
 | 文档 | 内容 |
 |---|---|
+| [`docs/README.md`](docs/README.md) | **文档总索引** —— 按主题分组，并标明哪份是权威 |
 | [`docs/deploy.md`](docs/deploy.md) | **部署与变更**（先看这个） |
 | [`deploy/roomd/README.md`](deploy/roomd/README.md) | 常驻节点：部署细节、环境变量、容量上限、历史访问边界 |
 | [`deploy/relay/README.md`](deploy/relay/README.md) · [`docs/relay-deploy-minimal.md`](docs/relay-deploy-minimal.md) | 中继部署 |
@@ -121,7 +122,7 @@ frontend/
 | [`scripts/e2e/README.md`](scripts/e2e/README.md) | 浏览器回归：用例清单 + 前置 + 已知坑 |
 | [`scripts/security/README.md`](scripts/security/README.md) | 安全回归的用法与覆盖范围 |
 | [`docs/iroh-chatroom-feasibility.md`](docs/iroh-chatroom-feasibility.md) | 最初的可行性分析 |
-| [`docs/project-review-2026-10-03.md`](docs/project-review-2026-10-03.md) · [`-postfix`](docs/project-review-2026-10-03-postfix.md) | 两轮安全审查与修复记录（设计约束的来由多半在这里） |
+| [`docs/history/project-review-2026-10-03.md`](docs/history/project-review-2026-10-03.md) · [`-postfix`](docs/history/project-review-2026-10-03-postfix.md) | 两轮安全审查与修复记录（设计约束的来由多半在这里） |
 
 ## 设计要点（看一眼能省很多事）
 

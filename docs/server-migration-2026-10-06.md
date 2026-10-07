@@ -3,7 +3,7 @@
 > 老服务器 `<OLD_SERVER_IP>:15601` → 新服务器 `<SERVER_IP>:22`
 > DNS 已切：`iroh1.editor.vip` → `<SERVER_IP>`（eu-1/fr-1 不受影响）
 > **最终状态：中继与 `roomd` 均已迁至新服务器，旧 `roomd` 已停止，身份与历史数据库校验通过，见 §4。**
-> 2026-10-06 独立复核：运行服务正常，但构建工具链未迁移；未来发版目标为新机，发布前待办见 [`project-review-2026-10-06.md`](project-review-2026-10-06.md)。
+> 2026-10-06 独立复核：运行服务正常，但构建工具链未迁移；未来发版目标为新机，发布前待办见 [`history/project-review-2026-10-06.md`](history/project-review-2026-10-06.md)。
 
 ---
 
