@@ -21,7 +21,7 @@
 - 新机补齐 Cargo/Rustup 缓存、wasm-pack、clang 等工具。rustc 1.98.1、wasm-pack 0.13.1；
   native 与 WASM release 锁定构建均通过。WASM 约 3.6 MiB；native 最高 GLIBC 2.34，容器 Debian GLIBC 2.36。
   新候选二进制已在实际 roomd 镜像中运行验证，并作为本次后端发布版本。
-- 后续服务器端发版目标为 `189.24.70.253:22`，已实测 SSH key 可登录，旧 roomd 保持停止。
+- 后续服务器端发版目标为 `<SERVER_IP>:22`，已实测 SSH key 可登录，旧 roomd 保持停止。
 
 ## 工程与产品取舍
 
@@ -132,16 +132,39 @@ bash scripts/verify.sh all
 - 候选 native 在当前 roomd 镜像内以只读、无网络临时容器运行 ldd，所需动态库全部存在；
   这验证装载依赖兼容，随后已完成带现有身份和数据的服务端实际运行验收。
 
-## 发布状态与后续建议
+## 发布与回滚记录
 
-本次已完成生产发布：
+> 原先单独一份 `release-2026-10-07-hardening.md` 与本节的版本/回滚信息约九成重复，
+> 2026-10-07 已合并到这里，原文件删除。**本文件是这一轮加固与发布的权威记录。**
 
-- 前端 Cloudflare Worker `iroh-chatroom`：版本 `bfef888a-79ab-4bbe-826a-12bd0b7a8089`，域名 `https://im.pinkstar.cc`。
-- 后端服务器 `189.24.70.253`：`roomd` 容器运行候选 SHA-256 `126d874cfe848deca0c964c4ecdda2b5bf812e40c32c7a0dc24160001f5a855f`。
-- 发布前备份：`/opt/iroh/backups/roomd/roomd-20261007T023016077212Z.tar.gz`；后端回滚副本：`/opt/iroh/roomd/roomd.bak-20261007-023042`。
-- 线上验收：生产界面 50/50、多人历史 12/12、消息/文件归属 38/38、三端文件接收 26/26；静态资源哈希、HTTPS、relay 健康检查均通过。
+### 版本
 
-基线已提交一次，后续打磨未提交；无 push。
+- 前端：Cloudflare Worker `iroh-chatroom`，版本 `bfef888a-79ab-4bbe-826a-12bd0b7a8089`，
+  域名 `https://im.pinkstar.cc`。
+- 后端：服务器 `<SERVER_IP>` 上的 `roomd` 容器，
+  候选 SHA-256 `126d874cfe848deca0c964c4ecdda2b5bf812e40c32c7a0dc24160001f5a855f`。
+- 保留协议 v4、WASM BUILD v14；未清理历史或身份数据。
+
+### 回滚
+
+- SQLite / identity / 配置备份：`/opt/iroh/backups/roomd/roomd-20261007T023016077212Z.tar.gz`
+- 上一个后端二进制：`/opt/iroh/roomd/roomd.bak-20261007-023042`
+
+### 线上验收
+
+- 生产界面与异常状态（Chrome/WebKit）：50/50
+- 三份独立存储、多人同步、晚加入历史、64 条消息分页与刷新归属：12/12
+- Chrome/WebKit 文本、文件、图片的刷新/切房归属：38/38
+- 三端文件分享、拒绝、续传、取消与混合结果：26/26
+- 生产静态资源 SHA-256 与发布源一致；HTTPS、relay `/ping`、roomd/relay 容器状态通过，
+  两者均 `restarts=0`
+- 发布后 SQLite `quick_check=ok`，roomd 发布以来无 ERROR / panic / fatal
+
+### 提交状态
+
+基线 `e366b19` 已提交；随后一轮打磨以 `fc24920` 提交并推送。
+
+## 后续建议（未完成）
 
 1. 轮换聊天中提供过的 root 密码；确认可用密钥和救援通道后禁用密码 SSH，未擅改 sshd。
 2. 增加异机加密备份、恢复演练和失败告警；本机备份不能抵御整机丢失。

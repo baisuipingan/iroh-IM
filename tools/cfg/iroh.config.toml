@@ -1,4 +1,4 @@
 [[relay_nodes]]
-url = "http://189.24.68.147:3340"
+url = "http://<OLD_SERVER_IP>:3340"
 [[relay_nodes]]
-url = "http://189.24.68.147:3341"
+url = "http://<OLD_SERVER_IP>:3341"

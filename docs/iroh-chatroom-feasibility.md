@@ -2,7 +2,7 @@
 
 调研日期：2026-09-29
 调研基准版本：**iroh / iroh-relay v1.3.0**（1.0.0 于 2026-06-15 稳定发布；当前最新为 1.3.0）、Cloudflare Workers/Pages（2026 年运行时）
-实测环境：服务器 189.24.68.147（Ubuntu 22.04 / 8C16G，1Panel + OpenResty 占用 80/443），详见 §8
+实测环境：服务器 <OLD_SERVER_IP>（Ubuntu 22.04 / 8C16G，1Panel + OpenResty 占用 80/443），详见 §8
 
 ---
 
@@ -244,9 +244,9 @@ score = w1·normalize(median_rtt) + w2·normalize(jitter) + w3·(fail_count>0 ? 
 
 | 项 | 值 |
 |---|---|
-| 服务器 | 189.24.68.147（Ubuntu 22.04，x86_64，8C / 16G / 155G，已用 59%） |
+| 服务器 | <OLD_SERVER_IP>（Ubuntu 22.04，x86_64，8C / 16G / 155G，已用 59%） |
 | 现有业务 | 1Panel 面板 + OpenResty 占用 80/443（TCP 与 UDP/443 即 HTTP/3），28 个 Docker 容器 |
-| 公网出口 | 直连公网（egress IP == 189.24.68.147，无 NAT） |
+| 公网出口 | 直连公网（egress IP == <OLD_SERVER_IP>，无 NAT） |
 | 防火墙 | ufw active，INPUT 默认 DROP；实测 80/443/15601 可入 |
 | 部署内容 | `iroh-relay 1.3.0`（musl 静态二进制）+ systemd 模板单元，两个实例：中继 a = :3340，中继 b = :3341，均监听 `0.0.0.0`，纯 HTTP（本轮验证用），开启每客户端限速（2 MiB/s，突发 8 MiB） |
 | 验证工具 | `iroh-doctor 0.101.0`（`report` / `accept` / `connect`） |
@@ -255,7 +255,7 @@ score = w1·normalize(median_rtt) + w2·normalize(jitter) + w3·(fail_count>0 ? 
 
 ### 8.2 可用性验证（通过）
 
-- `GET http://189.24.68.147:3340/healthz` → `{"status":"ok","version":"1.3.0","git_hash":"unknown"}`，公网可达。
+- `GET http://<OLD_SERVER_IP>:3340/healthz` → `{"status":"ok","version":"1.3.0","git_hash":"unknown"}`，公网可达。
 - 服务器本地 `iroh-doctor report`：中继被识别，`preferred_relay` = `http://127.0.0.1:3340/`，HTTPS 探测延迟 412µs（另一个 680µs）→ **"探测延迟、选最低者"的选择机制按预期工作**。
 - **真机架客户端延迟**（探测机 → 该中继，纯 TCP 层）：`connect` 38–62 ms，TTFB 82–115 ms（5 次采样）。
 
@@ -304,7 +304,7 @@ score = w1·normalize(median_rtt) + w2·normalize(jitter) + w3·(fail_count>0 ? 
 | | iroh1 | iroh2 |
 |---|---|---|
 | 域名 | `iroh1.editor.vip` | `iroh2.editor.vip` |
-| 机器 | 189.24.68.147（**香港**，8C16G） | 85.209.49.6（**欧洲**，1C1G） |
+| 机器 | <OLD_SERVER_IP>（**香港**，8C16G） | 85.209.49.6（**欧洲**，1C1G） |
 | 中继地址 | `https://iroh1.editor.vip:8443` | `https://iroh2.editor.vip:8443` |
 | TLS 终止 | 中继自身（`https_bind_addr=0.0.0.0:8443`） | nginx 终止 → `127.0.0.1:8342` |
 | QAD | `7842/udp` | `7842/udp` |

@@ -10,19 +10,33 @@
 #   ./scripts/build-wasm.sh native     # 编原生 relay-probe 到 dist/
 #
 # 环境变量：
-#   IROH_BUILD_HOST  构建机，默认 root@189.24.70.253
+#   IROH_BUILD_HOST  构建机（**必填**）
 #   IROH_BUILD_PORT  SSH 端口，默认 22
-#   IROH_BUILD_KEY   SSH 私钥，默认 ~/Desktop/ssh/mindcrew/codex
+#   IROH_BUILD_KEY   SSH 私钥路径（**必填**）
 #   IROH_BUILD_DIR   构建机上的目录，默认 /opt/iroh-build/client-wasm
+#
+# ⚠️ 本仓库是公开的，所以**这里不写任何默认主机名与密钥路径**。
+#    本机自己用的话，把私有默认值放进 `scripts/build.env`（已 gitignore），格式就是普通
+#    的 shell 赋值：
+#
+#        IROH_BUILD_HOST=root@<你的构建机>
+#        IROH_BUILD_KEY=$HOME/.ssh/<你的部署密钥>
+#
+#    也可以在调用时用环境变量覆盖。
 set -euo pipefail
 
-MODE="${1:-dev}"
-HOST="${IROH_BUILD_HOST:-root@189.24.70.253}"
-PORT="${IROH_BUILD_PORT:-22}"
-KEY="${IROH_BUILD_KEY:-$HOME/Desktop/ssh/mindcrew/codex}"
-DIR="${IROH_BUILD_DIR:-/opt/iroh-build/client-wasm}"
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# 私有默认值（不进版本控制）。没有这个文件就必须靠环境变量。
+if [ -f "$ROOT/scripts/build.env" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/build.env"
+fi
+
+MODE="${1:-dev}"
+HOST="${IROH_BUILD_HOST:?未设置 IROH_BUILD_HOST —— 见本文件头部的说明（或创建 scripts/build.env）}"
+PORT="${IROH_BUILD_PORT:-22}"
+KEY="${IROH_BUILD_KEY:?未设置 IROH_BUILD_KEY —— 见本文件头部的说明（或创建 scripts/build.env）}"
+DIR="${IROH_BUILD_DIR:-/opt/iroh-build/client-wasm}"
 SSH=(ssh -i "$KEY" -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$HOST")
 # ⚠️ `-p` 必须加：scp 默认**不保留时间戳**，拉回来的产物 mtime 是"传输时刻"，
 #    于是下面那句"产物必须比源码新"的自检**恒为通过**（源码总是更早），

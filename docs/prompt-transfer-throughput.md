@@ -87,7 +87,7 @@ roomd 自己的中继探测（docker compose logs roomd）：
    可以用"同一台机器上开两个浏览器互传"和"跨机互传"对比，区分本地环回与真链路。
 
 【访问资源】
-- 服务器：root@189.24.68.147:15601，SSH key 在 ~/Desktop/ssh/mindcrew/codex
+- 服务器：root@<OLD_SERVER_IP>:15601，SSH key 在 <SSH_KEY_PATH>
   - roomd：由 docker compose 管理，目录 /opt/iroh/roomd
     （日志：cd /opt/iroh/roomd && docker compose logs --tail=200 roomd）
   - iroh-relay：**独立 docker run 启动，不由 compose 管理**，

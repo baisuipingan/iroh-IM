@@ -668,7 +668,7 @@ python3 scripts/check-site-modules.py dist/site     exit 0
 
 ## 第五部分：上线记录（2026-10-03 晚，实际部署）
 
-服务器 `root@189.24.68.147:15601`（同机还跑着十几个无关服务，全程只动 `/opt/iroh/roomd` 与 `/opt/iroh-build`）。
+服务器 `root@<OLD_SERVER_IP>:15601`（同机还跑着十几个无关服务，全程只动 `/opt/iroh/roomd` 与 `/opt/iroh-build`）。
 
 ### 做了什么
 

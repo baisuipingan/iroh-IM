@@ -156,7 +156,7 @@ ufw delete allow 3340/tcp; ufw delete allow 3341/tcp   # 按需
 | 项 | iroh1 | iroh2 |
 |---|---|---|
 | 域名 | `iroh1.editor.vip` | `iroh2.editor.vip` |
-| 服务器 | 189.24.68.147（**香港**，AS979，8C16G，1Panel+OpenResty，28 容器） | 85.209.49.6（**欧洲**，1C1G，跑着 xray/3x-ui） |
+| 服务器 | <OLD_SERVER_IP>（**香港**，AS979，8C16G，1Panel+OpenResty，28 容器） | 85.209.49.6（**欧洲**，1C1G，跑着 xray/3x-ui） |
 | 中继地址 | `https://iroh1.editor.vip:8443` | `https://iroh2.editor.vip:8443` |
 | TLS 终止 | **中继自己做**（`https_bind_addr=0.0.0.0:8443`） | **nginx 反代**（8443 终止 TLS → `127.0.0.1:8342`） |
 | 明文监听 | `127.0.0.1:3340`（仅本机） | `127.0.0.1:8341`（仅本机） |

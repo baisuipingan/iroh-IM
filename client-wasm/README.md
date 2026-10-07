@@ -34,7 +34,7 @@ client-wasm/
 ./scripts/build-wasm.sh native    # 编原生 relay-probe 到 dist/
 ```
 
-构建机（默认 `root@189.24.68.147:15601`）首次需要：
+构建机（默认 `root@<OLD_SERVER_IP>:15601`）首次需要：
 
 ```bash
 # Rust + wasm target

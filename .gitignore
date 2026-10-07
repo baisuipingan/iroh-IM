@@ -54,3 +54,6 @@ output/
 
 # ---- 内部分析报告（含服务器地址、安全发现），不进公开仓库 ----
 docs/internal-review-*.md
+
+# ---- 本机构建机配置（主机名/密钥路径），不进公开仓库 ----
+scripts/build.env

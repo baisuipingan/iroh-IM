@@ -34,7 +34,7 @@ bash scripts/deploy-web.sh                     # → dist/site + 发布到 im.pi
 
 | | roomd（常驻节点） | 前端（浏览器站点） |
 |---|---|---|
-| 跑在哪 | 服务器 Docker：`root@189.24.70.253:22`（key `~/Desktop/ssh/mindcrew/codex`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://im.pinkstar.cc` |
+| 跑在哪 | 服务器 Docker：`root@<SERVER_IP>:22`（key `<SSH_KEY_PATH>`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://im.pinkstar.cc` |
 | 构建 | `bash scripts/build-wasm.sh native` → `dist/roomd` | `bash scripts/build-wasm.sh release` → `frontend/pkg`，再 `bash scripts/deploy-web.sh` |
 | 数据 | `/opt/iroh/roomd/data`（`identity.key` + SQLite 历史数据库及其 WAL） | 无（状态在浏览器 localStorage / IndexedDB） |
 | 细节文档 | `deploy/roomd/README.md` | `scripts/deploy-web.sh` 头部注释 |
@@ -56,9 +56,9 @@ roomd 与 relay Compose 配置将 Docker 日志限制为每份 10 MiB、最多 3
 `deploy/roomd-backup.service` 与 `deploy/roomd-backup.timer` 安装到 systemd 后每日运行。
 
 ```bash
-scp -P 22 scripts/backup-roomd.py root@189.24.70.253:/usr/local/sbin/iroh-backup-roomd.py
-scp -P 22 deploy/roomd-backup.{service,timer} root@189.24.70.253:/etc/systemd/system/
-ssh -p 22 root@189.24.70.253 'chmod 700 /usr/local/sbin/iroh-backup-roomd.py; systemctl daemon-reload; systemctl start roomd-backup.service; systemctl enable --now roomd-backup.timer'
+scp -P 22 scripts/backup-roomd.py root@<SERVER_IP>:/usr/local/sbin/iroh-backup-roomd.py
+scp -P 22 deploy/roomd-backup.{service,timer} root@<SERVER_IP>:/etc/systemd/system/
+ssh -p 22 root@<SERVER_IP> 'chmod 700 /usr/local/sbin/iroh-backup-roomd.py; systemctl daemon-reload; systemctl start roomd-backup.service; systemctl enable --now roomd-backup.timer'
 ```
 
 归档包含私钥，不能放到公开目录。恢复时先停止 roomd，将归档解到独立目录，
