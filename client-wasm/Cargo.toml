@@ -52,7 +52,9 @@ wasm = [
 # 原生验证客户端：--no-default-features --features cli
 #
 # 带上 sqlite —— 历史存储用它（只在原生侧；wasm 端不存历史，见 room.rs 的 HistoryStore）
-cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "dep:rusqlite"]
+# tokio/signal：agent serve（行协议常驻）要处理 SIGTERM/SIGINT 的优雅退出。
+# 它需要的 signal-hook-registry 早已在 Cargo.lock 里（间接依赖），所以 --locked 不受影响。
+cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "tokio/signal", "dep:rusqlite"]
 
 [dependencies]
 anyhow = "1"
@@ -101,3 +103,4 @@ iroh-gossip = { path = "vendor/iroh-gossip" }
 
 [dev-dependencies]
 rand = "0.10"
+serde_json = "1"

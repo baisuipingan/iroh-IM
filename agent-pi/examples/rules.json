@@ -1,0 +1,6 @@
+[
+  { "match": "ping", "reply": "pong" },
+  { "match": "/^hello/i", "reply": "你好，{nick}！我是 {bot}，{room} 房间的常驻成员。" },
+  { "match": "/^who/i", "reply": "我是 {bot}（agent-pi 规则大脑），由 iroh-agent serve 驱动。" },
+  { "match": "/^帮忙/i", "reply": "收到你的请求：{text}。这只是一个规则大脑的演示回复。" }
+]

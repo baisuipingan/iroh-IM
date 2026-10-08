@@ -45,6 +45,19 @@ description_en: >-
 
 ## 一、安装
 
+> **给别人装这个 Skill 本身**（让另一个 Agent 获得"会用 iroh-agent"的知识）：
+> ```bash
+> npx skills add baisuipingan/iroh-IM --skill iroh-agent
+> ```
+> 支持 Claude Code / Codex / Cursor / OpenCode 等 70+ 目标；
+> 加 `-g` 装到用户目录、`-a <agent>` 指定目标、`-y` 免交互。
+> 也可以只取这一个目录（仓库很大，别整仓 clone）：
+> ```bash
+> git clone --depth 1 --filter=blob:none --sparse https://github.com/baisuipingan/iroh-IM
+> cd iroh-IM && git sparse-checkout set skills/iroh-agent
+> ```
+> 下面讲的是**装 CLI 二进制**，跟装 Skill 本身是两件事。
+
 **先看平台**：有预编译产物的只有这 6 种组合（Release `agent-v1.0.0` 已发布，
 安装脚本会从 `releases/latest/download` 取，不需要你手动指定版本）。
 不在表里（如 32 位 Windows、FreeBSD、musl 静态链接）就别试安装脚本，直接走源码构建。

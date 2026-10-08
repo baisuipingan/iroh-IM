@@ -1,0 +1,18 @@
+{
+  "name": "iroh-agent-pi",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "pi / TS agent 接入 iroh 聊天室的适配器：spawn iroh-agent serve，走 JSON Lines 行协议",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/cli.ts",
+    "example": "node src/cli.ts --room lobby --nick 演示助手 --brain rule --prefix '!'",
+    "pi": "node src/cli.ts --room lobby --nick 小助手 --brain pi-sdk"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.83.0"
+  }
+}

@@ -1,0 +1,25 @@
+{"agent":"<agent>","chatProtocol":"v4","endpointId":"<id>","nickname":"录音机","relay":"<relay>","type":"hello","v":1}
+{"error":{"code":"badRequest","message":"before 游标格式应为 \"<ts>:<id>\""},"id":"11","ok":false,"type":"reply","v":1}
+{"error":{"code":"badRequest","message":"不是合法 JSON：expected value at line 1 column 1"},"id":null,"ok":false,"type":"reply","v":1}
+{"error":{"code":"badRequest","message":"命令行超过 1 MiB 上限"},"id":null,"ok":false,"type":"reply","v":1}
+{"error":{"code":"badRequest","message":"缺少 fileId"},"id":"14","ok":false,"type":"reply","v":1}
+{"error":{"code":"badRequest","message":"缺少 id"},"id":null,"ok":false,"type":"reply","v":1}
+{"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"4","ok":false,"type":"reply","v":1}
+{"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"5","ok":false,"type":"reply","v":1}
+{"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"6","ok":false,"type":"reply","v":1}
+{"error":{"code":"tooLarge","message":"文本 33792 字节，超过上限 32768"},"id":"9","ok":false,"type":"reply","v":1}
+{"error":{"code":"unsupportedCmd","message":"未知命令 nope"},"id":"c1","ok":false,"type":"reply","v":1}
+{"error":{"code":"unsupportedVersion","message":"仅支持 v1，收到 v99"},"id":"v1","ok":false,"type":"reply","v":1}
+{"event":{"peers":[],"room":"golden-room","type":"presence"},"seq":0,"type":"event","v":1}
+{"event":{"reason":"golden","type":"bye"},"seq":0,"type":"event","v":1}
+{"event":{"room":"golden-room","type":"joined"},"seq":0,"type":"event","v":1}
+{"id":"10","ok":true,"type":"reply","v":1,"value":{"messages":[],"room":"golden-room","snapshot":null}}
+{"id":"12","ok":true,"type":"reply","v":1,"value":{}}
+{"id":"13","ok":true,"type":"reply","v":1,"value":{"files":[]}}
+{"id":"15","ok":true,"type":"reply","v":1,"value":{}}
+{"id":"16","ok":true,"type":"reply","v":1,"value":{}}
+{"id":"17","ok":true,"type":"reply","v":1,"value":{}}
+{"id":"2","ok":true,"type":"reply","v":1,"value":{"ts":0}}
+{"id":"3","ok":true,"type":"reply","v":1,"value":{"endpointId":"<id>","files":[],"peers":[],"relays":"<relays>","room":null,"uptimeMs":0}}
+{"id":"7","ok":true,"type":"reply","v":1,"value":{"room":"golden-room"}}
+{"id":"8","ok":true,"type":"reply","v":1,"value":{"id":"<msgid>","ts":0}}

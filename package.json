@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "python3 scripts/dev-serve.py 8099",
-    "lint": "biome lint frontend",
+    "lint": "biome lint frontend agent-pi",
     "test": "node --test scripts/test-frontend.mjs && python3 scripts/test-backup-roomd.py",
     "test:e2e": "bash scripts/e2e/run.sh",
     "test:polish": "node scripts/e2e/production-polish.mjs && node scripts/e2e/composer-resize.mjs && node scripts/e2e/redesign-sync.mjs && node scripts/e2e/diagnostic-probe.mjs",

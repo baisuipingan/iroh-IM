@@ -70,6 +70,7 @@ iroh-agent say   --room X "构建完成"        # 发一句话就退
 iroh-agent send  --room X --file Y          # 发布文件 → 等到 1 人接收完成 → 退
 iroh-agent send  --room X --file Y --expect 3 --timeout 3600
 iroh-agent watch --room X                  # 常驻，交互式
+iroh-agent serve [--room X] [--nick 名字]  # 常驻，JSON Lines 行协议（给程序/LLM 用）
 ```
 
 `watch` 进房后：
@@ -77,6 +78,11 @@ iroh-agent watch --room X                  # 常驻，交互式
 - 直接敲文字回车 = 发消息
 - `send /path/to/file` 回车 = 发文件
 - `quit` 退出
+
+`serve` 是给程序用的：stdin 收命令、stdout 出事件，全部 JSON Lines；日志在 stderr，
+**不会混进协议流**。`--room` 可省略（等客户端的 `join` 命令）。协议、错误码与
+supervisor 约定见 [`agent-daemon-protocol.md`](agent-daemon-protocol.md) ——
+典型用途是让 TS/LLM 的 agent 以普通成员身份常驻房间（收到消息 → 进模型 → 用 `say` 回复）。
 
 ## ★ 多接收者语义（最容易误解的地方）
 

@@ -18,6 +18,42 @@
 浏览器版是 **relay-only**（不能打洞），所以中继是必需品；
 roomd 让"人不在也能看到历史"成立 —— 中继无状态，一转手就忘。
 
+## 装成 Agent Skill（让别的 Agent 会用 `iroh-agent`）
+
+`skills/iroh-agent/` 是一个标准 Agent Skill：任何支持 skills 的 Agent 装上它，
+就知道**何时**该用 `iroh-agent`、怎么装 CLI、命令有哪些、以及最容易误解的
+多接收者语义。**Skill 本身不含二进制**（30 KB 纯文本），
+安装脚本会按平台从 GitHub Release 取对应产物并校验 sha256。
+
+```bash
+# 方式一：skills CLI（推荐，一条命令，支持 Claude Code / Codex / Cursor / OpenCode 等 70+）
+npx skills add baisuipingan/iroh-IM --skill iroh-agent
+npx skills add baisuipingan/iroh-IM --skill iroh-agent -g -a claude-code -y   # 全局 + 免交互
+
+# 方式二：只取这一个目录（仓库很大，别整仓 clone）
+git clone --depth 1 --filter=blob:none --sparse https://github.com/baisuipingan/iroh-IM
+cd iroh-IM && git sparse-checkout set skills/iroh-agent
+cp -R skills/iroh-agent ~/.your-agent/skills/
+
+# 方式三：手工（三个文件）
+curl -sSL --create-dirs \
+  -o ~/.claude/skills/iroh-agent/SKILL.md \
+  https://raw.githubusercontent.com/baisuipingan/iroh-IM/main/skills/iroh-agent/SKILL.md
+# scripts/install.{sh,ps1} 同理
+```
+
+装完 Skill 只是"Agent 知道该怎么做"；真正装上 CLI 还要跑它自带的安装脚本：
+
+```bash
+bash ~/.claude/skills/iroh-agent/scripts/install.sh      # macOS / Linux
+# 或一行式（等价，不需要先装 Skill）：
+bash -c "$(curl -sSL https://get.editor.vip/iroh/agent-install.sh)"
+iroh-agent whoami                                        # 验证（会真的连中继）
+```
+
+预编译产物覆盖 6 个平台（macOS/Linux/Windows × arm64/amd64），
+发新版：推 `agent-v*` tag 即可（见 [`docs/agent-cli.md`](docs/agent-cli.md)）。
+
 ## 快速开始（本地）
 
 ```bash
@@ -121,8 +157,9 @@ frontend/
 | [`docs/README.md`](docs/README.md) | **文档总索引** —— 按主题分组，并标明哪份是权威 |
 | [`docs/deploy.md`](docs/deploy.md) | **部署与变更**（先看这个） |
 | [`docs/agent-cli.md`](docs/agent-cli.md) | **无头命令行成员** `iroh-agent`：让没有浏览器/Node 的机器（CI、agent）也能进聊天室发文字、发文件 |
-| [`skills/iroh-agent/`](skills/iroh-agent/) | **Agent Skill**：教 Agent 何时与如何使用 `iroh-agent`（含安装脚本，随 Skill 分发） |
-| [`deploy/roomd/README.md`](deploy/roomd/README.md) | 常驻节点：部署细节、环境变量、容量上限、历史访问边界 |
+| [`docs/agent-daemon-protocol.md`](docs/agent-daemon-protocol.md) | **Agent daemon 行协议**：给 TS/LLM 侧用的 `iroh-agent serve` 命令/事件 schema、RoomEvent 映射表、错误码与 supervisor 约定 |
+| [`agent-pi/README.md`](agent-pi/README.md) | **TS/pi Agent 适配器**：把聊天室接给 LLM 大脑（规则 / 子进程 / pi SDK 三种接法；spawn `serve` 走行协议） |
+| [`skills/iroh-agent/`](skills/iroh-agent/) | **Agent Skill**：教 Agent 何时与如何使用 `iroh-agent`（含安装脚本，随 Skill 分发） || [`deploy/roomd/README.md`](deploy/roomd/README.md) | 常驻节点：部署细节、环境变量、容量上限、历史访问边界 |
 | [`deploy/relay/README.md`](deploy/relay/README.md) · [`docs/relay-deploy-minimal.md`](docs/relay-deploy-minimal.md) | 中继部署 |
 | [`deploy/install/README.md`](deploy/install/README.md) | 中继一键安装脚本 |
 | [`scripts/e2e/README.md`](scripts/e2e/README.md) | 浏览器回归：用例清单 + 前置 + 已知坑 |

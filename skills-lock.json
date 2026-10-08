@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "dg-piagent": {
+      "source": "buchidonggua/dg-ai-notes",
+      "sourceType": "github",
+      "skillPath": "skills/dg-piagent/SKILL.md",
+      "computedHash": "cde664fb97d662ce24608df8af9ff34f0b038558389f780a159b548b924d963a"
+    }
+  }
+}
