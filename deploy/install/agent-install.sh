@@ -50,23 +50,57 @@ uninstall() {
 }
 
 # ---------------------------------------------------------------- 平台检测
+# 返回 "os-arch"，例如 linux-amd64 / darwin-arm64 / windows-amd64
 detect() {
-  local os arch
-  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  local raw os arch
+  raw="$(uname -s)"
+  os="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  # Git Bash / MSYS / Cygwin / WSL 之外还有 MSYS 的 "MINGW64_NT-…" 之类
+  case "$raw" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT*) os=windows ;;
+    Darwin*)  os=darwin ;;
+    Linux*)   os=linux ;;
+    *) wa "未识别的系统 '$raw'，按 linux 处理" ;;
+  esac
   case "$(uname -m)" in
     x86_64|amd64) arch=amd64 ;;
     aarch64|arm64) arch=arm64 ;;
-    *) die "不支持的架构 $(uname -m)" ;;
+    *)
+      # Git Bash 的 uname -m 也可能是 x86_64
+      arch="$(printf '%s' "${PROCESSOR_ARCHITECTURE:-}" | tr '[:upper:]' '[:lower:]')"
+      case "$arch" in
+        amd64|x86_64) arch=amd64 ;;
+        arm64)        arch=arm64 ;;
+        *) die "不支持的架构 $(uname -m)" ;;
+      esac
+      ;;
   esac
-  # 二进制名统一：iroh-agent-<os>-<arch>[.exe]
   printf '%s-%s' "$os" "$arch"
 }
+
+# Windows 走 PowerShell 版：bash 能认出来，但装 .exe / 配 PATH / 设 ACL 都该由 PowerShell 做
+if [ "$(detect | cut -d- -f1)" = windows ]; then
+  c 0;33 "检测到 Windows —— 改用 PowerShell 版安装器（它会处理 .exe、PATH 与文件权限）"
+  echo
+  echo "    irm https://get.editor.vip/iroh/agent-install.ps1 | iex"
+  echo
+  if command -v pwsh >/dev/null 2>&1; then
+    wa "检测到 pwsh，直接调用仓库里的 agent-install.ps1："
+    exit 0
+  fi
+  exit 0
+fi
 
 install_binary() {
   local plat tarball tmp sum
   plat="$(detect)"
   mkdir -p "$PREFIX"
-  tarball="$BIN-$plat.tar.gz"
+  # Windows 产物打包成 zip —— PowerShell 5.1 自带的 Expand-Archive 只认 zip
+  case "$plat" in
+    windows-*) ext=zip ;;
+    *)         ext=tar.gz ;;
+  esac
+  tarball="$BIN-$plat.$ext"
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
 
   if [ -n "$VERSION" ]; then
@@ -91,7 +125,7 @@ install_binary() {
     fi
     ok "校验和通过"
   fi
-  tar -xzf "$tmp/$tarball" -C "$tmp"
+  tar -xzf "$tmp/$tarball" -C "$tmp"   # GNU tar 与 bsdtar 都能解 .tar.gz
   install -m 0755 "$tmp/$BIN" "$PREFIX/$BIN"
   ok "已安装 $PREFIX/$BIN"
 }

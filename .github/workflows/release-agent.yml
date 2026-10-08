@@ -1,0 +1,157 @@
+name: release-agent
+
+# ============================================================================
+#  iroh-agent 多平台产物：构建 → 打包 → 上传到 Release
+#
+#  为什么要这个：iroh-agent 是**静态二进制**（只用 libc/libm/libgcc），
+#  而 Skill 与一键安装脚本都是「按平台下载对应产物」。没有这一步，
+#  下载就没东西可下 —— 所以**发布 Release 是安装链路的一环**，不是可选项。
+#
+#  触发：
+#   - 打 tag：refs/tags/agent-v*
+#   - 手动：workflow_dispatch（不传 tag 时只构建、不发布，方便先验证矩阵）
+#
+#  产物命名（**三处必须一致**）：
+#   skills/iroh-agent/scripts/install.{sh,ps1}
+#   deploy/install/agent-install.{sh,ps1}
+#   本文件的 include
+#     iroh-agent-<os>-<arch>.tar.gz     POSIX（macOS / Linux）
+#     iroh-agent-windows-<arch>.zip      Windows（PowerShell 5.1 的 Expand-Archive 只认 zip）
+# ============================================================================
+
+on:
+  push:
+    tags: ['agent-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- macOS ----
+          - { os: macos-14, target: aarch64-apple-darwin, osname: darwin, arch: arm64, ext: tar.gz }
+          - { os: macos-13, target: x86_64-apple-darwin,  osname: darwin, arch: amd64, ext: tar.gz }
+          # ---- Linux ----
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, osname: linux, arch: amd64, ext: tar.gz, cross: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, osname: linux, arch: arm64, ext: tar.gz, cross: true }
+          # ---- Windows ----
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, osname: windows, arch: amd64, ext: zip }
+          # Windows arm64：没有原生 runner，用 cargo-xwin 在 ubuntu 上交叉编
+          # （它会自动下载 CRT/SDK）。这是矩阵里唯一"非原生"的一项，失败不影响其它平台。
+          - { os: ubuntu-latest, target: aarch64-pc-windows-msvc, osname: windows, arch: arm64, ext: zip, xwin: true }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo 的版本来自仓库工具链；rustup 已在 runner 上自带
+      - name: 装 Rust（${{ matrix.target }}）
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Linux arm64 交叉工具链
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          cat >> $GITHUB_WORKSPACE/.cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          rustflags = ["-C", "target-feature=+crt-static"]
+          EOF
+
+      - name: cargo-xwin（Windows 交叉编）
+        if: matrix.xwin
+        run: cargo install cargo-xwin --locked
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: agent-${{ matrix.target }}
+
+      - name: 取依赖（一次性；之后用 --offline 构建）
+        working-directory: client-wasm
+        run: cargo fetch --locked
+
+      # --offline 是在证明"这份源码闭着眼也能编出来"（依赖全在缓存里）。
+      # ⚠️ 仓库里有 [patch.crates-io] iroh-gossip = { path = "vendor/iroh-gossip" }，
+      #    所以 vendor/ 必须随仓库提交（它是被跟踪的）。
+      - name: 构建（${{ matrix.target }}）
+        working-directory: client-wasm
+        run: cargo build --release --offline --locked --no-default-features --features cli --bin agent
+
+      - name: 打包 + 校验和
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cd client-wasm/target/${{ matrix.target }}/release
+          name=agent
+          case "${{ matrix.ext }}" in
+            zip) cp "$name.exe" ../../../../out/ ;;
+            *)   cp "$name"      ../../../../out/ ;;
+          esac
+          cd out
+          asset="$name-${{ matrix.osname }}-${{ matrix.arch }}.${{ matrix.ext }}"
+          if [ "${{ matrix.ext }}" = zip ]; then
+            zip -q -j "$asset" "$name.exe"
+            rm -f "$name.exe"
+          else
+            tar -czf "$asset" "$name"
+          fi
+          # 校验文件里只有一个可执行文件，且它真的能跑（Linux 同架构可直接 --version）
+          case "${{ matrix.ext }}" in
+            zip) unzip -l "$asset" | head -5 ;;
+            *)    tar -tzf "$asset" ;;
+          esac
+          # macOS/Linux 同架构顺手验一下二进制能起来；交叉产物只能验格式
+          if [ "${{ matrix.osname }}" != windows ]; then
+            case "${{ matrix.target }}" in
+              x86_64-unknown-linux-gnu|aarch64-apple-darwin|x86_64-apple-darwin)
+                tar -xzf "$asset" && ./"$name" --help >/dev/null && echo "  ✅ 二进制可执行"
+                rm -f "$name" ;;
+            esac
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "$asset.sha256"
+          else
+            shasum -a 256 "$asset" | awk '{print $1}' > /dev/null
+            (cd out && shasum -a 256 "$asset" > "$asset.sha256")
+          fi
+          cat "$asset.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iroh-agent-${{ matrix.osname }}-${{ matrix.arch }}
+          path: client-wasm/out/*
+          if-no-files-found: error
+
+  publish:
+    name: 上传到 Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 组装 Release 附件
+        run: |
+          set -euo pipefail
+          cd dist
+          # 合并各平台算出的 .sha256
+          cat ./*.sha256 > SHA256SUMS.txt
+          rm -f ./*.sha256
+          ls -la
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/iroh-agent-*
+            dist/SHA256SUMS.txt
+          generate_release_notes: true

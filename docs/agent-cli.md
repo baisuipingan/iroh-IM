@@ -100,3 +100,75 @@ AGENT_SSH_PASSWORD=… python3 scripts/e2e/agent-e2e.py
 ```
 
 **浏览器侧零改动** —— 接收流程本来就与「发送方是不是浏览器」无关。
+
+## Agent Skill（教 Agent 怎么用，省得每次重复指导）
+
+[`skills/iroh-agent/`](../skills/iroh-agent) 是一个可直接分发的 Skill：任何 Agent 读到它
+就知道什么时候该用这个工具、怎么装、命令有哪些、以及**最容易误解的多接收者语义**。
+
+```
+skills/iroh-agent/
+├── SKILL.md            # 元数据 + 触发条件 + 安装配置 + 命令 + 场景 + 排障 + 注意事项
+└── scripts/
+    ├── install.sh      # macOS / Linux，自包含下载 + sha256 校验
+    └── install.ps1     # Windows，PowerShell 5.1 可用
+```
+
+装到本机让 Agent 自动发现：
+
+```bash
+cp -R skills/iroh-agent ~/.workbuddy/skills/      # 或你的 Agent 的 skills 目录
+```
+
+**Skill 里不携带二进制**，只带下载逻辑 —— 理由见下面「为什么不把二进制塞进 Skill」。
+
+## 二进制分发
+
+产物命名（**三处必须一致**：两个安装脚本 + 打包流程）：
+
+| 平台 | 产物 | 压缩格式 | 打包机 |
+|---|---|---|---|
+| macOS (arm64) | `iroh-agent-darwin-arm64.tar.gz` | tar.gz | `macos-14` |
+| macOS (amd64) | `iroh-agent-darwin-amd64.tar.gz` | tar.gz | `macos-13` |
+| Linux (amd64) | `iroh-agent-linux-amd64.tar.gz` | tar.gz | `ubuntu-latest` |
+| Linux (arm64) | `iroh-agent-linux-arm64.tar.gz` | tar.gz | `ubuntu-latest` + `gcc-aarch64-linux-gnu` |
+| Windows (amd64) | `iroh-agent-windows-amd64.zip` | **zip** | `windows-latest` |
+| Windows (arm64) | `iroh-agent-windows-arm64.zip` | **zip** | `ubuntu-latest` + `cargo-xwin` |
+
+- **Windows 用 zip 而不是 tar.gz**：PowerShell 5.1 自带的 `Expand-Archive` 只支持 zip。
+- 不做 32 位 Windows（`x86_64-pc-windows-gnu` 的 32 位变体在 iroh 的 QUIC 栈上没验证过）。
+- 打包与上传：`.github/workflows/release-agent.yml`，打 `agent-v*` tag 触发，
+  也支持手动跑（只构建不发布，方便先验证矩阵）。
+- 每个产物都带 `.sha256`，安装脚本会校验；`SHA256SUMS.txt` 一并放进 Release。
+
+### 平台判断现在是怎么做的
+
+`deploy/install/agent-install.sh` 原本只有 `uname -s` + `uname -m`，也就是**只认 macOS/Linux**。
+本次补上的部分：
+
+| 缺什么 | 补在哪 |
+|---|---|
+| Windows 识别（`MINGW*` / `MSYS*` / `CYGWIN*` / `Windows_NT`） | `agent-install.sh` 的 `detect()`，识别到就分流到 PowerShell 版 |
+| 架构兜底（Git Bash 的 `uname -m` 不可靠时看 `PROCESSOR_ARCHITECTURE`） | 同上 |
+| Windows 安装器本体 | 新增 `deploy/install/agent-install.ps1`（32 位进程跑在 64 位上时用 `PROCESSOR_ARCHITEW6432` 判断） |
+| Windows 产物用 zip | 两个脚本里按平台选后缀 |
+| **Rust 侧的配置目录** | ⚠️ 关键：原来 `home()` 只读 `HOME`/`XDG_CONFIG_HOME`，**Windows 上通常没有 `HOME`**，取不到就退化成 `/root/.config`（在 Windows 上会建到盘根或直接失败）。现在 Windows 走 `%APPDATA%\\iroh-agent`，并用 ACL 限制到当前用户 |
+
+> ⚠️ **诚实说明**：macOS 与 Linux 的产物已实测（端到端通过）。
+> **Windows 与两个交叉编译产物（linux/arm64、windows/arm64）尚未在本机验证过**，
+> 第一次跑 `workflow_dispatch` 才是它们的首次验证。
+
+## 为什么不把二进制直接塞进 Skill
+
+| 维度 | 直接携带二进制 | 脚本按需下载（**采用**） |
+|---|---|---|
+| 体积 | 6 个产物 × ~8.7 MB ≈ **52 MB**（Skill 通常应是纯文本） | Skill 本体 **< 30 KB** |
+| 可维护性 | 每次改代码都要**重新提交几十 MB 二进制**，git 历史迅速膨胀 | 只改文本 |
+| 版本更新 | Skill 可能被缓存/分发各处，**版本容易不一致** | 每次安装拿 `releases/latest`，或用 `AGENT_VERSION` 锁版本 |
+| 离线可用 | ✅ 天然离线 | ❌ 需要能访问 GitHub（或用 `AGENT_RELEASE_BASE` 指内网镜像） |
+| 供应链安全 | 二进制直接进仓库，评审负担重 | 有 `.sha256` 校验，且发布流程可见 |
+
+**结论**：采用**脚本按需下载**。代价是首次安装需要网络 —— 对 CI / 服务器 / agent 主机这类场景，
+这本来就必须有网络（要连中继），所以这个代价实际上是**零**。
+
+真要离线，把 Release 挂到内网镜像后设 `AGENT_RELEASE_BASE` 即可，不必把二进制塞进仓库。

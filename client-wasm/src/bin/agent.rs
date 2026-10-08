@@ -62,18 +62,39 @@ use n0_future::StreamExt;
 
 // ============================================================ 配置 / 身份
 
+/// 配置与身份的存放目录。
+///
+/// ⚠️ Windows 上**不能**用 `HOME`：那里通常没有这个变量，取不到就会掉进
+///   `"/root/.config"` 这种 POSIX 路径 —— 在 Windows 上要么建到盘根、要么直接失败。
+///   所以 Windows 走 `%APPDATA%\\iroh-agent`，POSIX 走 `$XDG_CONFIG_HOME` 或 `$HOME/.config`。
+///   `IROH_AGENT_HOME` 在任何平台都优先（CI 里最常用）。
 fn home() -> PathBuf {
     if let Some(dir) = std::env::var("IROH_AGENT_HOME").ok().filter(|v| !v.is_empty()) {
         return PathBuf::from(dir);
     }
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| {
-            let h = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
-            format!("{h}/.config")
-        });
-    PathBuf::from(base).join("iroh-agent")
+    #[cfg(windows)]
+    {
+        let base = std::env::var("APPDATA")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| {
+                // 没有 APPDATA（极少见的服务环境）时退到用户目录下的 AppData
+                let h = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+                format!("{h}\\AppData\\Roaming")
+            });
+        PathBuf::from(base).join("iroh-agent")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| {
+                let h = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+                format!("{h}/.config")
+            });
+        PathBuf::from(base).join("iroh-agent")
+    }
 }
 
 fn env_opt(name: &str) -> Option<String> {
