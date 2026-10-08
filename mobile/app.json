@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "iroh 聊天室",
+    "slug": "iroh-chat-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "irohchat",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "android": {
+      "package": "vip.editor.irohchat",
+      "edgeToEdgeEnabled": true
+    },
+    "ios": {
+      "bundleIdentifier": "vip.editor.irohchat",
+      "supportsTablet": true
+    }
+  }
+}

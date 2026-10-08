@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+dist/
+*.log
+
+# 原生工程是 `expo prebuild` 生成的产物，不入库
+android/
+ios/
+
+.DS_Store
