@@ -39,13 +39,15 @@ jobs:
           - { os: macos-14, target: aarch64-apple-darwin, osname: darwin, arch: arm64, ext: tar.gz }
           - { os: macos-13, target: x86_64-apple-darwin,  osname: darwin, arch: amd64, ext: tar.gz }
           # ---- Linux ----
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, osname: linux, arch: amd64, ext: tar.gz, cross: true }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, osname: linux, arch: amd64, ext: tar.gz }
           - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, osname: linux, arch: arm64, ext: tar.gz, cross: true }
           # ---- Windows ----
           - { os: windows-latest, target: x86_64-pc-windows-msvc, osname: windows, arch: amd64, ext: zip }
-          # Windows arm64：没有原生 runner，用 cargo-xwin 在 ubuntu 上交叉编
-          # （它会自动下载 CRT/SDK）。这是矩阵里唯一"非原生"的一项，失败不影响其它平台。
-          - { os: ubuntu-latest, target: aarch64-pc-windows-msvc, osname: windows, arch: arm64, ext: zip, xwin: true }
+          # ★ Windows arm64 用**原生 arm64 runner**（`windows-11-arm`，公开仓库 GA 免费）。
+          #   之前是在 ubuntu 上用 cargo-xwin 交叉编 —— 实测**在 ring（TLS 的 C 代码）
+          #   上编译失败**：cc-rs 调 clang 编 curve25519 时挂了。
+          #   原生 runner 直接绕开整个交叉编译工具链问题，而且更快、更可信。
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, osname: windows, arch: arm64, ext: zip }
 
     steps:
       - uses: actions/checkout@v4
@@ -65,10 +67,6 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           rustflags = ["-C", "target-feature=+crt-static"]
           EOF
-
-      - name: cargo-xwin（Windows 交叉编）
-        if: matrix.xwin
-        run: cargo install cargo-xwin --locked
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -96,100 +94,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ matrix.xwin }}" = "true" ]; then
-            # Windows arm64：cargo-xwin 会自己下载 CRT/SDK 并设置链接器
-            cargo xwin build --release --offline --locked \
-              --no-default-features --features cli --bin agent \
-              --target ${{ matrix.target }}
-          else
-            cargo build --release --offline --locked \
-              --no-default-features --features cli --bin agent \
-              --target ${{ matrix.target }}
-          fi
+          cargo build --release --offline --locked \
+            --no-default-features --features cli --bin agent \
+            --target ${{ matrix.target }}
 
       - name: 打包 + 校验和
         shell: bash
-        # 全程用**绝对路径**：相对路径要靠数 `../` 的层数，而这个脚本里
-        # 既 cd 进 target 目录又 cd 回来，改一行层数就错位 —— 这里错过一次，
-        # 表现是"打包成功但上传时找不到文件"。
-        run: |
-          set -euo pipefail
-          NAME=iroh-agent
-          OUT="$GITHUB_WORKSPACE/client-wasm/out"
-          mkdir -p "$OUT"
-          REL="$GITHUB_WORKSPACE/client-wasm/target/${{ matrix.target }}/release"
-
-          # ★ 架构校验：这是"静默出错"缺陷的守卫。
-          #   不传 --target 时产物会落在 target/release/ 且是 runner 自己的架构。
-          #   只检查文件存在还不够 —— 要**读出真实的架构**再比对，否则
-          #   发布出去的包能过校验和、能在 runner 上跑，唯独在目标机器上跑不起来。
-          if [ ! -f "$REL/agent" ] && [ ! -f "$REL/agent.exe" ]; then
-            echo "❌ $REL 下没有产物 —— 构建大概率没带 --target（产物会落在 target/release/）" >&2
-            echo "   target/ 下现有目录：" >&2
-            ls -1 "$GITHUB_WORKSPACE/client-wasm/target" >&2 || true
-            exit 1
-          fi
-
-          BINPATH="$REL/agent"; [ -f "$BINPATH" ] || BINPATH="$REL/agent.exe"
-          file "$BINPATH" || true
-          case "${{ matrix.osname }}-${{ matrix.arch }}" in
-            darwin-arm64) WANT='arm64' ;;
-            darwin-amd64) WANT='x86_64' ;;
-            linux-arm64)  WANT='ARM aarch64|aarch64' ;;
-            linux-amd64)  WANT='x86-64|x86_64' ;;
-            # Windows 的交叉产物在 file(1) 眼里可能是 PE32+，只做宽松断言
-            windows-*)    WANT='PE32' ;;
-          esac
-          if [ -n "${WANT:-}" ] && ! file "$BINPATH" | grep -Eq "$WANT"; then
-            echo "❌ 产物架构与目标不符：期望匹配 /$WANT/，实际 $(file -b "$BINPATH")" >&2
-            exit 1
-          fi
-          echo "  ✅ 架构校验通过（期望匹配 /$WANT/）"
-
-          # ⚠️ cargo --bin agent 产出的文件名是 `agent`，但**四个安装脚本全都按
-          #    `iroh-agent` 去找**（$BIN=iroh-agent，asset=iroh-agent-<os>-<arch>.<ext>，
-          #    解包后 install "$tmp/$BIN"）。这里不先改名就会：下载 404，
-          #    或解包后找不到文件。
-          case "${{ matrix.ext }}" in
-            zip) EXE="$NAME.exe"; cp "$REL/agent.exe" "$OUT/$EXE" ;;
-            *)   EXE="$NAME";     cp "$REL/agent"     "$OUT/$EXE" ;;
-          esac
-
-          cd "$OUT"
-          ASSET="$NAME-${{ matrix.osname }}-${{ matrix.arch }}.${{ matrix.ext }}"
-          if [ "${{ matrix.ext }}" = zip ]; then
-            zip -q -j "$ASSET" "$EXE"
-          else
-            chmod 755 "$EXE"
-            tar -czf "$ASSET" "$EXE"
-          fi
-          rm -f "$EXE"
-
-          # 先看一眼包里是什么：名字打错要在这里暴露，而不是等用户装不上
-          echo "--- $ASSET 内容 ---"
-          case "${{ matrix.ext }}" in
-            zip) unzip -l "$ASSET" | head -5 ;;
-            *)   tar -tzf "$ASSET" ;;
-          esac
-
-          # ★ 同架构产物顺手验一下真能起来；交叉产物只能验格式
-          if [ "${{ matrix.osname }}" != windows ]; then
-            case "${{ matrix.target }}" in
-              x86_64-unknown-linux-gnu|aarch64-apple-darwin|x86_64-apple-darwin)
-                tar -xzf "$ASSET"
-                ./"$NAME" --help >/dev/null && echo "  ✅ 二进制可执行"
-                rm -f "$NAME" ;;
-            esac
-          fi
-
-          # 校验和：输出格式必须统一成 "<hash>  <file>"，
-          # 因为安装脚本用 `cut -d' ' -f1` / `split '\s+'` 解析。
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$ASSET" > "$ASSET.sha256"
-          else
-            shasum -a 256 "$ASSET" > "$ASSET.sha256"
-          fi
-          cat "$ASSET.sha256"
+        # 逻辑全在 scripts/ci/pack-agent.sh 里 —— 它原本内联在这里，
+        # 但那段脚本里有 heredoc，**缩进稍有不慎就会同时搞坏 YAML 和 heredoc**
+        # （真发生过一次，YAML 报 "could not find expected ':'"），
+        # 而且没法在本地验证。抽成文件后 YAML 只剩一行，且能本地跑。
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: bash scripts/ci/pack-agent.sh "${{ matrix.target }}" "${{ matrix.osname }}" "${{ matrix.arch }}" "${{ matrix.ext }}"
 
       - uses: actions/upload-artifact@v4
         with:
