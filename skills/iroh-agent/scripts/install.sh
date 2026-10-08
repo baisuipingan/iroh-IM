@@ -82,7 +82,10 @@ if ! curl -fsSL --retry 3 -o "$tmp/$ASSET" "$URL"; then
   wa "下载失败（Release 里还没有这个平台的产物？）"
   wa "可以从源码构建（需要 Rust）："
   wa "  git clone https://github.com/$REPO && cd client-wasm"
-  wa "  cargo build --release --offline --locked --no-default-features --features cli --bin agent"
+  # ⚠️ cargo 里的 bin 名字是 `agent`（不是安装后的 iroh-agent）。
+  #    故意不加 --offline —— 那是依赖已在本地缓存时才有用的开关，
+  #    首次构建加了会因为缓存是空的而失败。
+  wa "  cargo build --release --locked --no-default-features --features cli --bin agent"
   wa "  install -m 755 target/release/agent $PREFIX/$BIN"
   exit 1
 fi

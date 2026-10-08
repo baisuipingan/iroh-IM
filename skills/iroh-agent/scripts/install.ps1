@@ -75,7 +75,7 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
   try { Invoke-WebRequest -Uri $url -OutFile "$tmp\$asset" -UseBasicParsing -MaximumRedirection 5 }
   catch {
-    Die "下载失败（Release 里还没有这个平台的产物？）`n  可以从源码构建（需要 Rust）：`n    git clone https://github.com/$Repo; cd client-wasm`n    cargo build --release --offline --locked --no-default-features --features cli --bin agent"
+    Die "下载失败（Release 里还没有这个平台的产物？）`n  可以从源码构建（需要 Rust）：`n    git clone https://github.com/$Repo; cd client-wasm`n    cargo build --release --locked --no-default-features --features cli --bin agent`n    （cargo 里的 bin 名字是 agent，装成 iroh-agent 要改名）"
   }
   try {
     Invoke-WebRequest -Uri "$url.sha256" -OutFile "$tmp\sum" -UseBasicParsing -ErrorAction Stop

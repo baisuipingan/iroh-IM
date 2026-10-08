@@ -81,9 +81,31 @@ jobs:
       # --offline 是在证明"这份源码闭着眼也能编出来"（依赖全在缓存里）。
       # ⚠️ 仓库里有 [patch.crates-io] iroh-gossip = { path = "vendor/iroh-gossip" }，
       #    所以 vendor/ 必须随仓库提交（它是被跟踪的）。
+      #
+      # ⚠️⚠️ `--target` 必须显式传，两个理由都致命：
+      #   1. 不传时产物落在 `target/release/`，而打包步骤按
+      #      `target/<triple>/release/` 找 → 直接找不到文件；
+      #   2. 更要命的是**交叉编译会静默产出错误架构**：linux/arm64 与
+      #      windows/arm64 这两个 job 跑在 x86_64 runner 上，不传 --target
+      #      编出来的就是 x86_64 二进制，被打进 arm64 的包里发布出去。
+      #      这种包能解开、能过校验和，唯独在被安装的机器上跑不起来。
       - name: 构建（${{ matrix.target }}）
         working-directory: client-wasm
-        run: cargo build --release --offline --locked --no-default-features --features cli --bin agent
+        # ⚠️ 必须显式 shell: bash —— windows-latest 的默认 shell 是 PowerShell，
+        #    下面的 `if [ ]` / 多行续行符在那边全都不成立。
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.xwin }}" = "true" ]; then
+            # Windows arm64：cargo-xwin 会自己下载 CRT/SDK 并设置链接器
+            cargo xwin build --release --offline --locked \
+              --no-default-features --features cli --bin agent \
+              --target ${{ matrix.target }}
+          else
+            cargo build --release --offline --locked \
+              --no-default-features --features cli --bin agent \
+              --target ${{ matrix.target }}
+          fi
 
       - name: 打包 + 校验和
         shell: bash
@@ -96,6 +118,33 @@ jobs:
           OUT="$GITHUB_WORKSPACE/client-wasm/out"
           mkdir -p "$OUT"
           REL="$GITHUB_WORKSPACE/client-wasm/target/${{ matrix.target }}/release"
+
+          # ★ 架构校验：这是"静默出错"缺陷的守卫。
+          #   不传 --target 时产物会落在 target/release/ 且是 runner 自己的架构。
+          #   只检查文件存在还不够 —— 要**读出真实的架构**再比对，否则
+          #   发布出去的包能过校验和、能在 runner 上跑，唯独在目标机器上跑不起来。
+          if [ ! -f "$REL/agent" ] && [ ! -f "$REL/agent.exe" ]; then
+            echo "❌ $REL 下没有产物 —— 构建大概率没带 --target（产物会落在 target/release/）" >&2
+            echo "   target/ 下现有目录：" >&2
+            ls -1 "$GITHUB_WORKSPACE/client-wasm/target" >&2 || true
+            exit 1
+          fi
+
+          BINPATH="$REL/agent"; [ -f "$BINPATH" ] || BINPATH="$REL/agent.exe"
+          file "$BINPATH" || true
+          case "${{ matrix.osname }}-${{ matrix.arch }}" in
+            darwin-arm64) WANT='arm64' ;;
+            darwin-amd64) WANT='x86_64' ;;
+            linux-arm64)  WANT='ARM aarch64|aarch64' ;;
+            linux-amd64)  WANT='x86-64|x86_64' ;;
+            # Windows 的交叉产物在 file(1) 眼里可能是 PE32+，只做宽松断言
+            windows-*)    WANT='PE32' ;;
+          esac
+          if [ -n "${WANT:-}" ] && ! file "$BINPATH" | grep -Eq "$WANT"; then
+            echo "❌ 产物架构与目标不符：期望匹配 /$WANT/，实际 $(file -b "$BINPATH")" >&2
+            exit 1
+          fi
+          echo "  ✅ 架构校验通过（期望匹配 /$WANT/）"
 
           # ⚠️ cargo --bin agent 产出的文件名是 `agent`，但**四个安装脚本全都按
           #    `iroh-agent` 去找**（$BIN=iroh-agent，asset=iroh-agent-<os>-<arch>.<ext>，
@@ -123,7 +172,7 @@ jobs:
             *)   tar -tzf "$ASSET" ;;
           esac
 
-          # 同架构产物顺手验一下真能起来；交叉产物只能验格式
+          # ★ 同架构产物顺手验一下真能起来；交叉产物只能验格式
           if [ "${{ matrix.osname }}" != windows ]; then
             case "${{ matrix.target }}" in
               x86_64-unknown-linux-gnu|aarch64-apple-darwin|x86_64-apple-darwin)

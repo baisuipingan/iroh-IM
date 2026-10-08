@@ -121,8 +121,11 @@ install_binary() {
     wa "下载失败（还没发布 Release？）"
     wa "可以在这台机器上直接从源码构建（需要 Rust）："
     wa "  git clone https://github.com/$REPO && cd client-wasm"
-    wa "  cargo build --release --offline --locked --no-default-features --features cli --bin $BIN"
-    wa "  install -m 755 target/release/$BIN $PREFIX/$BIN"
+    # ⚠️ cargo 里的 bin 名字是 `agent`（不是 $BIN 那个安装后的名字），
+    #    `--bin iroh-agent` 会报 "no bin target named iroh-agent"。
+    #    最后一定要改名安装，否则后面所有按 iroh-agent 的调用都找不到命令。
+    wa "  cargo build --release --locked --no-default-features --features cli --bin agent"
+    wa "  install -m 755 target/release/agent $PREFIX/$BIN"
     return 1
   fi
   # 有 .sha256 就校验

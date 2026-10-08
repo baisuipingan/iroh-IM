@@ -25,9 +25,15 @@ GitHub Release 还没发布时，脚本会给出直接源码构建的命令：
 
 ```bash
 git clone https://github.com/baisuipingan/iroh-IM && cd client-wasm
-cargo build --release --offline --locked --no-default-features --features cli --bin agent
+cargo build --release --locked --no-default-features --features cli --bin agent
 install -m 755 target/release/agent /usr/local/bin/iroh-agent
 ```
+
+> ⚠️ **两个容易踩的点**：cargo 里的 bin 名字是 **`agent`**（安装后的名字才是
+> `iroh-agent`，所以最后一行必须改名）；`--features cli` 不能省
+> （`required-features = ["cli"]`，漏了会报 `requires the features: cli`）。
+> 上面**故意没写 `--offline`** —— 它只在依赖已缓存时有意义（CI 里先
+> `cargo fetch --locked`），首次构建加了反而会因为缓存为空而失败。
 
 ## 配置
 

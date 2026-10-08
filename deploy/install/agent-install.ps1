@@ -95,7 +95,7 @@ try {
   try {
     Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -MaximumRedirection 5
   } catch {
-    Die "下载失败（还没发布 Release？）：$($_.Exception.Message)`n  可以直接从源码构建：`n    git clone https://github.com/$Repo; cd client-wasm`n    cargo build --release --offline --locked --no-default-features --features cli --bin $Bin"
+    Die "下载失败（还没发布 Release？）：$($_.Exception.Message)`n  可以直接从源码构建：`n    git clone https://github.com/$Repo; cd client-wasm`n    cargo build --release --locked --no-default-features --features cli --bin agent`n    （cargo 里的 bin 名字是 agent，不是 $Bin）"
   }
 
   # 有 .sha256 就校验（Windows 用 Get-FileHash）

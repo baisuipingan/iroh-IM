@@ -45,6 +45,17 @@ description_en: >-
 
 ## 一、安装
 
+**先看平台**：有预编译产物的只有这 6 种组合。
+不在表里（如 32 位 Windows、FreeBSD、musl 静态链接）就别试安装脚本，直接走源码构建。
+
+| 平台 | 有预编译产物 |
+|---|---|
+| macOS（Apple Silicon / Intel） | ✅ |
+| Linux（x86_64 / arm64） | ✅ |
+| Windows（x64 / arm64） | ✅ |
+| 32 位 Windows | ❌ 未验证，走源码构建 |
+| 其它类 Unix | ❌ 走源码构建 |
+
 Skill 自带安装脚本（推荐，会按平台选产物、校验 sha256）：
 
 ```bash
@@ -61,16 +72,28 @@ bash -c "$(curl -sSL https://get.editor.vip/iroh/agent-install.sh)"   # macOS / 
 irm https://get.editor.vip/iroh/agent-install.ps1 | iex               # Windows
 ```
 
+**不想动配置文件**：这些环境变量可以直接替代（CI 里最省事）——
+`RELAY`、`TOKEN`、`ANCHOR_ID`、`NICK`；安装脚本会写进 `config.json`。
+运行时另有 `IROH_AGENT_*` 系列覆盖（见下面「配置」）。
+
 卸载：同样命令加 `remove`（脚本子命令 / PowerShell 的 `-Action remove`；
 要连身份一起删再加 `CONFIRM=yes` / `-Confirm`）。
 
-> 如果提示「下载失败（还没发布 Release）」，说明 Releases 还没发布产物。
+> 如果提示「下载失败（Release 里还没有这个平台的产物？）」，说明该平台没产物。
 > **改用源码构建**（需要 Rust）：
 > ```bash
 > git clone https://github.com/baisuipingan/iroh-IM && cd client-wasm
-> cargo build --release --offline --locked --no-default-features --features cli --bin agent
+> cargo build --release --locked --no-default-features --features cli --bin agent
 > install -m 755 target/release/agent /usr/local/bin/iroh-agent
 > ```
+> ⚠️ **源码构建产出的文件名是 `agent`**（不是 `iroh-agent`），所以最后那行
+> `install … /usr/local/bin/iroh-agent` 的改名是必须的 —— 后面所有命令都按
+> `iroh-agent` 调用。Cargo 的 `required-features = ["cli"]` 也意味着
+> **漏掉 `--features cli` 会直接报 `requires the features: cli`**。
+>
+> 上面**故意没写 `--offline`**：那是给"依赖已在本地缓存"的场景用的
+> （CI 里先 `cargo fetch --locked` 再 `--offline`）。首次构建直接省掉它即可，
+> 加了反而会因为缓存是空的而失败。
 
 装完确认能用（**这一步会真的连中继**，能顺带验证配置对不对）：
 
