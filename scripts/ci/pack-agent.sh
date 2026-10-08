@@ -40,18 +40,28 @@ PLATFORM="$OSNAME-$ARCH"
 mkdir -p "$OUTDIR"
 
 # ---- 1. 产物必须存在（不存在就是 --target 漏了）----
-if [ ! -f "$REL/agent" ] && [ ! -f "$REL/agent.exe" ]; then
+# ⚠️⚠️ **不要用 `[ -f ... ]` 去"探测"产物叫什么名字** —— 在 Git Bash（MSYS2）里
+#      它会**自动补 `.exe` 后缀**：`[ -f "$REL/agent" ]` 在只有 `agent.exe` 时
+#      也返回真。于是 `-f agent || -f agent.exe` 这种回退根本不会触发，
+#      接着 Python（原生 Windows 进程，不做这个补全）打开 `agent` 直接
+#      FileNotFoundError —— 两个 Windows job 就是这么挂的。
+#      正确做法是**按目标平台直接推导**文件名（cargo 的规则是确定的：
+#      windows 目标产 `agent.exe`，其它产 `agent`），并且用 Python 判存在性。
+if [ "$OSNAME" = windows ]; then
+  BINPATH="$REL/agent.exe"
+else
+  BINPATH="$REL/agent"
+fi
+
+if ! python3 -c "import os, sys; sys.exit(0 if os.path.isfile(sys.argv[1]) else 1)" "$BINPATH"; then
   {
-    echo "❌ $REL 下没有产物 —— 构建大概率没带 --target"
-    echo "   （不带 --target 时产物会落在 target/release/）"
+    echo "❌ 找不到产物：$BINPATH"
+    echo "   构建大概率没带 --target（不带时产物会落在 target/release/）"
     echo "   target/ 下现有目录："
     ls -1 "$WORKSPACE/client-wasm/target" 2>/dev/null || true
   } >&2
   exit 1
 fi
-
-BINPATH="$REL/agent"
-[ -f "$BINPATH" ] || BINPATH="$REL/agent.exe"
 
 # ---- 2. 架构断言（拦"静默装错架构"）----
 python3 "$HERE/check-arch.py" "$BINPATH" "$PLATFORM"
