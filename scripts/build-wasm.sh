@@ -46,7 +46,7 @@ SCP=(scp -p -i "$KEY" -P "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o Server
 echo "==> 检查 $HOST 的构建工具链"
 "${SSH[@]}" 'for tool in /opt/iroh-build/cargo/bin/cargo /opt/iroh-build/cargo/bin/rustc /opt/iroh-build/cargo/bin/wasm-pack; do
   if [ ! -x "$tool" ]; then
-    echo "缺少构建工具: $tool；请先迁移或安装工具链，当前服务器只能运行已有产物。" >&2
+    echo "缺少构建工具: ${tool}；请先迁移或安装工具链，当前服务器只能运行已有产物。" >&2
     exit 1
   fi
 done'
@@ -100,7 +100,7 @@ case "$MODE" in
     exit 0
     ;;
   *)
-    echo "未知模式: $MODE（可选 dev | release | native）" >&2
+    echo "未知模式: ${MODE}（可选 dev | release | native）" >&2
     exit 1
     ;;
 esac

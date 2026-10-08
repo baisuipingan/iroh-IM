@@ -63,7 +63,7 @@ need() {  # need <变量名> <提示> [默认值] [quiet]
     fi
   fi
   [ -z "$val" ] && val="$def"
-  [ -n "$val" ] || er "缺少 $name（非交互运行请用环境变量提供）"
+  [ -n "$val" ] || er "缺少 ${name}（非交互运行请用环境变量提供）"
   eval "$name=\$val"
 }
 
@@ -78,7 +78,7 @@ need DOMAIN "中继域名（已在 Cloudflare 解析到本机，例如 relay-3.e
 RESOLVED=$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1 || true)
 MYPUB=$(curl -s --max-time 8 https://api.ipify.org || true)
 if [ -n "$RESOLVED" ] && [ -n "$MYPUB" ] && [ "$RESOLVED" != "$MYPUB" ]; then
-  wa "域名解析到 $RESOLVED，本机出口 IP 是 $MYPUB —— 不一致，签发会失败"
+  wa "域名解析到 ${RESOLVED}，本机出口 IP 是 $MYPUB —— 不一致，签发会失败"
   read -rp "  仍要继续？[y/N] " a; [ "${a:-n}" = "y" ] || exit 1
 fi
 
@@ -86,7 +86,7 @@ fi
 TOKEN_FILE=/root/.iroh-relay-cf-token
 if [ -z "${CF_TOKEN:-}" ]; then
   if [ -s "$TOKEN_FILE" ]; then
-    ok "使用本机已保存的 Token（$TOKEN_FILE；要更换就删掉它再跑）"
+    ok "使用本机已保存的 Token（${TOKEN_FILE}；要更换就删掉它再跑）"
   else
     c "90" " 证书用 Cloudflare DNS-01 签发（不占任何端口），需要一枚 API Token"
     c "90" " 权限：Zone → DNS → Edit 与 Zone → Zone → Read，范围限定到你的域名"
@@ -181,7 +181,7 @@ fi
 
 if [ -n "${CF_TOKEN:-}" ]; then
   printf '%s' "$CF_TOKEN" > "$TOKEN_FILE"; chmod 600 "$TOKEN_FILE"
-  ok "Token 已保存到 $TOKEN_FILE（供自动续期使用）"
+  ok "Token 已保存到 ${TOKEN_FILE}（供自动续期使用）"
 fi
 
 CERT_SRC="/root/.acme.sh/${DOMAIN}_ecc"
@@ -260,7 +260,7 @@ HZ=$(curl -sS --max-time 10 "https://$DOMAIN:$RELAY_PORT/healthz" 2>&1 || true)
 if echo "$HZ" | grep -q '"status":"ok"'; then
   ok "HTTPS + 证书：$HZ"
 else
-  wa "健康检查没通过：$HZ（DNS 没生效？云朵没关？）"
+  wa "健康检查没通过：${HZ}（DNS 没生效？云朵没关？）"
 fi
 WS=$(curl -sS -i -m 5 -H "Connection: Upgrade" -H "Upgrade: websocket" \
      -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \

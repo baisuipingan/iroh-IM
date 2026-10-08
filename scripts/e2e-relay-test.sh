@@ -27,12 +27,12 @@ echo "监听端中继状态:"
 grep -E "connected=" /tmp/listener.log | tail -2
 
 echo
-echo "--- C1: 指向对端真实所在的中继（$R2）→ 期望 delivered ---"
+echo "--- C1: 指向对端真实所在的中继（${R2}）→ 期望 delivered ---"
 timeout 45 "$BIN" "$R1" --dial "$PEER@$R2" --text "cross-relay hello" 2>&1 \
   | grep -E "结果|失败|connected=" | tail -4
 
 echo
-echo "--- C2: 指向错误的中继（$R1，对端不在那台）→ 期望超时失败 ---"
+echo "--- C2: 指向错误的中继（${R1}，对端不在那台）→ 期望超时失败 ---"
 timeout 45 "$BIN" "$R1" --dial "$PEER@$R1" --text "wrong relay" 2>&1 \
   | grep -E "结果|失败|connected=" | tail -4
 

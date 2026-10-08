@@ -33,6 +33,16 @@ BASE_URL="${AGENT_RELEASE_BASE:-https://github.com/$REPO/releases/latest/downloa
 VERSION="${AGENT_VERSION:-}"
 CONFIRM="${CONFIRM:-}"
 
+# ⚠️ set -u 下**每一个**被读的变量都必须先有默认值。
+# 漏一个就像踩陷阱：`[ -n "$ANCHOR_RELAY" ]` 在调用方没传这个变量时
+# 会报 "ANCHOR_RELAY: unbound variable" 并**直接终止脚本** —— 配置根本没写出来，
+# 但用户已经看到"已安装二进制"，很容易以为装完了。
+RELAY="${RELAY:-https://iroh1.editor.vip:15443}"
+ANCHOR_RELAY="${ANCHOR_RELAY:-}"
+TOKEN="${TOKEN:-}"
+ANCHOR_ID="${ANCHOR_ID:-}"
+NICK="${NICK:-命令行成员}"
+
 c()  { printf '\033[%sm%s\033[0m\n' "$1" "$2"; }
 ok()  { c '0;32' "  ✅ $*"; }
 wa()  { c '0;33' "  ⚠️  $*"; }
@@ -44,7 +54,7 @@ uninstall() {
   c '0;33' "已删除二进制 $PREFIX/$BIN"
   if [ -d "$DIR" ]; then
     if [ -n "$CONFIRM" ]; then rm -rf "$DIR"; c '0;33' "已删除配置与身份 $DIR"
-    else wa "保留了 $DIR（含身份密钥），要一起删：CONFIRM=yes $0 remove"; fi
+    else wa "保留了 ${DIR}（含身份密钥），要一起删：CONFIRM=yes $0 remove"; fi
   fi
   exit 0
 }
@@ -80,7 +90,7 @@ detect() {
 
 # Windows 走 PowerShell 版：bash 能认出来，但装 .exe / 配 PATH / 设 ACL 都该由 PowerShell 做
 if [ "$(detect | cut -d- -f1)" = windows ]; then
-  c 0;33 "检测到 Windows —— 改用 PowerShell 版安装器（它会处理 .exe、PATH 与文件权限）"
+  c '0;33' "检测到 Windows —— 改用 PowerShell 版安装器（它会处理 .exe、PATH 与文件权限）"
   echo
   echo "    irm https://get.editor.vip/iroh/agent-install.ps1 | iex"
   echo

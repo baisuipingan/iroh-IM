@@ -203,7 +203,10 @@ iroh-agent send --room 通知 --file out.bin
 | 现象 | 原因与处理 |
 |---|---|
 | `iroh-agent: command not found` | 装到了 `$PREFIX`（默认 `/usr/local/bin`）但不在 PATH。Linux/macOS：把 `/usr/local/bin` 加进 PATH；Windows：把 `%LOCALAPPDATA%\Programs` 加进 PATH |
-| `未设置 IROH_BUILD_HOST` 类报错 | 装 Release 时没找到二进制，改用上面那段源码构建命令 |
+| 脚本报 `: unbound variable` 且行号在写配置之前 | 安装脚本在 `set -u` 下读了没传的环境变量。**已经装好二进制但配置没写出来** —— 别以为装完了。检查是否传了 `ANCHOR_ID` / `TOKEN`；脚本本身应该给每个变量兜底默认值 |
+| `下载失败（Release 里还没有这个平台的产物？）` | ① Release 还没发布 → 改用下面那段源码构建；② 平台不在矩阵里（比如 32 位 Windows）；③ 自建镜像地址写错 |
+| `校验和不匹配` | 产物损坏或被篡改。**不要**用"跳过校验"的方式绕过（有些脚本拿不到 `.sha256` 时会静默跳过 —— 那说明发布流程漏传了逐产物校验和，该修发布流程）。重下一次，仍失败就报错 |
+| 提示「没拿到 .sha256，跳过校验」 | Release 里缺 `<产物名>.sha256`。安装脚本是按**逐产物**的 URL 取的，所以光有一份合并的 `SHA256SUMS.txt` 不够 |
 | 进房超时 / `进房失败（可能没有锚点）` | `anchor.id` 没配或填错。它是 roomd 启动时打印的那串 64 位 hex |
 | 连不上中继 / `连接中继超时` | `relay_token` 缺失或不匹配；`relays` 里的地址/端口不通。先用 `iroh-agent whoami` 单独验连通性 |
 | 房间里有卡片但点「接收」没反应 | ① CLI 已经退出了（`--expect` 已满足）→ 改用 `watch` 或调大 `--expect`；② 接收端不是 Chrome/Edge；③ `available:false`（发送端内存里这个文件被淘汰） |

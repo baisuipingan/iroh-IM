@@ -158,6 +158,43 @@ cp -R skills/iroh-agent ~/.workbuddy/skills/      # 或你的 Agent 的 skills �
 > **Windows 与两个交叉编译产物（linux/arm64、windows/arm64）尚未在本机验证过**，
 > 第一次跑 `workflow_dispatch` 才是它们的首次验证。
 
+### 首次真实演练暴露的缺陷（已修，附验证方式）
+
+发布链路是**第一次被完整走通**（此前只到"能编译"），一跑就暴露了 8 个缺陷。
+它们全都属于同一类：**平时不报错、只在特定分支上失效**，所以光看代码很难发现。
+
+| # | 缺陷 | 为什么致命 | 现状 |
+|---|---|---|---|
+| 1 | 打包出的产物名是 `agent-<os>-<arch>.*`，而四个安装脚本都按 `iroh-agent-…` 去取 | 下载必然 **404** | 打包前显式改名，并打印包内容核对 |
+| 2 | 压缩包里的可执行文件叫 `agent`，安装脚本 `install "$tmp/iroh-agent"` | 解包后**找不到文件** | 同上 |
+| 3 | `c 0;33 "…"` 未加引号 | `;` 被当命令分隔符 → `$2: unbound variable`，**脚本在下载前就死** | 改成 `c '0;33' "…"` |
+| 4 | `set -u` 下 `$ANCHOR_RELAY` / `$TOKEN` / `$ANCHOR_ID` / `$NICK` 从未声明 | 报 unbound variable **直接终止**；但用户已看到"已安装二进制"，**以为装完了其实没写配置** | 全部在顶部给默认值 |
+| 5 | 打包写 `$GITHUB_WORKSPACE/out`，上传读 `client-wasm/out/*` | `if-no-files-found: error` → **整个 job 失败** | 全程绝对路径，两处指向同一目录 |
+| 6 | publish 步骤 `rm -f ./*.sha256` | 安装脚本按 `<asset>.sha256` 取 → 404 → 静默退化成"跳过校验"，**供应链校验从未生效** | 不再删除，只额外生成 `SHA256SUMS.txt` |
+| 7 | `$have）` —— 全角括号紧跟变量名 | bash 把多字节字符的**首字节吞进变量名** → `set -u` 报 `have<乱码>: unbound variable`。**只在"校验和不匹配"时触发**，也就是唯一需要它工作的安全分支 | 改成 `${have}`；全仓扫出 12 处同类（`deploy/install/install.sh` 5、`build-wasm.sh` 2、`e2e-relay-test.sh` 2 等）一并修掉 |
+| 8 | 校验和比对本身 | 见 #7 | 现在能正确拦截并给出期望/实际两个哈希 |
+
+**第 7 条值得单独记一笔**：现象是安装被拦住了（安全行为对），但报的是
+`have?: unbound variable` 这种与校验毫无关系的错，很容易被当成"脚本坏了"而去放宽校验。
+真正的原因是 bash 的变量名解析规则 —— `$have）` 里的 `）` 是 3 字节，
+bash 会把**第一个字节**当作变量名的一部分。修法永远是用 `${have}` 定界。
+
+**验证方式**（可复现，不需要真实 Release）：本地起一个静态服务冒充
+`releases/latest/download`，把上面打包脚本的产物丢进去，然后：
+
+```bash
+# 正常路径：应打印「校验和通过」并写出 config.json
+AGENT_RELEASE_BASE=http://127.0.0.1:8923 AGENT_PREFIX=/tmp/t/bin AGENT_DIR=/tmp/t/cfg \
+  ANCHOR_ID=<64位hex> TOKEN=t bash skills/iroh-agent/scripts/install.sh
+
+# 篡改路径：往产物尾部追加一个字节，应明确报「校验和不匹配」且**不安装**
+echo corrupted >> iroh-agent-darwin-arm64.tar.gz
+AGENT_RELEASE_BASE=http://127.0.0.1:8927 … bash skills/iroh-agent/scripts/install.sh
+```
+
+两个安装脚本（`skills/…` 与 `deploy/…`）都要各跑一遍 —— 它们是同一约定的两份实现，
+**缺陷 3、4、7 恰好是两份都有的**。
+
 ## 为什么不把二进制直接塞进 Skill
 
 | 维度 | 直接携带二进制 | 脚本按需下载（**采用**） |

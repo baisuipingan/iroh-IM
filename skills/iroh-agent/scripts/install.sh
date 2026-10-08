@@ -16,6 +16,15 @@ BASE_URL="${AGENT_RELEASE_BASE:-}"
 VERSION="${AGENT_VERSION:-}"
 CONFIRM="${CONFIRM:-}"
 
+# ⚠️ set -u 下**每一个**被读的变量都必须先有默认值。
+# 漏一个就像踩陷阱：`[ -n "$ANCHOR_RELAY" ]` 在调用方没传这个变量时
+# 会报 "ANCHOR_RELAY: unbound variable" 并**直接终止脚本**（配置根本没写出来）。
+RELAY="${RELAY:-https://iroh1.editor.vip:15443}"
+ANCHOR_RELAY="${ANCHOR_RELAY:-}"
+TOKEN="${TOKEN:-}"
+ANCHOR_ID="${ANCHOR_ID:-}"
+NICK="${NICK:-命令行成员}"
+
 c()  { printf '\033[%sm%s\033[0m\n' "$1" "$2"; }
 ok() { c '0;32' "  ✅ $*"; }
 wa() { c '0;33' "  ⚠️  $*"; }
@@ -42,7 +51,7 @@ remove() {
   ok "已删除 $PREFIX/$BIN"
   if [ -d "$DIR" ]; then
     if [ -n "$CONFIRM" ]; then rm -rf "$DIR"; ok "已删除配置与身份 $DIR"
-    else wa "保留了 $DIR（含身份密钥）。要一起删：CONFIRM=yes $0 remove"; fi
+    else wa "保留了 ${DIR}（含身份密钥）。要一起删：CONFIRM=yes $0 remove"; fi
   fi
 }
 
@@ -68,7 +77,7 @@ ASSET="$BIN-$P.tar.gz"
 URL="$BASE_URL/$ASSET"
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-c 0;36 "  下载 $URL"
+c '0;36' "  下载 $URL"
 if ! curl -fsSL --retry 3 -o "$tmp/$ASSET" "$URL"; then
   wa "下载失败（Release 里还没有这个平台的产物？）"
   wa "可以从源码构建（需要 Rust）："
@@ -81,7 +90,7 @@ fi
 if curl -fsSL -o "$tmp/sum" "$BASE_URL/$ASSET.sha256" 2>/dev/null; then
   want="$(cut -d' ' -f1 < "$tmp/sum" | tr -d '\r')"
   have="$(shasum -a 256 "$tmp/$ASSET" 2>/dev/null | awk '{print $1}' || sha256sum "$tmp/$ASSET" | awk '{print $1}')"
-  [ "$want" = "$have" ] || die "校验和不匹配（期望 $want 实际 $have）"
+  [ "$want" = "$have" ] || die "校验和不匹配（期望 $want 实际 ${have}）"
   ok "校验和通过"
 else
   wa "没拿到 .sha256，跳过校验"
@@ -93,14 +102,13 @@ install -m 0755 "$tmp/$BIN" "$PREFIX/$BIN"
 ok "已安装 $PREFIX/$BIN"
 
 mkdir -p "$DIR"; chmod 700 "$DIR"
-RELAY="${RELAY:-https://iroh1.editor.vip:15443}"
 [ -n "$ANCHOR_RELAY" ] && RELAY="$ANCHOR_RELAY"
 cat > "$DIR/config.json" <<JSON
 {
   "relays": ["$RELAY"],
-  "relay_token": "${TOKEN:-}",
-  "anchor": { "id": "${ANCHOR_ID:-}", "relay": "$RELAY" },
-  "nickname": "${NICK:-命令行成员}"
+  "relay_token": "$TOKEN",
+  "anchor": { "id": "$ANCHOR_ID", "relay": "$RELAY" },
+  "nickname": "$NICK"
 }
 JSON
 chmod 600 "$DIR/config.json"
