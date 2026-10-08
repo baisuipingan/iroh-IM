@@ -139,13 +139,18 @@ cp -R skills/iroh-agent ~/.workbuddy/skills/      # 或你的 Agent 的 skills �
 | Linux (amd64) | `iroh-agent-linux-amd64.tar.gz` | tar.gz | `ubuntu-latest` |
 | Linux (arm64) | `iroh-agent-linux-arm64.tar.gz` | tar.gz | `ubuntu-latest` + `gcc-aarch64-linux-gnu` |
 | Windows (amd64) | `iroh-agent-windows-amd64.zip` | **zip** | `windows-latest` |
-| Windows (arm64) | `iroh-agent-windows-arm64.zip` | **zip** | `ubuntu-latest` + `cargo-xwin` |
+| Windows (arm64) | `iroh-agent-windows-arm64.zip` | **zip** | `windows-11-arm`（原生 arm64） |
 
 - **Windows 用 zip 而不是 tar.gz**：PowerShell 5.1 自带的 `Expand-Archive` 只支持 zip。
 - 不做 32 位 Windows（`x86_64-pc-windows-gnu` 的 32 位变体在 iroh 的 QUIC 栈上没验证过）。
 - 打包与上传：`.github/workflows/release-agent.yml`，打 `agent-v*` tag 触发，
   也支持手动跑（只构建不发布，方便先验证矩阵）。
 - 每个产物都带 `.sha256`，安装脚本会校验；`SHA256SUMS.txt` 一并放进 Release。
+- **6 个目标全是原生 runner，没有交叉编译**。`windows-11-arm` 是 GitHub 给
+  **公开仓库**免费提供的原生 arm64 镜像；早先那版用 `cargo-xwin` 在 ubuntu 上交叉编
+  windows/arm64，实测**在 `ring`（TLS 的 C 代码）上编不过**，改原生后问题消失。
+- 打包逻辑在 `scripts/ci/pack-agent.sh` + `scripts/ci/check-arch.py`，
+  不在 YAML 里 —— 这样能**本地真跑**（见下面「首次真实演练暴露的缺陷」）。
 
 ### 平台判断现在是怎么做的
 
@@ -200,6 +205,28 @@ AGENT_RELEASE_BASE=http://127.0.0.1:8927 … bash skills/iroh-agent/scripts/inst
 
 两个安装脚本（`skills/…` 与 `deploy/…`）都要各跑一遍 —— 它们是同一约定的两份实现，
 **缺陷 3、4、7 恰好是两份都有的**。
+
+### 上了真 CI 才暴露的缺陷（本地怎么演练都碰不到）
+
+上面的本地演练**全绿**之后，第一次 `workflow_dispatch` 仍然 5 个 job 全挂。
+原因很统一：**本地模拟得了"下载/校验/安装"，模拟不了交叉编译和 runner 的默认环境。**
+
+| # | 缺陷 | 后果 / 修法 |
+|---|---|---|
+| 9 | 构建命令**从没传过 `--target`** | 产物落在 `target/release/`，打包按 `target/<triple>/release/` 找 → 找不到。★ 真正危险的是**交叉产物会静默装错架构**：linux/arm64 与 windows/arm64 跑在 x86_64 runner 上，编出来的是 x86_64 二进制却被标成 arm64 —— 这种包能解开、能过校验和，唯独在目标机器上跑不起来。已显式传 `--target`，并加**架构断言**（见下） |
+| 10 | 构建步骤缺 `shell: bash` | `windows-latest` 的默认 shell 是 **PowerShell**，`if [ ]` 与续行符在那边不成立 |
+| 11 | Windows runner 的 Git Bash **没有 `zip`** | 构建已成功，挂在打包：`zip: command not found`（exit 127）。改成 zip → bsdtar → python 三级降级 |
+| 12 | `windows/arm64` 用 `cargo-xwin` 交叉编，**在 `ring` 上失败** | cc-rs 调 clang 编 curve25519.c 挂了。**正解不是修交叉编译，而是绕开它** —— 本仓库是公开仓库，改用 GitHub 免费的原生 `windows-11-arm` runner |
+
+**架构断言**（`scripts/ci/check-arch.py`）是缺陷 9 的守卫，它**自己解析 magic bytes**
+（PE / Mach-O / ELF），不依赖 `file` 命令（Windows 的 Git Bash 里同样不保证有）。
+断言到具体架构而不是"是不是 PE"—— 放宽了就形同虚设。
+
+> **可推广的教训**：workflow 里超过十几行的逻辑都该抽成脚本。
+> 抽出来才能本地跑；留在 YAML 里就只能靠"推上去试一次"来验证，一轮十分钟。
+> 这一轮的缺陷 11/12 之外，抽出脚本后还在本地又抓到两个小坑：
+> 执行验证硬写 `tar -xzf` + `$NAME`（遇到 zip 包必错）、
+> 校验和只认 `sha256sum`/`shasum`（Windows 上两者都不保证有）。
 
 ## 为什么不把二进制直接塞进 Skill
 
