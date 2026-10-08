@@ -7,7 +7,8 @@
     "start": "expo start --dev-client",
     "start:go": "expo start",
     "android": "expo run:android",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --import ./scripts/register-ts.mjs src/bridge/mock.test.ts"
   },
   "dependencies": {
     "expo": "~54.0.0",

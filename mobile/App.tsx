@@ -1,9 +1,12 @@
 /* ============================================================================
  * App —— 两屏切换：进房 → 聊天
  *
- * 这里刻意**不引导航库**：v1 只有两个屏，用 useState 切换就够，
+ * 这里刻意**不引导航库**：v1 只有两个屏，用状态切换就够，
  * 省掉一个依赖（导航库是 RN 里最容易引入版本冲突的东西之一）。
  * 等屏数超过 4 个再上 @react-navigation。
+ *
+ * ⚠️ 房间与昵称的**权威状态在 useRoom 里**，这里不再自己存一份 ——
+ *    两份状态一定会不同步（踩过：顶部显示昵称、气泡判定用另一份）。
  * ==========================================================================*/
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -12,9 +15,9 @@ import { StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import type { Transport } from './src/bridge/transport';
 import { MockTransport } from './src/bridge/mock';
-import { useRoom } from './src/bridge/useRoom';
+import { useRoom, type JoinParams } from './src/bridge/useRoom';
 import { ChatScreen } from './src/screens/ChatScreen';
-import { JoinScreen, type JoinParams } from './src/screens/JoinScreen';
+import { JoinScreen } from './src/screens/JoinScreen';
 import { colors } from './src/theme/tokens';
 
 /** 默认中继配置（与 Web 端 relay-config.json 同一台） */
@@ -22,8 +25,6 @@ const DEFAULT_RELAYS = ['https://iroh1.editor.vip:15443'];
 
 export default function App() {
   const [transport, setTransport] = useState<Transport | null>(null);
-  const [room, setRoom] = useState<string | null>(null);
-  const [nickname, setNickname] = useState('匿名');
   const [connecting, setConnecting] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const busy = useRef(false);
@@ -51,47 +52,39 @@ export default function App() {
     };
   }, []);
 
-  const st = useRoom(transport, room);
+  const st = useRoom(transport);
 
   const handleJoin = useCallback(
     async (p: JoinParams) => {
-      if (!transport || busy.current) return;
+      if (busy.current) return;
       busy.current = true;
       try {
         setConnecting(true);
         setBootError(null);
-        await transport.join({ room: p.room, nickname: p.nickname, relays: DEFAULT_RELAYS });
-        setNickname(p.nickname);
-        setRoom(p.room);
-      } catch (e) {
-        setBootError(e instanceof Error ? e.message : String(e));
+        await st.join(p);
       } finally {
         setConnecting(false);
         busy.current = false;
       }
     },
-    [transport],
+    [st],
   );
-
-  const handleLeave = useCallback(async () => {
-    setRoom(null);
-    await transport?.leaveRoom().catch(() => undefined);
-  }, [transport]);
 
   return (
     <SafeAreaProvider>
       <View style={styles.root}>
         <StatusBar style="dark" />
-        {room ? (
+        {st.room ? (
           <ChatScreen
-            room={room}
-            nickname={nickname}
+            room={st.room}
+            nickname={st.nickname}
+            myId={transport?.endpointId ?? ''}
             messages={st.messages}
             peers={st.peers}
             relay={st.relay}
             joined={st.joined}
             onSend={st.send}
-            onLeave={handleLeave}
+            onLeave={st.leave}
           />
         ) : (
           <JoinScreen

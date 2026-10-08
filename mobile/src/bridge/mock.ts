@@ -110,12 +110,21 @@ export class MockTransport implements Transport {
   }
 
   async join(opts: RoomOptions): Promise<void> {
+    // ⚠️⚠️ **这里刻意在 await 期间就发事件**（先 sleep 再 emit），
+    //      因为真实的 Rust 实现就是这样：`RoomNode::join` 是 await 的，
+    //      `joined` / `history` 在它返回之前就通过事件流吐出来了。
+    //
+    //      第一版 mock 是"join 返回后才 setTimeout 1200ms 发事件"，
+    //      把 `useRoom` 里的一个真实竞态 bug 掩盖掉了 —— 真机上表现为
+    //      「卡在正在进入房间…」，但成员数已经显示 3。
+    //      **mock 必须复刻真实现的时序，否则它是在帮你制造假信心。**
     this.opts = opts;
     this.peers.clear();
+
+    await new Promise((r) => setTimeout(r, 120));
     this.emit({ type: 'joined', room: opts.room });
 
-    // 进房后先给历史（真实现里这来自 roomd 的常驻节点）
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 180));
     this.emit({
       type: 'history',
       room: opts.room,

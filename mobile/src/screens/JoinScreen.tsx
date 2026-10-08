@@ -11,12 +11,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { RelayStatus } from '../bridge/types';
+import type { JoinParams } from '../bridge/useRoom';
 import { colors, font, sizes, spacing } from '../theme/tokens';
 
-export interface JoinParams {
-  room: string;
-  nickname: string;
-}
+export type { JoinParams };
 
 export function JoinScreen({
   onJoin,

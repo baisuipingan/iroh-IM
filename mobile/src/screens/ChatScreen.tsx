@@ -17,6 +17,7 @@ import { avatarColor, avatarText, colors, font, sizes, spacing } from '../theme/
 export function ChatScreen({
   room,
   nickname,
+  myId,
   messages,
   peers,
   relay,
@@ -26,6 +27,9 @@ export function ChatScreen({
 }: {
   room: string;
   nickname: string;
+  /** 本机 EndpointId —— 判定"是不是我发的"要用它，**不能用昵称比对**
+   *  （两个人可能同名；而且改昵称后旧消息的 nickname 还是旧的） */
+  myId: string;
   messages: ChatMessage[];
   peers: PeerInfo[];
   relay: RelayStatus;
@@ -106,7 +110,7 @@ export function ChatScreen({
           data={messages}
           keyExtractor={(m) => m.id}
           renderItem={({ item }) => (
-            <MessageBubble message={item} mine={item.nickname === nickname} />
+            <MessageBubble message={item} mine={item.from === myId} />
           )}
           // 新消息进来时贴底。⚠️ Web 端这里踩过坑：
           // 简单滚到底会被"滚动锚定"和"内容还没量完"打败，
