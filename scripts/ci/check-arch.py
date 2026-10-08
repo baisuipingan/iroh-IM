@@ -21,6 +21,17 @@
 import struct
 import sys
 
+# ⚠️ Windows 上 Python 的 stdout 默认是 cp1252，**打印 ✅ / 中文会直接抛
+#    UnicodeEncodeError: 'charmap' codec can't encode character '\u2705'**，
+#    于是"校验其实已经通过了、却在打印成功消息时崩掉"（真发生过，
+#    两个 Windows job 都死在这）。这里强制 UTF-8 并放宽 errors，
+#    保证输出永远不是失败原因。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):  # 极老的 Python 或非标准流
+        pass
+
 
 def arch_of(data: bytes) -> str:
     """从文件头解析架构。只认我们实际会产出的三种格式。"""

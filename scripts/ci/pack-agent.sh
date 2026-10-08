@@ -23,6 +23,13 @@
 #   4. 校验和输出格式必须是 "<hash>  <file>"，安装脚本按这个解析
 set -euo pipefail
 
+# ⚠️ Windows 上 Python 的 stdout 默认是 cp1252，打印 ✅ / 中文会抛
+#    UnicodeEncodeError —— 表现为"事情已经做成了，却在打印成功消息时崩掉"。
+#    （真的踩过：架构校验通过后打印 ✅ 时被 charmap 编码器干掉的。）
+#    PYTHONIOENCODING 对下面所有 python3 调用一并生效。
+#    bash 自己写 stdout 是原始字节、不做转码，所以 shell 侧的 echo 不受影响。
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
+
 TARGET="${1:?用法: pack-agent.sh <target> <osname> <arch> <ext>}"
 OSNAME="${2:?缺少 osname}"
 ARCH="${3:?缺少 arch}"
