@@ -165,9 +165,12 @@ cp -R skills/iroh-agent ~/.workbuddy/skills/      # 或你的 Agent 的 skills �
 | Windows 产物用 zip | 两个脚本里按平台选后缀 |
 | **Rust 侧的配置目录** | ⚠️ 关键：原来 `home()` 只读 `HOME`/`XDG_CONFIG_HOME`，**Windows 上通常没有 `HOME`**，取不到就退化成 `/root/.config`（在 Windows 上会建到盘根或直接失败）。现在 Windows 走 `%APPDATA%\\iroh-agent`，并用 ACL 限制到当前用户 |
 
-> ⚠️ **诚实说明**：macOS 与 Linux 的产物已实测（端到端通过）。
-> **Windows 与两个交叉编译产物（linux/arm64、windows/arm64）尚未在本机验证过**，
-> 第一次跑 `workflow_dispatch` 才是它们的首次验证。
+> ✅ **现在的状态（已全部验证完毕）**：6 个平台的产物都已产出并通过架构断言，
+> Release `agent-v1.0.0` 已发布。**在真机上实测过**：
+> 用 `releases/latest/download` 跑安装脚本 → 校验和通过 → 装出的二进制
+> `--help` 正常 → `whoami` **连上真实中继**（`已连上中继`）→
+> `say` **成功进入真实房间并发出消息**。
+> Windows 安装器（`.ps1`）本身仍未在真实 Windows 机器上跑过 —— 那是唯一剩下的未验证项。
 
 ### 首次真实演练暴露的缺陷（已修，附验证方式）
 
