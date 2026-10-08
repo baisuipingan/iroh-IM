@@ -36,8 +36,14 @@ jobs:
       matrix:
         include:
           # ---- macOS ----
-          - { os: macos-14, target: aarch64-apple-darwin, osname: darwin, arch: arm64, ext: tar.gz }
-          - { os: macos-13, target: x86_64-apple-darwin,  osname: darwin, arch: amd64, ext: tar.gz }
+          # ⚠️ runner 标签会**过期**，而过期后就**一直排队、永远不会开始**
+          #    （不报错、不失败，只是 job 卡在 queued —— 非常容易被误判成"CI 慢"）。
+          #    这里踩过一次：`macos-13` 早在 2025-12-04 就已退役，
+          #    连续 5 轮都排不上，darwin/amd64 的产物其实一直没被构建出来。
+          #    查当前可用标签：https://github.com/actions/runner-images
+          #    （注意 `macos-15` 是 arm64，x86_64 要用 `macos-15-intel`）
+          - { os: macos-15, target: aarch64-apple-darwin, osname: darwin, arch: arm64, ext: tar.gz }
+          - { os: macos-15-intel, target: x86_64-apple-darwin, osname: darwin, arch: amd64, ext: tar.gz }
           # ---- Linux ----
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, osname: linux, arch: amd64, ext: tar.gz }
           - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, osname: linux, arch: arm64, ext: tar.gz, cross: true }

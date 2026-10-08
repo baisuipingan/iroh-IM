@@ -134,8 +134,8 @@ cp -R skills/iroh-agent ~/.workbuddy/skills/      # 或你的 Agent 的 skills �
 
 | 平台 | 产物 | 压缩格式 | 打包机 |
 |---|---|---|---|
-| macOS (arm64) | `iroh-agent-darwin-arm64.tar.gz` | tar.gz | `macos-14` |
-| macOS (amd64) | `iroh-agent-darwin-amd64.tar.gz` | tar.gz | `macos-13` |
+| macOS (arm64) | `iroh-agent-darwin-arm64.tar.gz` | tar.gz | `macos-15` |
+| macOS (amd64) | `iroh-agent-darwin-amd64.tar.gz` | tar.gz | `macos-15-intel` |
 | Linux (amd64) | `iroh-agent-linux-amd64.tar.gz` | tar.gz | `ubuntu-latest` |
 | Linux (arm64) | `iroh-agent-linux-arm64.tar.gz` | tar.gz | `ubuntu-latest` + `gcc-aarch64-linux-gnu` |
 | Windows (amd64) | `iroh-agent-windows-amd64.zip` | **zip** | `windows-latest` |
@@ -217,6 +217,9 @@ AGENT_RELEASE_BASE=http://127.0.0.1:8927 … bash skills/iroh-agent/scripts/inst
 | 10 | 构建步骤缺 `shell: bash` | `windows-latest` 的默认 shell 是 **PowerShell**，`if [ ]` 与续行符在那边不成立 |
 | 11 | Windows runner 的 Git Bash **没有 `zip`** | 构建已成功，挂在打包：`zip: command not found`（exit 127）。改成 zip → bsdtar → python 三级降级 |
 | 12 | `windows/arm64` 用 `cargo-xwin` 交叉编，**在 `ring` 上失败** | cc-rs 调 clang 编 curve25519.c 挂了。**正解不是修交叉编译，而是绕开它** —— 本仓库是公开仓库，改用 GitHub 免费的原生 `windows-11-arm` runner |
+| 13 | Git Bash 的 `[ -f path ]` **会自动补 `.exe`** | 在只有 `agent.exe` 时，`[ -f .../agent ]` 也返回真，导致"探测式回退"永不触发；而 Python 等原生进程不做补全 → `FileNotFoundError`。改成**按平台直接推导**文件名，判存在也用 Python |
+| 14 | Windows 上 Python 的 stdout 默认 **cp1252** | 打印 `✅`/中文抛 `UnicodeEncodeError`。**事情已经做成了，却死在"报告成功"这一步**，看堆栈还以为是校验没过。修法：`reconfigure(encoding="utf-8")` + `PYTHONIOENCODING` |
+| 15 | **`macos-13` 已退役**（2025-12-04 EOL） | 过期标签的表现是**一直排队、永远不会开始** —— 不报错也不失败，连续 5 轮都被当成"CI 慢"。实际上 darwin/amd64 的产物**一直没被构建出来**。改用 `macos-15-intel` |
 
 **架构断言**（`scripts/ci/check-arch.py`）是缺陷 9 的守卫，它**自己解析 magic bytes**
 （PE / Mach-O / ELF），不依赖 `file` 命令（Windows 的 Git Bash 里同样不保证有）。
