@@ -69,11 +69,18 @@ cp "$SRC" "$OUT_DIR/$ASSET"
 #        且足够激进；不是因为 `--strip-all` 会坏事。别再照着错的说法推理。）
 
 # 候选顺序：显式指定 → NDK → PATH 上叫 llvm-strip 的 → 系统 strip（最后手段）
+#
+# ⚠️⚠️ `-type f` **绝对不能加**，这是真实踩到的坑。
+#    NDK 的 `bin/` 里几乎全是**符号链接**（`aarch64-linux-android24-clang`
+#    指向 `clang-18`，`llvm-strip` 指向 `llvm-objcopy`……）。
+#    写成 `-type f` 会把它们全部排除 → 一个都找不到 → 回落到系统 strip → 报错。
+#    （brew 装的 llvm 也一样：/opt/homebrew/opt/llvm/bin/llvm-strip 是个链接。）
+#    所以这里**不限制类型**，让下一段的"真跑一次试试"来决定它能不能用。
 STRIP_CANDIDATES=""
 [ -n "${STRIP:-}" ] && STRIP_CANDIDATES="$STRIP"
 if [ -n "${ANDROID_NDK_HOME:-}" ]; then
   ndk_strip="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
-    -maxdepth 3 -name 'llvm-strip' -type f 2>/dev/null | head -1)"
+    -maxdepth 3 -name 'llvm-strip' 2>/dev/null | head -1)"
   [ -n "$ndk_strip" ] && STRIP_CANDIDATES="$STRIP_CANDIDATES $ndk_strip"
 fi
 STRIP_CANDIDATES="$STRIP_CANDIDATES $(command -v llvm-strip 2>/dev/null || true)"
