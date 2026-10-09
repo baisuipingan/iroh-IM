@@ -1604,8 +1604,42 @@ impl RoomNode {
         self.endpoint.online().await
     }
 
+    /// 中继状态（**实时**，不是缓存快照）。
+    ///
+    /// ⚠️⚠️ 为什么必须实时查，不能读 `latest_status`：
+    ///
+    /// `latest_status` 是 watcher（`endpoint.home_relay_status().stream()`）
+    /// 刷出来的，而**那个流只在状态"变化"时推新值**。
+    /// 断网时 `is_connected()` 未必变 —— iroh 的 relay-actor 会自己重试，
+    /// 从它的视角"这条会话还在"，于是**不再推新值**，快照就永远停在
+    /// 最后一次推的 `connected: true` 上。
+    ///
+    /// 真机实测（2026-10-09）：断网 25 秒后 UI 仍显示「在线」，
+    /// 而 Rust 侧一条中继日志都没有 —— 界面在骗人，掉线重连也因此不触发。
+    ///
+    /// `.get()` 是**当场查当前状态**（与 `my_relay_url()` 同一个做法，
+    /// 那边的注释早就写了"不要读 latest_status 快照"）。
+    ///
+    /// `latest_status` 仍然保留：它给**事件推送**用（`RelayStatus` 事件），
+    /// 那条路要的是"变化通知"，与"现在到底连没连上"是两件事。
     pub fn relay_status(&self) -> Vec<RelayInfo> {
-        self.latest_status.lock().unwrap().clone()
+        let live: Vec<RelayInfo> = self
+            .endpoint
+            .home_relay_status()
+            .get()
+            .into_iter()
+            .map(|s| RelayInfo {
+                url: s.url().to_string(),
+                connected: s.is_connected(),
+                last_error: s.last_error().map(|e| e.to_string()),
+                auth_denied: s.auth_denied_reason().map(|r| r.to_string()),
+            })
+            .collect();
+        // 一台都没查到（还没建联 / 已释放）→ 退回快照，别把状态"清空"成"没中继"
+        if live.is_empty() {
+            return self.latest_status.lock().unwrap().clone();
+        }
+        live
     }
 
     /// 订阅房间事件。
