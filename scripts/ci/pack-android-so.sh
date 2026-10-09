@@ -45,24 +45,54 @@ cp "$SRC" "$OUT_DIR/$ASSET"
 
 # strip 调试符号：Release 构建里符号占大头，剥掉后体积能小一半以上。
 #
-# ⚠️ 三件事都要注意：
-#   1. **找不到 strip 工具时必须自己去找** —— `llvm-strip` 在 CI 里不在 PATH 上，
-#      它在 NDK 的 toolchains/llvm/prebuilt/<host>/bin/ 下。原先只 `command -v`，
-#      结果 CI 上静默跳过 strip，产物体积翻倍而没有任何提示。
-#   2. **不用 `|| true` 吞掉失败** —— strip 失败通常意味着二进制有问题
-#      （格式不对 / 架构不匹配），静默吞掉等于把问题推迟到手机上去发现。
-#   3. `--strip-unneeded` 才是对共享库正确的级别（`--strip-all` 会连
-#      动态符号表一起删，`.so` 直接加载不了）。
-STRIP_BIN="${STRIP:-}"
-if [ -z "$STRIP_BIN" ]; then
-  for c in llvm-strip strip; do
-    if command -v "$c" >/dev/null 2>&1; then STRIP_BIN="$c"; break; fi
-  done
+# ⚠️⚠️ 四个坑，全是踩出来的：
+#
+#   1. **搜索顺序必须是「NDK 优先」**，不能先 `command -v strip`。
+#      CI（ubuntu）上 PATH 里有 GNU binutils 的 `strip`，它**读不了 ARM ELF**：
+#          strip: Unable to recognise the format of the input file '…arm64-v8a.so'
+#      必须用 NDK 自带的 `llvm-strip`（支持多架构）。
+#      这是真实翻过的一次车 —— 我一开始写 `for c in llvm-strip strip`，
+#      在 macOS 上恰好命中 llvm-strip（没事），到 CI 上命中了 GNU strip（红）。
+#
+#   2. **找到之后要试一下能不能用**，别只看"文件存在"。工具在 PATH 上 ≠
+#      这个工具认得我们的目标格式。
+#
+#   3. **不用 `|| true` 吞掉失败** —— strip 失败通常意味着拿错工具或二进制有问题，
+#      静默吞掉等于把问题推到手机上去发现。（上面那次的报错就是这条帮忙暴露的。）
+#
+#   4. `--strip-unneeded` 是共享库该用的级别。
+#      （实测更正：我原先注释说"`--strip-all` 会删掉动态符号表"——**不准确**。
+#        llvm-strip 对 `.so` 用 `--strip-all` 实测**仍保留** `.dynsym` 里的
+#        13 个 JNI 符号，因为 `.so` 必须留动态符号表才能被 dlopen。
+#        差别只在体积：`--strip-all` 会多剥掉一些 `.symtab` 里的东西。
+#        选 `--strip-unneeded` 是因为它对共享库是**语义正确**的选项、
+#        且足够激进；不是因为 `--strip-all` 会坏事。别再照着错的说法推理。）
+
+# 候选顺序：显式指定 → NDK → PATH 上叫 llvm-strip 的 → 系统 strip（最后手段）
+STRIP_CANDIDATES=""
+[ -n "${STRIP:-}" ] && STRIP_CANDIDATES="$STRIP"
+if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+  ndk_strip="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+    -maxdepth 3 -name 'llvm-strip' -type f 2>/dev/null | head -1)"
+  [ -n "$ndk_strip" ] && STRIP_CANDIDATES="$STRIP_CANDIDATES $ndk_strip"
 fi
-if [ -z "$STRIP_BIN" ] && [ -n "${ANDROID_NDK_HOME:-}" ]; then
-  found="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -maxdepth 2 -name 'llvm-strip' -type f 2>/dev/null | head -1)"
-  [ -n "$found" ] && STRIP_BIN="$found"
-fi
+STRIP_CANDIDATES="$STRIP_CANDIDATES $(command -v llvm-strip 2>/dev/null || true)"
+STRIP_CANDIDATES="$STRIP_CANDIDATES $(command -v strip 2>/dev/null || true)"
+
+# 逐个试：能真正处理这个文件的才算数（`--version` 不报错 ≠ 认得 ARM ELF）
+STRIP_BIN=""
+for cand in $STRIP_CANDIDATES; do
+  [ -x "$cand" ] || continue
+  # 复制一份去试，避免反复改动真产物
+  probe="$OUT_DIR/.strip-probe"
+  cp "$OUT_DIR/$ASSET" "$probe"
+  if "$cand" --strip-unneeded "$probe" >/dev/null 2>&1; then
+    STRIP_BIN="$cand"
+    rm -f "$probe"
+    break
+  fi
+  rm -f "$probe"
+done
 
 BEFORE=$(wc -c < "$OUT_DIR/$ASSET" | tr -d ' ')
 if [ -n "$STRIP_BIN" ]; then
@@ -70,7 +100,10 @@ if [ -n "$STRIP_BIN" ]; then
   AFTER=$(wc -c < "$OUT_DIR/$ASSET" | tr -d ' ')
   echo "🔻 strip: $((BEFORE / 1024 / 1024)) MB → $((AFTER / 1024 / 1024)) MB  ($STRIP_BIN)"
 else
-  echo "⚠️  没找到 strip 工具，保留调试符号（体积会大一倍左右）"
+  echo "⚠️  没找到能处理 ARM ELF 的 strip 工具，保留调试符号（体积会大一倍左右）"
+  echo "      试过的候选：$STRIP_CANDIDATES"
+  echo "      CI 上应设 ANDROID_NDK_HOME 指向 NDK；它会用自带的 llvm-strip"
+
   echo "     CI 上应设 ANDROID_NDK_HOME，或在 workflow 里把 llvm-strip 加进 PATH"
 fi
 

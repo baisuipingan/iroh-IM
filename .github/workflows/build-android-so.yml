@@ -103,6 +103,11 @@ jobs:
             echo "CC_aarch64-linux-android=$CC"
             echo "AR_aarch64-linux-android=$AR"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$AR"
+            # ★ 打包脚本靠它找到 NDK 自带的 llvm-strip。
+            #   ⚠️ 不设的话，`command -v strip` 会命中 ubuntu 自带的 GNU strip ——
+            #   那个**读不了 ARM ELF**，报 "Unable to recognise the format"，
+            #   而报错本身看不出是"拿错工具"（真实翻过车，见 pack 脚本注释）。
+            echo "ANDROID_NDK_HOME=$NDK"
           } >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
