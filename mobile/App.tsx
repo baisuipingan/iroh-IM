@@ -34,9 +34,16 @@ import type { Transport } from './src/bridge/transport';
 import { NativeTransport } from './src/bridge/native';
 import { useRoom, type JoinParams } from './src/bridge/useRoom';
 import { ChatScreen } from './src/screens/ChatScreen';
+import { ConnectionScreen } from './src/screens/ConnectionScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 import { JoinScreen } from './src/screens/JoinScreen';
 import { colors, font, sizes, spacing } from './src/theme/tokens';
 import { nativeStatus } from './modules/iroh-native/src';
+import { loadSettings, updateSettings } from './src/settings';
+import { haptic } from './src/haptics';
+
+/** 聊天页顶栏能进的两个子页 */
+type SubScreen = 'status' | 'settings' | null;
 
 /* ---------------------------------------------------------------------------
  * 深链解析：irohchat://join?room=xxx&nick=yyy
@@ -101,6 +108,8 @@ export default function App() {
   const [bootError, setBootError] = useState<string | null>(null);
   /** 启动尝试的代数 —— 每次"重试"加一，用来重启下面那个 effect */
   const [bootAttempt, setBootAttempt] = useState(0);
+  /** 当前打开的子页（null = 在看聊天） */
+  const [sub, setSub] = useState<SubScreen>(null);
   const busy = useRef(false);
 
   /* 启动即创建节点（并开始连中继），这样进房页就能显示中继状态。
@@ -113,6 +122,9 @@ export default function App() {
       try {
         setConnecting(true);
         setBootError(null);
+
+        // 偏好先读出来（震动开关、上次昵称）—— 它不依赖原生
+        await loadSettings();
 
         // 先看原生模块在不在（不在就没戏了 —— 这个 App 的全部功能都靠它）
         const status = nativeStatus();
@@ -157,6 +169,22 @@ export default function App() {
   const st = useRoom(transport);
 
   /** 重试启动：先收掉旧的（如果有），再让上面的 effect 重跑一遍 */
+  /**
+   * 改昵称（设置页用）。
+   *
+   * ⚠️ 立刻调 `setNickname` 让它生效 —— 只是存起来不生效的话，
+   *    用户改完会发现"房间里还是旧名字"，以为没保存成功。
+   *
+   * 失败也只是提示一下：昵称改不了不该打断聊天。
+   */
+  const handleChangeNickname = useCallback(
+    (name: string) => {
+      void st.setNickname(name).catch(() => undefined);
+      updateSettings({ lastNickname: name });
+    },
+    [st],
+  );
+
   const handleRetryBoot = useCallback(() => {
     setTransport((old) => {
       if (old) void old.shutdown().catch(() => undefined);
@@ -169,6 +197,9 @@ export default function App() {
     async (p: JoinParams) => {
       if (busy.current) return;
       busy.current = true;
+      // 进房时收起子页：不然从设置页退出房间、再进另一个房，
+      // 会直接落在上一轮的设置页上（看起来像"进房失败"）
+      setSub(null);
       try {
         setConnecting(true);
         setBootError(null);
@@ -274,6 +305,24 @@ export default function App() {
             connecting={connecting}
             onRetry={handleRetryBoot}
           />
+        ) : st.room && sub === 'status' ? (
+          <ConnectionScreen
+            room={st.room}
+            nickname={st.nickname}
+            endpointId={transport.endpointId}
+            relay={st.relay}
+            relayList={st.relayList}
+            peers={st.peers}
+            onBack={() => setSub(null)}
+          />
+        ) : st.room && sub === 'settings' ? (
+          <SettingsScreen
+            nickname={st.nickname}
+            endpointId={transport.endpointId}
+            joined={st.joined}
+            onChangeNickname={handleChangeNickname}
+            onBack={() => setSub(null)}
+          />
         ) : st.room ? (
           <ChatScreen
             room={st.room}
@@ -290,6 +339,8 @@ export default function App() {
             onAcceptFile={st.acceptFile}
             onRejectFile={st.rejectFile}
             onPublishFile={st.publishFile}
+            onOpenStatus={() => setSub('status')}
+            onOpenSettings={() => setSub('settings')}
           />
         ) : (
           <JoinScreen

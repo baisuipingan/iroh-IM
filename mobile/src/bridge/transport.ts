@@ -20,6 +20,7 @@ import type {
   FileMeta,
   FileSaved,
   PeerInfo,
+  RelayInfoLike,
   RelayStatus,
   Unsubscribe,
 } from './types';
@@ -54,6 +55,15 @@ export interface Transport {
 
   /** 当前中继状态 */
   relayStatus(): RelayStatus;
+
+  /**
+   * **全部**配置的中继及其当前状态（状态页要列"配了几台、各自如何"）。
+   *
+   * ⚠️ 与 `relayStatus()` 的区别：那个是"当前在用的那一台"的摘要，
+   *    这个是完整清单。状态页必须用这个 —— 只显示一台答不上
+   *    "为什么选了这台 / 另外两台怎么了"（排查时的第一个问题）。
+   */
+  relayList(): RelayInfoLike[];
 
   /** 进房（换房也用它；Rust 侧会自动清空文件货架） */
   join(opts: RoomOptions): Promise<void>;

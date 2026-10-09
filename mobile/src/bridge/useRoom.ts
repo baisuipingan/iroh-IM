@@ -30,7 +30,15 @@
  * ==========================================================================*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatMessage, FileMeta, PeerInfo, RelayStatus, RoomEvent } from '../bridge/types';
+import { haptic } from '../haptics';
+import type {
+  ChatMessage,
+  FileMeta,
+  PeerInfo,
+  RelayInfoLike,
+  RelayStatus,
+  RoomEvent,
+} from '../bridge/types';
 import type { RoomOptions, Transport } from '../bridge/transport';
 
 export interface JoinParams {
@@ -57,6 +65,8 @@ export interface RoomState {
   room: string | null;
   nickname: string;
   error: string | null;
+  /** **全部**配置的中继及状态（状态页要列出来） */
+  relayList: RelayInfoLike[];
   /** 收到的文件邀约：file_id → 状态（UI 据此渲染文件卡片与进度） */
   files: Record<string, FileInviteState>;
   /** **我发出的**文件：file_id → 状态（等对方接收 / 传输中 / 完成） */
@@ -95,6 +105,12 @@ export interface RoomActions {
    * [uri] 来自 `expo-document-picker`。
    */
   publishFile: (uri: string, name: string, size: number, mime: string) => Promise<void>;
+  /**
+   * 改昵称（房间内生效）。
+   *
+   * 没进房时调它没有意义（Rust 侧会拒绝）—— 调用方自己判断。
+   */
+  setNickname: (name: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -121,6 +137,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const [relay, setRelay] = useState<RelayStatus>({ url: null, connected: false });
+  const [relayList, setRelayList] = useState<RelayInfoLike[]>([]);
   const [joined, setJoined] = useState(false);
   const [room, setRoom] = useState<string | null>(null);
   const [nickname, setNickname] = useState(defaultNickname);
@@ -206,6 +223,17 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     setRelay(transport.relayStatus());
 
     const onEvent = (ev: RoomEvent): void => {
+      /* ★ 数据面存活：**任何**事件都算"我还连着"。
+       *
+       * 放在最前面 —— 一个事件被后面哪个分支 return 掉都不影响这条。
+       * 这是断线判定的唯一可靠信号（`relay.connected` 断网时仍是 true，
+       * 见 `lastRoomDataAt` 的说明）。
+       *
+       * ⚠️ 别只挑 presence 更新：消息、文件事件同样是"链路活着"的证据，
+       *    只认心跳会让阈值退化成"必须有别人在持续说话"。
+       */
+      lastRoomDataAt.current = Date.now();
+
       // 约束 4：只处理当前房间的事件
       if ('room' in ev && ev.room !== roomRef.current) return;
 
@@ -236,6 +264,10 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           if (seen.current.has(ev.message.id)) return;
           seen.current.add(ev.message.id);
           setMessages((prev) => [...prev, ev.message].sort((a, b) => a.ts - b.ts));
+          // ⚠️ 只震"别人的消息"：自己的消息是本地回显插进来的（不走这个 case），
+          //    但**别的设备**上如果是自己发的（比如 Web 端同账号），
+          //    `ev.mine` 也会是 true —— 那时震一下就很多余。
+          if (!ev.mine) haptic('message');
           break;
         }
 
@@ -262,6 +294,8 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           //    而那个文件在当前房间根本收不到（Rust 侧 accept_file 会因
           //    房间不符拒绝）。这类"看得见却点不动"最难排查。
           if (ev.room !== roomRef.current) break;
+          // 有文件来 → 震（节奏与普通消息不同，不看屏也知道是文件）
+          haptic('file');
           setFiles((prev) => ({
             ...prev,
             [ev.meta.file_id]: {
@@ -373,6 +407,8 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       await t.refreshRelayStatus?.();
       const now = transport.relayStatus();
       setRelay(now);
+      // 全量清单：状态页要列"配了几台、各自什么状态"
+      setRelayList(transport.relayList());
       // 走 ref：effect 的依赖只有 transport，不该因为回调重建而重订阅
       onRelaySampleRef.current(now);
     };
@@ -426,6 +462,41 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   const rejoinAttempt = useRef(0);
 
   /**
+   * **最后收到任何房间数据**的时刻（心跳 / 消息 / 文件事件都算）。
+   *
+   * ## 为什么不能只看 `relay.connected`（真机教训）
+   *
+   * 断网 25 秒后 `relay.connected` **仍然是 true** —— iroh 的 relay-actor
+   * 会自己重试，从它视角"这条会话还在"。它是**传输层**的状态，
+   * 不等于"网络可用"。
+   *
+   * ## 数据面信号：心跳
+   *
+   * 房间里只要**有别人**，他的 presence 心跳每 `PRESENCE_INTERVAL = 10s`
+   * 来一次（见 `client-wasm/src/room.rs`）。所以：
+   *
+   *   有 peer 存在 + 长时间收不到任何东西 = 我和网络脱节了
+   *
+   * 阈值取 **30 秒**（= 3 个心跳周期）：足够容忍丢一两个包，
+   * 又能比 Rust 侧自己的 `PRESENCE_TTL_MS = 35s` 早一点发现 ——
+   * 早一点没坏处（重连是幂等的），晚一点用户就要多等。
+   *
+   * ## 只在"房间里确实有人"时才判定
+   *
+   * ⚠️ 空房间里本来就没有心跳来源，拿它判掉线会**永远误报**。
+   *    所以先看 `peersRef.current.length > 0`。
+   *    （自己一个人的时候，掉线与否确实无从判断 —— 这时靠 relay 状态兜底，
+   *      它虽然不精确，但至少是唯一能用的信号。两层判据是叠加的。）
+   */
+  const lastRoomDataAt = useRef<number>(Date.now());
+  const peersRef = useRef<PeerInfo[]>([]);
+  // 数据面判据要用它（订阅回调里的闭包是旧的 → 必须走 ref）
+  peersRef.current = peers;
+
+  /** 静默多久算掉线（毫秒）。见 `lastRoomDataAt` 的说明。 */
+  const SILENCE_MS = 30_000;
+
+  /**
    * `loadHistory` 的最新值。
    *
    * 重连成功要拉一次历史补上掉线期间的消息，但 `loadHistory` 定义在后面，
@@ -449,8 +520,28 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       const wantRoom = roomRef.current;
       const wantNick = nicknameRef.current;
 
-      if (s.connected) {
-        // 连上了：重置退避，并记下"确实在线过"
+      /* ---- 判据一：数据面静默（可靠）----
+       *
+       * 房间里有别人、但 30 秒没收到任何事件 → 我和网络脱节了。
+       * 这是**唯一能识破"物理断网但 iroh 还以为在线"**的信号。
+       */
+      const hasPeers = peersRef.current.length > 0;
+      const silentMs = Date.now() - lastRoomDataAt.current;
+      const dataPlaneDead = hasPeers && silentMs > SILENCE_MS;
+
+      /* ---- 判据二：中继状态（兜底）----
+       *
+       * 只在"房间里没有别人"时用 —— 那时没有心跳可依赖。
+       * 它不精确（断网时可能仍是 true），但聊胜于无。
+       *
+       * ⚠️ 不把两个判据写成 `||` 的无脑组合：数据面说活着（刚收到东西）
+       *    就不该因为 relay 报 false 去重连 —— 那会打断正常的会话。
+       */
+      const relayDead = !s.connected;
+      const dead = dataPlaneDead || (!hasPeers && relayDead);
+
+      if (!dead) {
+        // 活着：重置退避，并记下"确实在线过"
         wasOnline.current = true;
         rejoinAttempt.current = 0;
         return;
@@ -474,8 +565,14 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
 
       rejoinTimer.current = setTimeout(() => {
         rejoinTimer.current = null;
-        // 进房前再看一眼：可能在这段延迟里已经好了
-        if (transport.relayStatus().connected) {
+        // 进房前再看一眼：可能在这段延迟里已经好了。
+        // ⚠️ 同样要看**数据面** —— 刚收到过东西就说明已经恢复，
+        //    这时不该再重进房间（重进会重拉历史，白闪一下）。
+        const stillSilent =
+          peersRef.current.length > 0 &&
+          Date.now() - lastRoomDataAt.current > SILENCE_MS;
+        const stillRelayDead = !transport.relayStatus().connected;
+        if (!stillSilent && !(peersRef.current.length === 0 && stillRelayDead)) {
           wasOnline.current = true;
           rejoinAttempt.current = 0;
           return;
@@ -484,7 +581,9 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
         if (!room) return;
 
         rejoining.current = true;
-        console.log(`[rejoin] 中继掉线，尝试重新进入房间 ${room}`);
+        console.log(
+          `[rejoin] 判定掉线（${dataPlaneDead ? `数据面静默 ${Math.round(silentMs / 1000)}s` : '中继断开'}），重新进入房间 ${room}`,
+        );
         /* ⚠️ 走 `transport.join` 而**不是** `join()`，两者差别很关键：
          *
          *   `join()`（本 hook 的那个）会先 `setMessages([])` / `setOutFiles({})`
@@ -618,6 +717,27 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   );
   // 重连成功后要用它补拉历史（见 onRelaySample）
   loadHistoryRef.current = loadHistory;
+
+  /**
+   * 改昵称。
+   *
+   * ⚠️ 顺序：**先发原生、成功后才改本地**。
+   *    反过来的话，原生失败（比如没进房）时界面已经显示新名字了，
+   *    而房间里别人看到的还是旧的 —— 两边不一致比"没改成"更难查。
+   */
+  const changeNickname = useCallback(
+    async (name: string) => {
+      if (!transport) return;
+      const nick = name.trim() || defaultNickname;
+      try {
+        await transport.setNickname(nick);
+        setNickname(nick);
+      } catch (e) {
+        setError(`改昵称失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [transport, defaultNickname],
+  );
 
   const send = useCallback(
     async (text: string) => {
@@ -853,6 +973,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       messages,
       peers,
       relay,
+      relayList,
       joined,
       room,
       nickname,
@@ -865,6 +986,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       acceptFile,
       rejectFile,
       publishFile,
+      setNickname: changeNickname,
       clearError,
     }),
     [
@@ -883,6 +1005,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       acceptFile,
       rejectFile,
       publishFile,
+      changeNickname,
       clearError,
     ],
   );

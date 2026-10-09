@@ -96,6 +96,16 @@ export interface FileSaved {
 }
 
 /** 中继连接状态 */
+/** 一台中继的完整状态（与 Rust 的 `RelayInfo` 对齐） */
+export interface RelayInfoLike {
+  url: string;
+  connected: boolean;
+  /** 上次错误（连不上时看它） */
+  lastError?: string | null;
+  /** 鉴权被拒（是 token 配错的典型症状） */
+  authDenied?: string | null;
+}
+
 export interface RelayStatus {  url: string | null;
   connected: boolean;
   /** 延迟（毫秒），未测出时为 null */

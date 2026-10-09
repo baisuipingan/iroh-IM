@@ -19,6 +19,7 @@ import type {
   EventListener,
   FileMeta,
   FileSaved,
+  RelayInfoLike,
   RelayStatus,
   Unsubscribe,
 } from './types';
@@ -100,6 +101,24 @@ export class MockTransport implements Transport {
     // 模拟连接耗时，好让 UI 的"连接中"状态真的被走到
     await new Promise((r) => setTimeout(r, 400));
     this.connected = true;
+  }
+
+  relayList(): RelayInfoLike[] {
+    // mock：假装配了两台，当前用第一台（与 relayStatus 保持一致）
+    return [
+      {
+        url: 'https://iroh1.editor.vip:15443',
+        connected: this.connected,
+        lastError: null,
+        authDenied: null,
+      },
+      {
+        url: 'https://iroh2.editor.vip:15443',
+        connected: false,
+        lastError: null,
+        authDenied: null,
+      },
+    ];
   }
 
   relayStatus(): RelayStatus {

@@ -36,11 +36,12 @@ import type {
   EventListener,
   FileMeta,
   FileSaved,
+  RelayInfoLike,
   RelayStatus,
   RoomEvent,
   Unsubscribe,
 } from './types';
-import { irohNative } from '../../modules/iroh-native/src';
+import { irohNative, type RelayStatusInfo } from '../../modules/iroh-native/src';
 
 export class NativeTransport implements Transport {
   private readonly ptr: number;
@@ -141,6 +142,16 @@ export class NativeTransport implements Transport {
   }
 
   /**
+   * 全部中继的当前状态（状态页用）。
+   *
+   * 读 `refreshRelayStatus()` 缓存的快照 —— 与 `relayStatus()` 同理，
+   * JS 侧不能同步调原生。缓存由 useRoom 每 2 秒刷新。
+   */
+  relayList(): RelayInfoLike[] {
+    return this.lastRelayList;
+  }
+
+  /**
    * 主动去 Rust 问一次中继状态，更新缓存。
    *
    * ⚠️⚠️ 这个方法**必须有人定期调**，否则 [relayStatus] 永远返回
@@ -154,8 +165,20 @@ export class NativeTransport implements Transport {
   async refreshRelayStatus(): Promise<void> {
     try {
       const list = await irohNative.relayStatus();
-      const first = list[0];
-      this.lastRelayConnected = Boolean(first?.connected);
+      /* ★ 挑出"当前在用的那台"。
+       *
+       * ⚠️ **不能取 `list[0]`** —— `relayStatus()` 现在返回的是
+       *    **全部配置的中继**（`home_relay_status().get()` 的语义），
+       *    顺序不保证。取第一个可能拿到一台**没在用的**：
+       *    于是 `connected: false` + `url` 是备用那台，
+       *    界面会显示"全部备用"（真机踩过，看起来像完全没连上）。
+       *
+       * 策略与 Rust 的 `my_relay_url()` 一致：**优先连上的那台**；
+       * 一台都没连上时退回列表第一个（好让 UI 至少能显示"哪台没连上"）。
+       */
+      const live = list.find((r) => r.connected) ?? list[0];
+      this.lastRelayConnected = Boolean(live?.connected);
+      const first = live;
       // ⚠️ RelayInfo 里**没有 rtt 字段**（Rust 侧只给 url / connected /
       //    lastError / authDenied），所以 RTT 保持 null —— UI 会省掉
       //    "· 58ms" 那一段。别凭印象读一个不存在的键。
@@ -167,6 +190,9 @@ export class NativeTransport implements Transport {
       if (typeof first?.url === 'string' && first.url) {
         this.relays = [first.url];
       }
+      // 全部中继都留着 —— 状态页要列出"配了几台、各自什么状态"，
+      // 只留一台答不上"为什么选了这台"
+      this.lastRelayList = list;
     } catch {
       // 节点还没建好 / 已释放 —— 保持上一次的状态，不要瞎清空
     }
@@ -174,6 +200,8 @@ export class NativeTransport implements Transport {
 
   /** 由 create/join 记下来，供 relayStatus 用 */
   private relays: string[] = [];
+  /** 上一次查到的**全部**中继状态（状态页要列出来） */
+  private lastRelayList: RelayStatusInfo[] = [];
   private lastRelayConnected = false;
   private lastRelayError: string | null = null;
 

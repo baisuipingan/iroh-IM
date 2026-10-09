@@ -31,6 +31,8 @@ export function ChatScreen({
   onAcceptFile,
   onRejectFile,
   onPublishFile,
+  onOpenStatus,
+  onOpenSettings,
 }: {
   room: string;
   nickname: string;
@@ -50,6 +52,10 @@ export function ChatScreen({
   onAcceptFile: (fileId: string) => void;
   onRejectFile: (fileId: string, reason: string) => void;
   onPublishFile: (uri: string, name: string, size: number, mime: string) => void;
+  /** 打开连接状态页 */
+  onOpenStatus: () => void;
+  /** 打开设置页 */
+  onOpenSettings: () => void;
 }) {
   const [draft, setDraft] = useState('');
   /** 正在打开系统选择器（防连点） */
@@ -111,15 +117,29 @@ export function ChatScreen({
               ]}
             />
             <Text style={styles.subtitle} numberOfLines={1}>
-              {/* 中继断了要**明确说出来**：不然用户只看到"发出去没反应"，
-                  会以为是自己没点对。断线时 useRoom 会自动重连。 */}
-              {relay.connected ? `${peers.length} 人 · 我：${nickname}` : '中继断开 · 正在重连…'}
+              {/* ⚠️ 这里的文案要说**哪一种**断法 —— 排查时差别很大：
+                  中继断开 = 传输层报的（房间空时唯一能用的信号）；
+                  没有"在线"标记则可能是数据面静默（见 useRoom）。
+
+                  另外：**别写成"已连接"**。`relay.connected` 是 iroh
+                  认为的状态，物理断网时它可能仍是 true（真机实测），
+                  写"已连接"会让人以为网络没问题。所以在线时只说人数，
+                  不下"连接正常"的判断。 */}
+              {relay.connected ? `${peers.length} 人 · 我：${nickname}` : '连接丢失 · 正在重连…'}
             </Text>
           </View>
         </View>
 
-        {/* 成员头像堆叠 —— 超过 4 个显示 +N */}
-        <View style={styles.stack}>
+        {/* 成员头像堆叠 —— 超过 4 个显示 +N。
+            ⚠️ 整块是**进入连接状态页的入口**（点人数看详情是通用直觉）。
+               不如做成单独的"详情"按钮：那块地方已经被头像占满了，
+               再加一个按钮会挤。 */}
+        <TouchableOpacity
+          style={styles.stack}
+          onPress={onOpenStatus}
+          accessibilityRole="button"
+          accessibilityLabel="查看连接状态"
+        >
           {peers.slice(0, 4).map((p, i) => (
             <View
               key={p.id}
@@ -136,7 +156,16 @@ export function ChatScreen({
               <Text style={styles.stackMoreText}>+{peers.length - 4}</Text>
             </View>
           ) : null}
-        </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.gear}
+          onPress={onOpenSettings}
+          accessibilityRole="button"
+          accessibilityLabel="设置"
+        >
+          <Text style={styles.gearText}>⚙</Text>
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
@@ -287,6 +316,14 @@ const styles = StyleSheet.create({
   },
   sendDisabled: { opacity: 0.4 },
   sendText: { fontSize: font.body, fontWeight: '500', color: colors.onGold },
+  gear: {
+    width: 36,
+    height: sizes.touchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: spacing.xs,
+  },
+  gearText: { fontSize: 20, color: colors.navy2 },
   // 「＋」附件按钮：与输入框同一行，尺寸对齐 touchTarget
   attach: {
     width: sizes.touchTarget,
