@@ -109,14 +109,20 @@ jobs:
         with:
           key: android-${{ matrix.target }}
 
-      - name: 拉依赖（--locked 保证可复现）
+      # ⚠️⚠️ `cargo fetch` **没有 feature 参数**（只有 --target），它按
+      #    "默认 feature" 解析依赖 —— 而 build 用的是
+      #    `--no-default-features --features "cli jni-bridge"`，两者依赖集不同。
+      #    实测后果：build 阶段报
+      #        error: failed to download `curve25519-dalek-derive v0.1.1`
+      #        attempting to make an HTTP request, but --offline was specified
+      #    34 秒就红，一行代码都没编。（curve25519-dalek v5 的 proc-macro 依赖，
+      #    只有非 wasm 目标才会真正用到。）
+      #
+      #    所以这里**不传 --target**，让 fetch 覆盖最宽的集合
+      #    （含宿主机 + 各 target 的条件依赖）。
+      - name: 预拉依赖（--locked 保证版本可复现）
         working-directory: client-wasm
-        # ⚠️⚠️ `--target` 在这里也**必须传**，否则漏掉整个 Android 专属依赖集
-        #    （实测：带 --target 时有 22 个 jni/cesu8/netlink 系 crate，
-        #      不带时是 **0**），接着下面 `--offline` 的构建就会以
-        #      "failed to download ... because --offline" 失败 ——
-        #      而且要到编译阶段才暴露，白跑一轮 CI。
-        run: cargo fetch --locked --target ${{ matrix.target }}
+        run: cargo fetch --locked
 
       # ⚠️ 四个关键点：
       #   1. `--target` 必须显式传，否则产物落在 target/release/ 且
@@ -127,11 +133,15 @@ jobs:
       #      模块虽由 `cfg(any(target_os="android", feature="jni-bridge"))` 门控，
       #      Android target 确实会**编译**它，但那个 optional 依赖不会自动跟着开。
       #   4. `--lib` 只编 cdylib：agent 二进制与本产物无关，编它纯属浪费
+      #   5. ★ **不要加 `--offline`**：`cargo fetch` 无法按 feature 解析依赖
+      #      （见上一段的说明），所以构建时按需联网补齐才是可靠的做法。
+      #      可复现性由 `--locked` 保证（依赖版本一个都不许变），
+      #      这才是真正要紧的那一条 —— `--offline` 只是"省一次网络检查"。
       - name: 构建 .so
         working-directory: client-wasm
         run: |
           set -euo pipefail
-          cargo build --release --offline --locked \
+          cargo build --release --locked \
             --no-default-features --features "cli jni-bridge" \
             --lib \
             --target ${{ matrix.target }}

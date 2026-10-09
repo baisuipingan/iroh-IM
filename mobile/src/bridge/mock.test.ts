@@ -95,6 +95,10 @@ for (const ev of received) {
 /* ---------------------------------------------------------------------------
  * 契约 3：带 file 的消息字段是 **snake_case**
  *   （Rust 侧 ChatMessage/FileMeta 没有 rename_all，而 RoomEvent 有 —— 不统一的）
+ *
+ * ⚠️ 这里断言的是"字段名"本身，不是"能取到值"。
+ *    写错成 camelCase 时 TS 不会报错（`any` 之上），只会运行时读到 undefined ——
+ *    所以必须把键名钉住。
  * -------------------------------------------------------------------------*/
 
 const history = received.find((e) => e.type === 'history');
@@ -108,6 +112,37 @@ assert.equal(
   false,
   '不该出现 camelCase 的 fileId —— 真实现的 JSON 里没有这个键',
 );
+
+/* ---------------------------------------------------------------------------
+ * 契约 3b：**事件里的 file 字段也是 snake_case**
+ *
+ * 这一条是补上的 —— 原先我用 `fileId` 写了 fileRejected/fileAccepted/fileDone
+ * 三个事件的类型，靠"读文档"得出，实际是错的。用真实序列化实验才确认：
+ *
+ *     #[serde(tag="type", rename_all="camelCase")]
+ *     FileAccepted { file_id: String, receiver_relay: String }
+ *       → {"type":"fileAccepted","file_id":"…","receiver_relay":"…"}
+ *
+ * `rename_all` 只改变体名与**带名字段**，匿名字段的键保持原样。
+ * 所以这里把"事件名 camelCase、字段 snake_case"钉成断言。
+ * -------------------------------------------------------------------------*/
+
+await t.rejectFile('f-test-1', '不想收');
+
+const rejected = received.find((e) => e.type === 'fileRejected');
+assert.ok(rejected && rejected.type === 'fileRejected', 'rejectFile 应产出 fileRejected 事件');
+assert.equal(
+  typeof rejected.file_id,
+  'string',
+  'fileRejected.file_id 必须是 snake_case',
+);
+assert.equal(
+  Object.prototype.hasOwnProperty.call(rejected, 'fileId'),
+  false,
+  'fileRejected 不该有 camelCase 的 fileId —— 真实现的 JSON 里没有这个键',
+);
+// 变体名本身是 camelCase（这是 tag 的值）
+assert.equal(rejected.type, 'fileRejected', '变体名应是 camelCase（tag 的值）');
 
 /* ---------------------------------------------------------------------------
  * 契约 4：send 后立刻回显（mine=true），且有队友后续消息（mine=false）

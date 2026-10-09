@@ -243,7 +243,8 @@ export class MockTransport implements Transport {
       this.emit({
         type: 'fileRejected',
         room: this.opts.room,
-        fileId,
+        // ⚠️ 是 `file_id`（snake_case）—— 与真实 JSON 一致，见 types.ts 顶部说明
+        file_id: fileId,
         reason,
         by: this.endpointId,
       });

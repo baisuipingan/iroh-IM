@@ -1,16 +1,29 @@
 /* ============================================================================
  * 与 Rust 侧一一对应的类型定义
  *
- * ⚠️ **命名规则不对称，抄的时候别想当然**（踩过，见下方）：
- *   - `RoomEvent` 枚举：`#[serde(tag = "type", rename_all = "camelCase")]`
- *     → **事件名和字段都是 camelCase**（`fileInvite` / `fileId`）
- *   - `ChatMessage` / `FileMeta` / `PeerInfo`：**没有** rename_all
- *     → **字段是 snake_case**（`file_id` / `root_hash`）
+ * ⚠️⚠️ **别想当然：整个文件里字段全是 snake_case。**
  *
- *   也就是说 `{"type":"fileInvite","room":..,"meta":{...,"file_id":..}}`
- *   同一层 JSON 里两种命名混用。根源在 Rust 侧的 serde 注解不统一，
- *   改起来会动到线协议（要 bump 版本 + 清历史），所以这里**如实照抄**。
+ *   - `RoomEvent` 枚举：`#[serde(tag = "type", rename_all = "camelCase")]`
+ *     → `rename_all` 只改**变体名**（`FileAccepted` → `"fileAccepted"`）
+ *       和**带名字段**；本项目的变体全是**匿名字段**，键名保持不变 →
+ *       **字段仍是 snake_case**（`file_id` / `receiver_relay`）
+ *   - `ChatMessage` / `FileMeta` / `PeerInfo`：**没有** rename_all
+ *     → 字段同样是 snake_case（`file_id` / `root_hash`）
+ *
+ *   所以真实的 JSON 长这样（已用序列化实验核对过，不是查文档推的）：
+ *
+ *       {"type":"fileAccepted","room":"x","file_id":"f1","have":"0",
+ *        "receiver_relay":"https://r","by":"peer"}
+ *       {"type":"fileInvite","room":"x","meta":{"file_id":"f1","chunk_size":262144,…}}
+ *
+ *   即**只有 `"type"` 的值（变体名）是 camelCase**，其余全部 snake_case。
+ *
+ *   根源是 Rust 侧 serde 注解的既有风格，改它要动线协议
+ *   （bump 版本 + 清历史），所以这里**如实照抄**。
  *   真源：client-wasm/src/room.rs、client-wasm/src/filetransfer.rs
+ *
+ *   教训：写成 camelCase 不会报任何错 —— 只是运行时读到 `undefined`，
+ *   属于"类型看着对、悄悄错"。所以这里用实测输出而不是推测。
  * ==========================================================================*/
 
 /** 协议版本（与 sigfmt.rs 的 PROTO_V4 对齐；房间标识进签名载荷） */
@@ -77,6 +90,21 @@ export interface RelayStatus {
 
 /* ============================================================================
  * 事件 —— 对应 room.rs 的 `RoomEvent`（tag = "type", camelCase）
+ *
+ * ⚠️⚠️ **只有「变体名」是 camelCase，字段名是 snake_case。**
+ *
+ *   `#[serde(tag = "type", rename_all = "camelCase")]` 里的 `rename_all`
+ *   只作用于**变体名**（`FileAccepted` → `"fileAccepted"`）与**带名字段**，
+ *   而这里全是**匿名字段**（`{ file_id: String }`）—— serde 不会去改它们的键名，
+ *   所以字段保持 Rust 里的 snake_case。
+ *
+ *   已用真实序列化实验确认（不是从文档推的）：
+ *     {"type":"fileAccepted","room":"x","file_id":"f1","have":"0",
+ *      "receiver_relay":"https://r","by":"peer"}
+ *     {"type":"fileDone","room":"x","file_id":"f1","ok":true,"reason":""}
+ *
+ *   写成 `fileId` 的后果：TS 侧读不到值（`undefined`），
+ *   而**不会报任何错** —— 属于"类型看着对、运行时悄悄错"。
  * ==========================================================================*/
 
 interface EvRoom {
@@ -93,23 +121,23 @@ export type RoomEvent =
   | ({ type: 'fileInvite'; meta: FileMeta } & EvRoom)
   | ({
       type: 'fileRejected';
-      fileId: string;
+      file_id: string;
       reason: string;
       /** 拒绝方的 EndpointId —— 多接收者时必须靠它区分是哪条通道 */
       by: string;
     } & EvRoom)
   | ({
       type: 'fileAccepted';
-      fileId: string;
+      file_id: string;
       /** 接收方已有多少字节（断点续传） */
       have: string;
-      receiverRelay: string;
+      receiver_relay: string;
       by: string;
     } & EvRoom)
-  | ({ type: 'fileDone'; fileId: string; ok: boolean; reason: string } & EvRoom)
+  | ({ type: 'fileDone'; file_id: string; ok: boolean; reason: string } & EvRoom)
   | ({
       type: 'fileQueryAsked';
-      fileId: string;
+      file_id: string;
       requester: string;
     } & EvRoom)
   | ({ type: 'relay'; status: RelayStatus } & EvRoom)
