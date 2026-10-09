@@ -129,11 +129,53 @@ pub extern "system" fn JNI_OnLoad(
     // 用 AtomicUsize 存而不是 static mut：`JNI_OnLoad` 之后会被
     // Kotlin 协程线程读，裸 `static mut` 是 UB。
     JAVA_VM_PTR.store(vm as usize, std::sync::atomic::Ordering::Release);
+
+    // 尽早把日志接到 logcat —— 之后所有 iroh 的输出才看得见
+    init_android_logging();
+    tracing::info!("libiroh_web 已加载（JNI_OnLoad 完成，日志已接 logcat）");
+
     jni::sys::JNI_VERSION_1_6
 }
 
 /// JavaVM 指针（由 `JNI_OnLoad` 写入）。
 static JAVA_VM_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/* ============================================================================
+ * ★ 日志桥接到 logcat
+ *
+ * **为什么必须做这件事**：没有它，`adb logcat` 里**看不到任何 Rust 侧输出** ——
+ * iroh 连中继失败、鉴权被拒、DNS 解析异常，全都静默无闻。
+ *
+ * 这一点在真机调试时反复咬人：明明服务端一切正常，App 却一直"正在连接中继"，
+ * 而**没有任何一处能告诉你为什么**。只能靠猜。
+ *
+ * Android 上 Rust 的 `stdout` 会被 libc 重定向到 logcat（tag 通常是
+ * `stdout`），所以最省事的方式就是 `fmt()` + 默认 writer。
+ * 不用引入 `android_logger` 之类的额外依赖（那会动 Cargo.lock）。
+ * ==========================================================================*/
+
+/// 日志是否已初始化（`init()` 重复调用会 panic，用这个挡住）
+static LOG_INIT: std::sync::Once = std::sync::Once::new();
+
+/// 初始化 Rust 侧日志 → logcat。
+///
+/// 幂等；在 `JNI_OnLoad` 里调一次即可。
+fn init_android_logging() {
+    LOG_INIT.call_once(|| {
+        // 级别：debug 构建给 TRACE（排查问题够用），release 给 INFO
+        //（Android 上 INFO 已经能看到 iroh 的连接/失败原因）
+        #[cfg(debug_assertions)]
+        let level = tracing::level_filters::LevelFilter::TRACE;
+        #[cfg(not(debug_assertions))]
+        let level = tracing::level_filters::LevelFilter::INFO;
+
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(level)
+            .without_time() // logcat 自带时间戳，重复打印没意义
+            .with_ansi(false) // logcat 不解析 ANSI 转义
+            .try_init(); // 已经有人装过 subscriber 就安静跳过
+    });
+}
 
 /// 供 Kotlin 调用的初始化：把 Application Context 交给 Rust。
 ///
@@ -197,6 +239,10 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeIn
         //    设计约定：指针活到进程结束。故意泄漏，且只初始化一次。
         std::mem::forget(global);
 
+        // 记两条日志：一条在注入前（万一后面 panic，知道走到哪了），
+        // 一条在注入后（成功）。logcat 里靠它确认注入是否真的发生。
+        tracing::info!("nativeInitContext 开始（准备注入 Application Context）");
+
         // 这一句之后，iroh 的 DNS 与 reqwest 的 TLS 校验都能拿到 Android 上下文。
         //
         // ⚠️ 真实 API 就是这一个函数 —— 它内部 `assert!(previous.is_none())`，
@@ -209,8 +255,8 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeIn
         Ok(())
     });
 
-    // VM 指针为 0 时上面已 return，这里不会走到；其余错误（如 new_global_ref 失败）
-    // 由 throw_void 之外的路抛 RuntimeException。
+    // VM 指针为 0 时上面已 return；其余错误（如 new_global_ref 失败）
+    // 由 resolve 抛出 RuntimeException 给 Kotlin。
     let _ = outcome.resolve::<ThrowRuntimeExAndDefault>();
 }
 
