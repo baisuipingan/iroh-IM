@@ -63,7 +63,7 @@ cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "tokio/signal", "d
 #    于是"能不能编过"只能等 CI 才知道 —— 那是很糟的反馈回路。
 #    加上这个 feature 就能在 macOS/Linux 上 `cargo check --features jni-bridge`
 #    做**纯类型检查**（不链接、不需要 NDK），把语法/类型错误就地抓出来。
-jni-bridge = ["dep:jni"]
+jni-bridge = ["dep:jni", "dep:ndk-context"]
 
 [dependencies]
 anyhow = "1"
@@ -106,6 +106,22 @@ wasm-streams = { version = "0.5", optional = true }
 #      后面的依赖（tracing-subscriber / rusqlite / wasm 全家）全吞成"仅 Android"。
 # 版本无需下载新包：0.22.4 已在依赖树里（rustls-platform-verifier 带入）。
 jni = { version = "0.22", optional = true }
+
+# Android 上下文注入（src/jni_api.rs 的 nativeInitContext）。
+#
+# ⚠️ **不初始化它会 SIGABRT**，而且报错完全看不出原因：
+#       Abort message: 'android context was not initialized'
+#       #26 Java_…_IrohNative_nativeCreate+356
+#   两台下游消费者都靠它：iroh 的 DNS 解析（读系统 nameserver）与
+#   reqwest 的 TLS 校验（rustls-platform-verifier）。
+#
+# 为什么直接依赖它，而不是用 `iroh::dns::install_android_jni_context`：
+#   后者带 `#[cfg(any(target_os = "android", doc))]`，在 macOS/Linux 上
+#   **根本不存在** → 就没法在没真机的机器上做类型检查了。
+#   `ndk-context` 没有 cfg 限制，本地 `cargo check` 就能挡住笔误。
+#
+# 版本无需新增包：0.1.1 早就在依赖树里（n0-dns-resolver / netdev 带入）。
+ndk-context = { version = "0.1", optional = true }
 
 # wasm-opt 需要显式打开这些 wasm 特性，否则会失败（官方示例同款配置）
 [package.metadata.wasm-pack.profile.release]

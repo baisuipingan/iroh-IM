@@ -30,6 +30,7 @@
 
 package vip.editor.irohchat.nativebridge
 
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -57,10 +58,59 @@ object IrohNative {
         }
     }
 
+    /* =======================================================================
+     * ★★ Android Context 注入 —— 不做这一步，真机上必然 SIGABRT
+     *
+     * 现象（真机实测）：
+     *     Abort message: 'android context was not initialized'
+     *     #26 Java_…_IrohNative_nativeCreate+356
+     *     signal 6 (SIGABRT)
+     *
+     * 崩溃栈里完全看不出跟 DNS / TLS 有关，像是 iroh 内部出了问题。
+     *
+     * 根因：依赖树里有两个东西**需要通过 JNI 拿 Android 的 JavaVM 与 Context**：
+     *   1. iroh 的 DNS 解析（读系统 nameserver，而不是用写死的 fallback）
+     *   2. reqwest 的 TLS 校验（rustls-platform-verifier，用系统信任库）
+     * 两者都从 `ndk_context::android_context()` 取指针，而那个全局量必须有人初始化。
+     * 上游文档原话：uninitialized ndk_context in production is a programming
+     * error and should surface loudly.
+     * =====================================================================*/
+
+    /** 是否已注入 Context。`initialize_android_context` 重复调用会 panic，靠它防重。 */
+    private var ctxInjected = false
+
+    /**
+     * 注入 Application Context。**必须在任何 [nativeCreate] 之前调用一次。**
+     *
+     * ⚠️ 传 `context.applicationContext`，**不要传 Activity**：
+     *    ndk_context 要求指针活到进程结束，而 Activity 会被销毁重建。
+     *
+     * ⚠️ 幂等保护是必须的：Rust 侧 `initialize_android_context` 内部
+     *    `assert!(previous.is_none())`，**第二次调用直接 panic（SIGABRT）**。
+     */
+    @Synchronized
+    fun initContext(context: Context) {
+        if (!available) return
+        if (ctxInjected) return
+        // applicationContext：进程级生命周期，符合 ndk_context 的要求
+        nativeInitContext(context.applicationContext)
+        ctxInjected = true
+    }
+
+    /**
+     * 把 JavaVM 与 Context 交给 Rust（实现在 src/jni_api.rs）。
+     *
+     * JavaVM 那一半由 `JNI_OnLoad` 在 `System.loadLibrary` 时就存好了，
+     * 这个调用补上 Context 那一半。
+     */
+    private external fun nativeInitContext(context: Context)
+
     /* ---- 生命周期 ---- */
 
     /**
      * 建节点。返回句柄（0 = 失败，已抛异常）。
+     *
+     * ⚠️ 调用前必须已经 [initContext]，否则 Rust 侧一进 DNS 就 abort。
      *
      * [optsJson] 字段与浏览器侧 relay-config 对齐：
      *   {"relays":["https://…"], "relayToken":"…", "anchorId":"…",

@@ -12,7 +12,25 @@ dist/
 /android/
 /ios/
 
-# .so 是 CI 编出来的产物（约 40MB），不入库；用 scripts/fetch-android-so.sh 取
-**/jniLibs/*.so
+# .so 是 CI 编出来的产物（约 8.5 MB），不入库；用 scripts/fetch-android-so.sh 取。
+#
+# ⚠️ 模式必须是 `**/jniLibs/**/*.so`（末尾两段通配），不能写成
+#    `**/jniLibs/*.so` —— 后者只匹配**直接**放在 jniLibs/ 下的文件，
+#    而 .so 实际在 `jniLibs/arm64-v8a/` 子目录里 → 匹配不到 → **静默入库**。
+#    实测：`git check-ignore -v .../jniLibs/arm64-v8a/libiroh_web.so` 无输出即中招。
+#    校验命令（两个都该有输出）：
+#      git check-ignore -v <...>/jniLibs/arm64-v8a/libiroh_web.so
+#      git check-ignore -v <...>/jniLibs/x.so
+**/jniLibs/**/*.so
+
+# Gradle 构建产物。
+# ⚠️ 这里不能用 `android/` 这种短模式（见上面的教训），
+#    而 `**/android/build/` 明确限定"android 目录下的 build"，
+#    不会误伤源码目录。
+#    实测踩过：本地编完 Kotlin 后 `git add modules/` 会把数百个
+#    .dex / .class 一起暂存进去。
+**/android/build/
+**/android/.gradle/
+**/android/app/build/
 
 .DS_Store

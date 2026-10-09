@@ -61,6 +61,159 @@ use tokio::runtime::Runtime;
 
 use crate::room::{RoomNode, RoomOptions};
 
+/* ============================================================================
+ * ★★ Android Context 初始化 —— 不做这一步，真机上会 SIGABRT
+ *
+ * ## 现象（真机实测，非常难猜）
+ *
+ * App 装上能启动、`.so` 加载成功、`nativeCreate` 也调到了，然后**立刻崩溃**：
+ *
+ *     Abort message: 'android context was not initialized'
+ *     #26 Java_…_IrohNative_nativeCreate+356
+ *     signal 6 (SIGABRT)
+ *
+ * 崩溃栈里看不出任何关于 DNS / TLS 的线索 —— 很像是 iroh 内部的问题。
+ *
+ * ## 根因
+ *
+ * 依赖树里有两个东西**需要通过 JNI 拿到 Android 的 JavaVM 和 Context**：
+ *
+ *   1. `n0-dns-resolver`（iroh 的 DNS）：用 JNI 读系统的 DNS 配置
+ *      （`ConnectivityManager.getLinkProperties`）来决定用哪些 nameserver
+ *   2. `rustls-platform-verifier`：用 Android 系统信任库做 TLS 校验
+ *
+ * 两者都从 `ndk_context::android_context()` 取指针，而这个全局量**必须有人初始化**。
+ * 上游文档写得很明确（n0-dns-resolver/src/system_config/android.rs）：
+ *
+ *   > Release builds let the panic propagate; uninitialized `ndk_context`
+ *   > in production is a programming error and should surface loudly.
+ *
+ * 也就是说这不是"缺个可选优化"，而是**必须做的一步**。
+ *
+ * ## 为什么不能用 `JNI_OnLoad` 一步到位
+ *
+ * 上游文档给的示例是 `JNI_OnLoad(vm, res)` 里直接用 `res` 当 Context。
+ * 但 `res` 是给 `JNI_OnLoad` 的**附加参数**，在 Android 上由
+ * `System.loadLibrary` 触发时**是 NULL** —— 真拿它当 Context 会拿到空指针。
+ *
+ * 所以这里拆成两步（这也是各家 Android + JNI 项目的通行做法）：
+ *
+ *     Java/Kotlin 侧 System.loadLibrary("iroh_web")
+ *        → JNI_OnLoad(vm, res)            ← 只存 JavaVM（vm 是真有的）
+ *        → Kotlin 调 nativeInitContext(ctx)  ← Kotlin 提供真 Context
+ *              → 此时两个全局量齐了，iroh 可以安全建节点
+ *
+ * ⚠️ Kotlin 侧**必须在 `nativeCreate` 之前**调 `nativeInitContext`，
+ *    否则又会退回到 "android context was not initialized"。
+ * ==========================================================================*/
+
+/// `JNI_OnLoad`：库加载时由 JVM 调用，只做一件事 —— 记住 JavaVM。
+///
+/// ⚠️ `res` 在 Android 上通常为 NULL，**不要拿它当 Context**（见上方注释）。
+///
+/// ⚠️⚠️ 签名里的坑：`jni::sys::JavaVM` **本身已经是指针**
+///      （`pub type JavaVM = *const JNIInvokeInterface_`）。
+///      JNI 规范传进来的参数是 `JavaVM*`，也就是"指向这个指针类型的东西" ——
+///      所以形参必须写 `JavaVM`（不带 `*mut`），写 `*mut JavaVM` 就多了一层。
+///
+/// # Safety
+/// 由 JVM 调用，`vm` 保证有效。
+#[allow(non_snake_case)]
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(
+    vm: jni::sys::JavaVM,
+    _res: *mut std::ffi::c_void,
+) -> jni::sys::jint {
+    // 只存指针，不解引用 —— 保存 JavaVM 供后续 `nativeInitContext` 使用。
+    //
+    // 用 AtomicUsize 存而不是 static mut：`JNI_OnLoad` 之后会被
+    // Kotlin 协程线程读，裸 `static mut` 是 UB。
+    JAVA_VM_PTR.store(vm as usize, std::sync::atomic::Ordering::Release);
+    jni::sys::JNI_VERSION_1_6
+}
+
+/// JavaVM 指针（由 `JNI_OnLoad` 写入）。
+static JAVA_VM_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 供 Kotlin 调用的初始化：把 Application Context 交给 Rust。
+///
+/// Kotlin 侧这样调（**必须在 `nativeCreate` 之前**）：
+///
+/// ```kotlin
+/// object IrohNative {
+///     init { System.loadLibrary("iroh_web") }   // 触发 JNI_OnLoad
+///     /** [appContext] 传 `context.applicationContext`（别传 Activity） */
+///     fun initContext(appContext: android.content.Context) = nativeInitContext(appContext)
+/// }
+/// ```
+///
+/// # 为什么用 `applicationContext` 而不是 Activity
+///
+/// Activity 会被销毁重建、指针随即失效；而 `ndk_context` 的约定是
+/// **两个指针必须活到进程结束**（见上游 Safety 注释）。
+/// Application 是进程级的，正好满足。
+///
+/// # 为什么直接调 `ndk_context` 而不是 `iroh::dns::install_android_jni_context`
+///
+/// iroh 的那个重导出带 `#[cfg(any(target_os = "android", doc))]` ——
+/// **在 macOS/Linux 上根本不存在**，用它就等于放弃"本机能做类型检查"
+/// （一试就知道：报 `cannot find function ... in module iroh::dns`）。
+///
+/// 而 `ndk_context::initialize_android_context` 没有 cfg 限制，
+/// 本机就能编过 —— 这让我们能在**没有真机**的情况下也挡住笔误。
+///
+/// 两者做的是同一件事（iroh 的实现也只是转调 `n0_dns_resolver`，
+/// 最终同样落到 `ndk_context`），所以直接调不损失任何东西。
+///
+/// # Safety
+/// 由 JNI 调用；`context` 必须是有效的 Android `Context`。
+#[no_mangle]
+pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeInitContext(
+    mut env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    context: JObject<'_>,
+) {
+    // ⚠️ 错误要用 `jni::errors::Error`（`ThrowRuntimeExAndDefault` 只认
+    //    `std::error::Error`，而 `anyhow::Error` 没实现它 —— 试过，编不过）。
+    //    需要自定义文案时走下面的 `err_to_msg` 兜底。
+    let vm_ptr = JAVA_VM_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if vm_ptr == 0 {
+        throw_void(
+            &mut env,
+            "JNI_OnLoad 未被调用（JavaVM 指针为空）—— 检查 System.loadLibrary(\"iroh_web\") 是否已执行",
+        );
+        return;
+    }
+
+    // 固定 Context 引用 + 注入（都在 with_env 里做，避免把裸 Env 泄漏到外面）
+    let outcome = env.with_env(|e| -> std::result::Result<(), jni::errors::Error> {
+        // 用 GlobalRef 固定住 Context：局部引用在 JNI 调用返回后即失效，
+        // 而 ndk_context 要求它活到**进程结束**。
+        let global = e.new_global_ref(&context)?;
+        let ctx_ptr = global.as_raw() as *mut std::ffi::c_void;
+
+        // ⚠️ 必须交出去（forget），不能让它 drop —— 否则引用计数归零，
+        //    iroh 之后用这个指针会拿到悬垂引用。这是 ndk_context 的
+        //    设计约定：指针活到进程结束。故意泄漏，且只初始化一次。
+        std::mem::forget(global);
+
+        // 这一句之后，iroh 的 DNS 与 reqwest 的 TLS 校验都能拿到 Android 上下文。
+        //
+        // ⚠️ 真实 API 就是这一个函数 —— 它内部 `assert!(previous.is_none())`，
+        //    **重复调用会 panic**。Kotlin 侧保证只调一次（IrohNative 的 init 块）。
+        unsafe {
+            ndk_context::initialize_android_context(vm_ptr as *mut std::ffi::c_void, ctx_ptr);
+        }
+
+        tracing::info!("Android context 已注入（iroh DNS + reqwest TLS 可用）");
+        Ok(())
+    });
+
+    // VM 指针为 0 时上面已 return，这里不会走到；其余错误（如 new_global_ref 失败）
+    // 由 throw_void 之外的路抛 RuntimeException。
+    let _ = outcome.resolve::<ThrowRuntimeExAndDefault>();
+}
+
 /// 事件暂存队列：转发线程 push，Kotlin 侧 pop。
 ///
 /// ⚠️ **不设上限**是有意的：聊天事件是用户可感知的数据，丢掉会变成

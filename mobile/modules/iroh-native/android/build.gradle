@@ -19,9 +19,27 @@ version = '0.1.0'
 android {
     namespace "vip.editor.irohchat.nativebridge"
 
+    // 跟随根工程（android/build.gradle 里的 ext），与 app 用同一套版本 ——
+    // 各写一份到时候升 SDK 会漏掉一个。
+    compileSdk rootProject.ext.compileSdkVersion
+
     defaultConfig {
-        // 与 app/build.gradle 的 minSdkVersion 保持一致（Expo 54 默认 24）
-        minSdkVersion 24
+        minSdkVersion rootProject.ext.minSdkVersion
+
+        // ⚠️⚠️ `versionName` / `versionCode` **必须写**，即使这是 library 模块。
+        //    `expo-module-gradle-plugin` 会读它们；不写的话配置阶段就失败：
+        //        A problem occurred configuring project ':iroh-native'.
+        //        > 'android.defaultConfig.versionName' is not defined
+        //    （真实踩过：14 分钟的首次构建跑到这里才炸。）
+        //    library 模块没有真正的版本号概念，写自己的版本即可。
+        versionCode 1
+        versionName "0.1.0"
+
+        // 只要 arm64-v8a —— CI 只出这一个 ABI（见 build-android-so.yml 的说明），
+        // 不声明的话 Gradle 会期望着 x86 等其它 ABI 的 .so 而报缺文件。
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
     }
 
     // ⚠️ jniLibs 是**默认**目录，本来不用写。这里显式声明是为了让
