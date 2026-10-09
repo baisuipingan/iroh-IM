@@ -11,7 +11,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { ChatMessage, PeerInfo, RelayStatus } from '../bridge/types';
-import type { FileInviteState } from '../bridge/useRoom';
+import type { FileInviteState, OutFileState } from '../bridge/useRoom';
+import { pickFile } from '../bridge/pick-file';
 import { MessageBubble } from '../components/MessageBubble';
 import { avatarColor, avatarText, colors, font, sizes, spacing } from '../theme/tokens';
 
@@ -24,10 +25,12 @@ export function ChatScreen({
   relay,
   joined,
   files,
+  outFiles,
   onSend,
   onLeave,
   onAcceptFile,
   onRejectFile,
+  onPublishFile,
 }: {
   room: string;
   nickname: string;
@@ -38,14 +41,21 @@ export function ChatScreen({
   peers: PeerInfo[];
   relay: RelayStatus;
   joined: boolean;
-  /** 文件邀约状态：file_id → 状态 */
+  /** 收到的文件邀约：file_id → 状态 */
   files: Record<string, FileInviteState>;
+  /** **我发出的**文件：file_id → 状态 */
+  outFiles: Record<string, OutFileState>;
   onSend: (text: string) => void;
   onLeave: () => void;
   onAcceptFile: (fileId: string) => void;
   onRejectFile: (fileId: string, reason: string) => void;
+  onPublishFile: (uri: string, name: string, size: number, mime: string) => void;
 }) {
   const [draft, setDraft] = useState('');
+  /** 正在打开系统选择器（防连点） */
+  const [picking, setPicking] = useState(false);
+  /** 选文件本身的错误（与聊天错误分开，显示在 composer 上方） */
+  const [pickError, setPickError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   const canSend = draft.trim().length > 0 && joined;
@@ -54,6 +64,27 @@ export function ChatScreen({
     if (!canSend) return;
     onSend(draft);
     setDraft('');
+  };
+
+  /**
+   * 选文件 → 发布。
+   *
+   * ⚠️ 发布是**长耗时**的（原生侧要先流式算 blake3，大文件几十秒）。
+   *    所以先同步置状态（`publishFile` 内部会 setOutFiles），
+   *    UI 立刻出现「发布中」的卡片 —— 否则用户以为没反应会连点。
+   */
+  const doPickFile = async () => {
+    if (!joined || picking) return;
+    setPicking(true);
+    try {
+      const picked = await pickFile();
+      if (!picked) return; // 用户取消
+      onPublishFile(picked.uri, picked.name, picked.size, picked.mime);
+    } catch (e) {
+      setPickError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPicking(false);
+    }
   };
 
   return (
@@ -122,6 +153,7 @@ export function ChatScreen({
               message={item}
               mine={item.from === myId}
               fileState={item.file ? files[item.file.file_id] : undefined}
+              outState={item.file ? outFiles[item.file.file_id] : undefined}
               // ⚠️ 只传 fileId：完整 meta 由 useRoom 从邀约缓存里取。
               //    消息里的 `item.file` 是 `FileRef`（少 4 个字段），
               //    传它下去会让 Rust 反序列化失败 —— 见 RoomActions.acceptFile。
@@ -142,7 +174,23 @@ export function ChatScreen({
           }
         />
 
+        {/* 选文件本身的错误（不是聊天错误）—— 显示在输入区上方，不挡住消息 */}
+        {pickError ? (
+          <TouchableOpacity onPress={() => setPickError(null)} style={styles.pickErr}>
+            <Text style={styles.pickErrText}>选文件失败：{pickError}（点此关闭）</Text>
+          </TouchableOpacity>
+        ) : null}
+
         <View style={styles.composer}>
+          <TouchableOpacity
+            style={[styles.attach, !joined && styles.attachDisabled]}
+            disabled={!joined}
+            onPress={doPickFile}
+            accessibilityRole="button"
+            accessibilityLabel="发送文件"
+          >
+            <Text style={styles.attachText}>＋</Text>
+          </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={draft}
@@ -237,4 +285,25 @@ const styles = StyleSheet.create({
   },
   sendDisabled: { opacity: 0.4 },
   sendText: { fontSize: font.body, fontWeight: '500', color: colors.onGold },
+  // 「＋」附件按钮：与输入框同一行，尺寸对齐 touchTarget
+  attach: {
+    width: sizes.touchTarget,
+    height: sizes.composerMinH,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.xs,
+  },
+  attachDisabled: { opacity: 0.4 },
+  attachText: {
+    fontSize: 26,
+    lineHeight: 30,
+    color: colors.cyanDeep,
+    fontWeight: '300',
+  },
+  pickErr: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    backgroundColor: '#fdecea',
+  },
+  pickErrText: { fontSize: font.xs, color: '#c62828' },
 });

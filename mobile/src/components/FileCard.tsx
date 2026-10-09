@@ -1,6 +1,6 @@
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { ChatMessage } from '../bridge/types';
-import type { FileInviteState } from '../bridge/useRoom';
+import type { FileInviteState, OutFileState } from '../bridge/useRoom';
 import { colors, font, sizes, spacing } from '../theme/tokens';
 
 /** 人类可读的文件大小 —— 1024 进制，保留 1 位小数 */
@@ -31,6 +31,7 @@ export function FileCard({
   message,
   mine,
   state,
+  outState,
   onAccept,
   onReject,
 }: {
@@ -38,6 +39,8 @@ export function FileCard({
   mine: boolean;
   /** 本次会话收到的邀约状态（没有 = 历史消息，收不了） */
   state?: FileInviteState;
+  /** **我发出的**文件状态（等对方接收 / 发送中 / 完成） */
+  outState?: OutFileState;
   onAccept?: (fileId: string) => void;
   onReject?: (fileId: string) => void;
 }) {
@@ -94,6 +97,22 @@ export function FileCard({
           </TouchableOpacity>
         )}
       </View>
+
+      {/* 我发出的文件：显示发送状态 */}
+      {mine && outState ? (
+        <Text style={outState.status === 'failed' ? styles.hintErr : styles.hintOk}>
+          {outState.detail ??
+            (outState.status === 'publishing'
+              ? '正在计算校验值…'
+              : outState.status === 'offered'
+                ? '已发出，等对方接收…'
+                : outState.status === 'sending'
+                  ? '正在发送…'
+                  : outState.status === 'rejected'
+                    ? '对方拒绝接收'
+                    : '已发送')}
+        </Text>
+      ) : null}
 
       {/* 状态说明：收完显示落盘位置；失败显示原因；历史卡片如实说明收不了 */}
       {status === 'done' && state?.detail ? (

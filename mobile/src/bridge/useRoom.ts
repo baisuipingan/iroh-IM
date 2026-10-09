@@ -38,6 +38,14 @@ export interface JoinParams {
   nickname: string;
 }
 
+/** 一个**我发出的**文件在 UI 上的状态 */
+export interface OutFileState {
+  meta: FileMeta;
+  /** `publishing` = 正在算哈希+广播邀约；之后等对方点接收 */
+  status: 'publishing' | 'offered' | 'sending' | 'done' | 'failed' | 'rejected';
+  detail?: string;
+}
+
 export interface RoomState {
   /** 已按时间升序排好的消息 */
   messages: ChatMessage[];
@@ -51,6 +59,8 @@ export interface RoomState {
   error: string | null;
   /** 收到的文件邀约：file_id → 状态（UI 据此渲染文件卡片与进度） */
   files: Record<string, FileInviteState>;
+  /** **我发出的**文件：file_id → 状态（等对方接收 / 传输中 / 完成） */
+  outFiles: Record<string, OutFileState>;
 }
 
 export interface RoomActions {
@@ -78,6 +88,13 @@ export interface RoomActions {
   acceptFile: (fileId: string) => Promise<void>;
   /** 拒绝接收 */
   rejectFile: (fileId: string, reason: string) => Promise<void>;
+  /**
+   * 发布并发送一个文件：先广播邀约，**等对方点接收后自动推送数据**。
+   *
+   * 耗时操作（要先算 blake3）→ UI 要有"发布中"状态。
+   * [uri] 来自 `expo-document-picker`。
+   */
+  publishFile: (uri: string, name: string, size: number, mime: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -109,6 +126,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   const [nickname, setNickname] = useState(defaultNickname);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<Record<string, FileInviteState>>({});
+  const [outFiles, setOutFiles] = useState<Record<string, OutFileState>>({});
 
   /** 已见过的消息 id —— 去重用的（约束 3） */
   const seen = useRef(new Set<string>());
@@ -139,6 +157,18 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
    */
   const filesRef = useRef<Record<string, FileInviteState>>({});
   filesRef.current = files;
+
+  /**
+   * **我发出的**文件（最新值）。
+   *
+   * 用途一：`fileAccepted` 事件来了要判断"这是我们发的文件吗"——
+   * 接收方也会收到这个广播事件，不能无脑推。
+   * 用途二：推送中/完成后更新 UI 状态。
+   *
+   * 和 `filesRef` 同理：订阅回调的闭包是旧的，必须用 ref 读最新。
+   */
+  const outFilesRef = useRef<Record<string, OutFileState>>({});
+  outFilesRef.current = outFiles;
 
   /* ---- 订阅：只依赖 transport，**不依赖 room** ---- */
   useEffect(() => {
@@ -197,6 +227,12 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           //
           // ⚠️ 不自动接收：接收要写公共目录（用户可见的副作用），
           //    必须由用户点确认。这与 Web 端一致。
+          //
+          // ⚠️ **必须核对房间**：事件是广播的，换房瞬间可能收到旧房的事件。
+          //    不核对的话，新房间里会冒出一张旧房的文件卡片，
+          //    而那个文件在当前房间根本收不到（Rust 侧 accept_file 会因
+          //    房间不符拒绝）。这类"看得见却点不动"最难排查。
+          if (ev.room !== roomRef.current) break;
           setFiles((prev) => ({
             ...prev,
             [ev.meta.file_id]: {
@@ -210,6 +246,8 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
 
         case 'fileDone': {
           // 收完（或失败）。ok=false 时把原因写在卡片上，别只吞掉。
+          // ⚠️ 同样核对房间（见 fileInvite 的说明）
+          if (ev.room !== roomRef.current) break;
           setFiles((prev) => {
             const cur = prev[ev.file_id];
             if (!cur) return prev; // 不是我们正在收的文件（可能是对端视角的另一条链路）
@@ -225,10 +263,45 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           break;
         }
 
-        case 'fileRejected':
-          // 对方拒绝了**我们**发的文件 —— v1 只能发不能收，这里只记一条提示。
-          setError(`对方拒绝接收文件：${ev.reason || '未说明原因'}`);
+        case 'fileAccepted':
+          /* 对方点了接收 → **我们**要把数据推过去。
+           *
+           * ⚠️ **先核对房间**：`fileAccepted` 是广播事件，
+           *    别的房间的文件被接收时我们也会收到。不核对就会拿本房间的
+           *    中继信息去推一个不属于这里的文件。
+           *
+           * ⚠️ 这是**发送方**才该处理的事件。接收方也会收到这个事件
+           *    （协议是广播的），但那时 `file_id` 不在我们的"货架"里，
+           *    原生侧会因"货架里没有这个 id"而失败 —— 所以这里先
+           *    用 `outFiles` 过滤一道，避免无谓的原生调用与报错。
+           *
+           * ⚠️ `by` 是**接受方的 EndpointId**，`receiver_relay` 是他那台中继。
+           *    推送必须拨**他**（不能靠猜 peers —— 房间人多时会猜错）。
+           */
+          if (ev.room !== roomRef.current) break;
+          if (!outFilesRef.current[ev.file_id]) break;
+          void pushToPeerRef.current(ev.file_id, ev.have, ev.by, ev.receiver_relay);
           break;
+
+        case 'fileRejected': {
+          // 对方拒绝了**我们**发的文件 —— 更新卡片状态
+          // ⚠️ 同样核对房间（见 fileInvite 的说明）
+          if (ev.room !== roomRef.current) break;
+          const meta = outFilesRef.current[ev.file_id];
+          if (meta) {
+            setOutFiles((prev) => {
+              const cur = prev[ev.file_id];
+              if (!cur) return prev;
+              return {
+                ...prev,
+                [ev.file_id]: { ...cur, status: 'rejected', detail: ev.reason || '对方拒绝了' },
+              };
+            });
+          } else {
+            setError(`对方拒绝接收文件：${ev.reason || '未说明原因'}`);
+          }
+          break;
+        }
 
         case 'error':
           setError(ev.message);
@@ -317,6 +390,10 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       // ① 同步：重置列表与去重表（换房不能看到旧房间的消息）
       seen.current = new Set();
       setMessages([]);
+      // 换房要清掉"我发出的文件"状态 —— 那是**上一个房间**的会话状态。
+      // 不清的话，新房间里会显示旧房的发送进度，而且 fileAccepted 的
+      // "是我们发的吗"判断会被旧条目误命中。
+      setOutFiles({});
       setPeers([]);
       setJoined(false);
       setError(null);
@@ -399,6 +476,79 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   );
 
   /* ---- 文件接收 ---- */
+
+  /**
+   * 把数据推给某个接收方（收到 `fileAccepted` 后调）。
+   *
+   * ⚠️ **不能并发推同一个 file_id**：两条链路会往同一个对端重复发数据。
+   *    这里用状态位挡（`sending` / `done` 直接返回）。
+   */
+  const pushToPeer = useCallback(
+    async (fileId: string, have: string, peerId: string, peerRelay: string) => {
+      if (!transport) return;
+      const cur = outFilesRef.current[fileId];
+      if (!cur) return;
+      // 已经在推 / 推完了 → 不重复（同一个文件可能被多个人接收，
+      // 那种情况是**不同的事件**，`peerId` 不同，各自推各自的）
+      if (cur.status === 'sending' || cur.status === 'done') return;
+
+      setOutFiles((prev) => {
+        const c = prev[fileId];
+        if (!c) return prev;
+        return { ...prev, [fileId]: { ...c, status: 'sending', detail: '正在发送…' } };
+      });
+      try {
+        const bytes = await transport.pushFile(fileId, have, peerId, peerRelay);
+        setOutFiles((prev) => {
+          const c = prev[fileId];
+          if (!c) return prev;
+          return { ...prev, [fileId]: { ...c, status: 'done', detail: `已发送 ${bytes} 字节` } };
+        });
+        // 推完了从原生货架移除（不能重复推；也让货架不涨）
+        await transport.forgetShelf(fileId);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setOutFiles((prev) => {
+          const c = prev[fileId];
+          if (!c) return prev;
+          return { ...prev, [fileId]: { ...c, status: 'failed', detail: msg } };
+        });
+        setError(`发送文件失败：${msg}`);
+      }
+    },
+    [transport],
+  );
+
+  /** subscriber 里要调它，但它是 useCallback 定义的 —— 用 ref 转一手避免循环依赖 */
+  const pushToPeerRef = useRef(pushToPeer);
+  pushToPeerRef.current = pushToPeer;
+
+  /**
+   * 发布并发送一个文件：广播邀约 → 等对方点接收 → 自动推送数据。
+   *
+   * ⚠️ 这是**两段式**的：本方法只完成第一段（发布邀约），
+   *    第二段（推数据）由 `fileAccepted` 事件触发（见订阅回调）。
+   */
+  const publishFile = useCallback(
+    async (uri: string, name: string, size: number, mime: string) => {
+      if (!transport) return;
+      try {
+        const meta = await transport.publishFile(uri, name, size, mime);
+        setOutFiles((prev) => ({
+          ...prev,
+          [meta.file_id]: {
+            meta,
+            status: 'offered',
+            detail: '已发出，等对方接收…',
+          },
+        }));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(`发布文件失败：${msg}`);
+      }
+    },
+    [transport],
+  );
 
   /**
    * 接收一个文件。
@@ -492,11 +642,13 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       nickname,
       error,
       files,
+      outFiles,
       join,
       leave,
       send,
       acceptFile,
       rejectFile,
+      publishFile,
       clearError,
     }),
     [
@@ -508,11 +660,13 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       nickname,
       error,
       files,
+      outFiles,
       join,
       leave,
       send,
       acceptFile,
       rejectFile,
+      publishFile,
       clearError,
     ],
   );

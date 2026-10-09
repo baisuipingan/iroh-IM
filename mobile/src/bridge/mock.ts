@@ -244,6 +244,16 @@ export class MockTransport implements Transport {
     };
   }
 
+  async pushFile(_fileId: string, _have: string, _peerId: string, _peerRelay: string): Promise<number> {
+    // mock：假装推了 1 秒
+    await new Promise((r) => setTimeout(r, 1000));
+    return 0;
+  }
+
+  async forgetShelf(_fileId: string): Promise<void> {
+    // mock：无货架
+  }
+
   async rejectFile(fileId: string, reason: string): Promise<void> {
     if (this.opts) {
       this.emit({

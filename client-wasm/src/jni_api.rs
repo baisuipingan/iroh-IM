@@ -876,6 +876,216 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeRe
     }
 }
 
+/* ===========================================================================
+ * 文件发送
+ *
+ * 参考 `bin/agent.rs` 的 `serve_do_send_file` / `serve_start_push` ——
+ * 那条路已经跑通（CLI 用同一套核心发文件）。
+ *
+ * ## 为什么分成两步（publish + push），而不是一个方法搞定
+ *
+ * 文件发送**天然是异步的两段**，中间隔着"对方什么时候点接收"：
+ *
+ *   ① publish：算哈希 → 造 meta → 广播邀约（`invite_file`）
+ *   ② push：收到对方的 `FileAccepted` 事件后，才拨号把数据推过去
+ *
+ * ②的触发点是**事件**（`fileAccepted`），不是调用方的动作 ——
+ * 所以不可能塞进一个阻塞方法里。这里暴露成两个 JNI 方法：
+ * `nativePublishFile` 由用户点"发送"时调；
+ * `nativePushFile` 由 Kotlin 侧在收到 `fileAccepted` 事件时调。
+ *
+ * ## 货架（shelf）：谁记得"我有哪些文件能发"
+ *
+ * push 时需要 meta（root_hash / chunk_size…）和 fd。两者都在 publish 时
+ * 拿到过 —— 存在 `RoomNode` 里会污染核心库（它不该知道 Android 概念），
+ * 所以放在 Kotlin 侧（`FileShelf`），push 时再传下来。
+ * ========================================================================*/
+
+/// 发布一个文件（广播邀约）。**不发送数据** —— 等对方点接收。
+///
+/// `fd` 由 Kotlin 侧从 SAF 的 `openFileDescriptor` 取来。
+/// **本函数不接管它**（只是读一下算哈希）—— 调用方负责关。
+///
+/// 阻塞直到哈希算完（大文件几十秒）→ 必须挂 IO 线程。
+///
+/// 返回 `FileMeta` 的 JSON（Kotlin/JS 存进"货架"，push 时再传回来）。
+#[no_mangle]
+pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativePublishFile(
+    mut env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    ptr: jlong,
+    fd: jni::sys::jint,
+    name: JString<'_>,
+    mime: JString<'_>,
+) -> jstring {
+    // 先接管 fd（同 nativeAcceptFile：放在所有提前 return 之前，避免泄漏）。
+    //
+    // ⚠️ 与 acceptFile 语义一致：**本函数负责关闭它**。
+    //    Kotlin 侧用 detachFd() 交出所有权，别自己再关。
+    //
+    //    为什么 publish 也需要 fd：要先流式算 blake3 才能造 meta。
+    //    push 时**另开一个 fd**（SAF 的 Uri 可以重复 open）——
+    //    两个阶段各自管好自己那个，比"借来借去 + ManuallyDrop"清楚得多。
+    let file = if fd >= 0 {
+        use std::os::fd::FromRawFd;
+        Some(unsafe { std::fs::File::from_raw_fd(fd) })
+    } else {
+        None
+    };
+
+    let Some(h) = (unsafe { handle_ref(ptr) }) else {
+        return throw(&mut env, "节点未创建");
+    };
+    let (Ok(name), Ok(mime)) = (
+        read_jstring(&mut env, &name),
+        read_jstring(&mut env, &mime),
+    ) else {
+        return throw(&mut env, "读取参数失败");
+    };
+    let Some(mut file) = file else {
+        return throw(&mut env, "无效的文件描述符");
+    };
+    let Ok(rt) = h.rt() else {
+        return throw(&mut env, "运行时已释放");
+    };
+
+    let result: Result<String> = rt.block_on(async {
+        let room = h.node.current_room().context("还没进房间")?;
+        let my_relay = h.node.my_relay_url().context("本端还没有可用中继地址")?;
+
+        // ① 流式算 blake3（不整读内存）—— 大文件要靠这一步不炸
+        let (size, root_hash) = crate::transfer_orchestrator::hash_reader(&mut file)
+            .context("计算文件哈希失败")?;
+        if size == 0 {
+            anyhow::bail!("空文件暂不支持（协议要求至少 1 块）");
+        }
+
+        let meta = crate::filetransfer::FileMeta {
+            file_id: crate::filetransfer::new_file_id(),
+            name: name.clone(),
+            size,
+            mime: mime.clone(),
+            chunk_size: crate::filetransfer::CHUNK_SIZE,
+            root_hash,
+            sender: h.node.endpoint_id().to_string(),
+            sender_relay: my_relay,
+            ts: crate::room::now_ms(),
+        };
+
+        // ② 算哈希期间用户可能切了房 —— 与 invite_file 的 expect_room 校验呼应
+        anyhow::ensure!(
+            h.node.current_room().as_deref() == Some(room.as_str()),
+            "算哈希期间房间已切换，本次发布取消"
+        );
+
+        h.node
+            .invite_file(&meta, &room)
+            .await
+            .context("广播邀约失败")?;
+
+        serde_json::to_string(&meta).context("meta 序列化失败")
+    });
+
+    match result {
+        Ok(json) => {
+            tracing::info!("已发布文件：{name}（{} 字节）", json.len());
+            ret_str(&mut env, json)
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            logcat(
+                ANDROID_LOG_ERROR,
+                &format!("[iroh_web] 发布文件失败：{msg}"),
+            );
+            throw(&mut env, &msg)
+        }
+    }
+}
+
+/// 收到 `fileAccepted` 后，把文件数据推给接收方。
+///
+/// `meta_json` 是 `nativePublishFile` 返回的那份（原样传回）。
+/// `fd` 同样是 publish 时那个句柄的**新副本**（Kotlin 侧重新 open 一个，
+/// 见 `IrohNative.pushFile` 的说明 —— 这样两边各自管好自己的关闭时机）。
+///
+/// **本函数接管 fd**（`FdSource` 内部持有，结束时随 Drop 关闭）。
+///
+/// 阻塞直到传完 → 必须挂 IO 线程。
+///
+/// 返回实际发出的字节数。
+#[no_mangle]
+pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativePushFile(
+    mut env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    ptr: jlong,
+    meta_json: JString<'_>,
+    receiver_id: JString<'_>,
+    receiver_relay: JString<'_>,
+    have_b64: JString<'_>,
+    fd: jni::sys::jint,
+) -> jstring {
+    // 先接管 fd（同 nativeAcceptFile：放在所有提前 return 之前，避免泄漏）
+    let file = if fd >= 0 {
+        use std::os::fd::FromRawFd;
+        Some(unsafe { std::fs::File::from_raw_fd(fd) })
+    } else {
+        None
+    };
+
+    let Some(h) = (unsafe { handle_ref(ptr) }) else {
+        return throw(&mut env, "节点未创建");
+    };
+    let (Ok(meta_json), Ok(peer), Ok(relay), Ok(have_b64)) = (
+        read_jstring(&mut env, &meta_json),
+        read_jstring(&mut env, &receiver_id),
+        read_jstring(&mut env, &receiver_relay),
+        read_jstring(&mut env, &have_b64),
+    ) else {
+        return throw(&mut env, "读取参数失败");
+    };
+    let Some(file) = file else {
+        return throw(&mut env, "无效的文件描述符");
+    };
+    let Ok(rt) = h.rt() else {
+        return throw(&mut env, "运行时已释放");
+    };
+
+    let result: Result<u64> = rt.block_on(async {
+        let meta: crate::filetransfer::FileMeta =
+            serde_json::from_str(&meta_json).with_context(|| "meta 解析失败")?;
+        let have = crate::filetransfer::bitmap_from_b64(&have_b64);
+        let source = crate::transfer_orchestrator::FdSource::new(file);
+
+        h.node
+            .send_file_data(&meta, &peer, &relay, &source, have, |ev| {
+                use crate::filetransfer::SendEvent;
+                match ev {
+                    SendEvent::Progress { done, total, bytes } => {
+                        tracing::debug!("发送进度 {done}/{total}（{bytes} 字节）");
+                    }
+                    SendEvent::Finished => tracing::info!("文件发送完成：{}", meta.file_id),
+                    SendEvent::Failed { reason } => {
+                        tracing::warn!("文件发送失败：{}（{reason}）", meta.file_id)
+                    }
+                    _ => {}
+                }
+            })
+            .await
+    });
+
+    match result {
+        Ok(bytes) => ret_str(&mut env, bytes.to_string()),
+        Err(e) => {
+            let msg = format!("{e:#}");
+            logcat(
+                ANDROID_LOG_ERROR,
+                &format!("[iroh_web] 推送文件失败：{msg}"),
+            );
+            throw(&mut env, &msg)
+        }
+    }
+}
+
 /// 拉历史：返回 `HistoryResponse` 的 JSON（含 `messages` 与可选 `snapshot`）。
 ///
 /// `beforeTs` / `beforeId` 是本项目历史游标：**`before = Some(ts)` 时返回更早的消息**

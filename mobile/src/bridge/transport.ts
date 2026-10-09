@@ -75,10 +75,28 @@ export interface Transport {
   /** 订阅事件，返回取消函数 */
   subscribe(listener: EventListener): Unsubscribe;
 
-  /* ---- 文件（v1 只做"能收"，发送后面补）---- */
+  /* ---- 文件 ---- */
 
-  /** 发布一个文件，返回它的元信息 */
+  /**
+   * 发布一个文件（广播邀约，**不传数据**）。
+   *
+   * 数据在**对方点接收之后**才推 —— 那时会收到 `fileAccepted` 事件，
+   * 由 `useRoom` 自动调 [`pushFile`]。
+   */
   publishFile(uri: string, name: string, size: number, mime: string): Promise<FileMeta>;
+
+  /**
+   * 收到 `fileAccepted` 后把数据推给对方。
+   *
+   * `peerId` / `peerRelay` 来自事件（`by` / `receiver_relay`）——
+   * **不能靠猜 peers**（房间人多时会猜错）。
+   *
+   * 返回实际发出的字节数。
+   */
+  pushFile(fileId: string, have: string, peerId: string, peerRelay: string): Promise<number>;
+
+  /** 推送结束（成功/失败都）从货架移除 */
+  forgetShelf(fileId: string): Promise<void>;
 
   /**
    * 接收某人发来的文件。

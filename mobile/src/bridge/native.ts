@@ -241,8 +241,40 @@ export class NativeTransport implements Transport {
 
   /* ---- 文件 ---- */
 
-  async publishFile(_uri: string, _name: string, _size: number, _mime: string): Promise<FileMeta> {
-    throw new Error('文件发送将在后续版本开放');
+  /**
+   * 发布一个文件（广播邀约，**不传数据**）。
+   *
+   * 真正的数据推送发生在**对方点接收之后** —— 那时 Rust 会发来
+   * `fileAccepted` 事件，`useRoom` 收到后调 `pushFile` 把数据推过去。
+   *
+   * ⚠️ 这是阻塞调用（要先算 blake3，大文件几十秒）→ 原生侧已在 IO 线程，
+   *    但 UI 必须显示"发布中"。
+   */
+  async publishFile(uri: string, name: string, size: number, mime: string): Promise<FileMeta> {
+    void size; // 真实大小由原生侧从文件算出（不信调用方传的值）
+    const raw = await irohNative.publishFile(uri, name, mime);
+    // 原生返回的是**完整 FileMeta**（snake_case 字段，与 Rust 一致）
+    return raw as FileMeta;
+  }
+
+  /**
+   * 收到 `fileAccepted` 后把数据推给对方。
+   *
+   * `peerId` / `peerRelay` 来自事件（`by` / `receiver_relay`）——
+   * **不能靠猜 peers**：房间人多时会猜错（Rust 侧注释也强调了这点）。
+   */
+  async pushFile(
+    fileId: string,
+    have: string,
+    peerId: string,
+    peerRelay: string,
+  ): Promise<number> {
+    return irohNative.pushFile(fileId, have, peerId, peerRelay);
+  }
+
+  /** 推送结束（成功/失败都）从原生货架移除。 */
+  async forgetShelf(fileId: string): Promise<void> {
+    await irohNative.forgetShelf(fileId);
   }
 
   /**

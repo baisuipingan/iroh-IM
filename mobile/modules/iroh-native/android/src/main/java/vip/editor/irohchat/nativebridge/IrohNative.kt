@@ -216,6 +216,47 @@ object IrohNative {
      */
     external fun nativeRejectFile(ptr: Long, fileId: String, reason: String, room: String)
 
+    /* ---- 文件发送 ---- */
+
+    /**
+     * 发布一个文件（广播邀约）。**不发送数据** —— 等对方点接收。
+     *
+     * [fd] 由 `contentResolver.openFileDescriptor(uri, "r")` 取来并 **detachFd**。
+     * **Rust 侧接管并关闭它** —— 调用方不要再关。
+     *
+     * ⚠️ **阻塞**（要先流式算 blake3，大文件几十秒）→ 必须挂 `Dispatchers.IO`。
+     *
+     * 返回 `FileMeta` 的 JSON，调用方存进货架，收到 `fileAccepted` 后原样传给
+     * [nativePushFile]。
+     */
+    external fun nativePublishFile(
+        ptr: Long,
+        fd: Int,
+        name: String,
+        mime: String,
+    ): String
+
+    /**
+     * 收到 `fileAccepted` 后把数据推给接收方。
+     *
+     * [metaJson] 是 [nativePublishFile] 的返回值（原样）。
+     * [fd] 是**重新打开**的句柄（发布时那个已被关闭）—— 同样 detachFd 交所有权。
+     * [haveB64] 是对方已有块的位图（`fileAccepted` 事件里 `have` 字段）；
+     * 传空串表示对方什么都没有。
+     *
+     * ⚠️ **阻塞**直到传完 → 必须挂 `Dispatchers.IO`。
+     *
+     * 返回实际发出的字节数。
+     */
+    external fun nativePushFile(
+        ptr: Long,
+        metaJson: String,
+        receiverId: String,
+        receiverRelay: String,
+        haveB64: String,
+        fd: Int,
+    ): String
+
     /* =======================================================================
      * 便捷封装
      * =====================================================================*/
@@ -347,6 +388,116 @@ object IrohNative {
 
     /** 最近一次建的 MediaStore 记录（成功后置 0 可见 / 失败删除）。 */
     private var lastUri: android.net.Uri? = null
+
+    /* =======================================================================
+     * 文件发送
+     * =====================================================================*/
+
+    /**
+     * 货架：`file_id → (metaJson, uri)`。
+     *
+     * ## 为什么需要它
+     *
+     * 发送是**两段式**的，中间隔着"对方什么时候点接收"：
+     *
+     *   ① publish：算哈希 → 造 meta → 广播邀约（此时才知道 file_id）
+     *   ② push：收到 `fileAccepted` 事件后，用 meta + 文件句柄把数据推过去
+     *
+     * ②的触发点是**事件**（可能几秒后、也可能几分钟后），必须有人记住
+     * ①的产物 —— 就是这张表。
+     *
+     * ## 为什么存在 Kotlin 而不是 Rust
+     *
+     * Rust 核心库不该知道 `Uri` 这种 Android 概念（它还要编成 wasm）。
+     * 表里存 `Uri` 而不是 fd 也是同一个理由：**fd 不能长期持有**
+     *（进程文件描述符有限、系统也可能回收），push 时按 `Uri` 重新 open 更稳。
+     *
+     * ⚠️ 只增不减会涨内存：上限 32 条，超了淘汰最旧的。
+     *    被淘汰的文件再有人来接收就推不动了（卡片还在但推不了）——
+     *    这是可接受的：正常使用不会同时挂着几十个待接收文件。
+     */
+    private val shelf = LinkedHashMap<String, Pair<String, String>>() // fileId -> (metaJson, uriString)
+
+    /**
+     * JS 入口：发布文件（广播邀约，不传数据）。
+     *
+     * [uriString] 是 SAF 选文件返回的 `content://` URI。
+     *
+     * 返回**完整 `FileMeta` 的 JSON**（rust 侧原样给出）——
+     * JS 拿它显示文件卡片（大小/名字）。push 时**不需要**把它传回来：
+     * 那边按 `fileId` 从货架取自己那份（单一真相源，避免两份不一致）。
+     */
+    fun publishFile(context: Context, ptr: Long, uriString: String, name: String, mime: String): String {
+        val uri = android.net.Uri.parse(uriString)
+
+        // 先拿一个 fd 算哈希（Rust 接管并关闭它）
+        val fd = openFdOrThrow(context, uri, "r")
+        val metaJson = nativePublishFile(ptr, fd, name, mime)
+        val meta = JSONObject(metaJson)
+        val fileId = meta.getString("file_id")
+
+        // 存进货架：push 时按 Uri 重新 open
+        synchronized(shelf) {
+            shelf[fileId] = metaJson to uriString
+            while (shelf.size > MAX_SHELF) {
+                val oldest = shelf.keys.firstOrNull() ?: break
+                shelf.remove(oldest)
+            }
+        }
+
+        return metaJson
+    }
+
+    /**
+     * JS 入口：收到 `fileAccepted` 后推送数据。
+     *
+     * 从货架取 meta（`metaJson` 由调用方传回也行 —— 二者应一致，
+     * 这里以货架为准，避免调用方传了别的文件的 meta）。
+     *
+     * 返回实际发出的字节数（字符串）。
+     */
+    fun pushFile(
+        context: Context,
+        ptr: Long,
+        fileId: String,
+        haveB64: String,
+        receiverId: String,
+        receiverRelay: String,
+    ): String {
+        val entry = synchronized(shelf) { shelf[fileId] }
+            ?: throw IllegalStateException("货架里没有 $fileId（可能已淘汰或未发布过）")
+        val (metaJson, uriString) = entry
+
+        // 重新 open 一个 fd（发布时那个已被 Rust 关闭）。
+        // Rust 接管这个新的并负责关闭。
+        val fd = openFdOrThrow(context, android.net.Uri.parse(uriString), "r")
+        return nativePushFile(ptr, metaJson, receiverId, receiverRelay, haveB64, fd)
+    }
+
+    /** 推送结束后从货架移除（发送完成 / 失败都清，避免重复推）。 */
+    fun forgetShelf(fileId: String) {
+        synchronized(shelf) { shelf.remove(fileId) }
+    }
+
+    /**
+     * 按 Uri 打开文件描述符并 **detachFd**（把所有权交给 Rust）。
+     *
+     * ⚠️ 用 detachFd 而不是 `pfd.close()`：后者会关掉那个 fd，
+     *    而 Rust 侧正要接管它。detach 之后由 Rust 的 `File` 负责关闭。
+     */
+    private fun openFdOrThrow(context: Context, uri: android.net.Uri, mode: String): Int {
+        val pfd = context.contentResolver.openFileDescriptor(uri, mode)
+            ?: throw IllegalStateException("打不开选中的文件（$uri）")
+        return try {
+            pfd.detachFd()
+        } catch (e: Throwable) {
+            pfd.close()
+            throw e
+        }
+    }
+
+    /** 货架容量上限（见 `shelf` 的说明）。 */
+    private val MAX_SHELF = 32
 
     /**
      * JS 入口：接收文件。

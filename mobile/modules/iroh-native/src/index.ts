@@ -70,6 +70,25 @@ interface IrohNativeModuleShape {
    */
   acceptFile(fileId: string, metaJson: string, room: string): Promise<string>;
   rejectFile(fileId: string, reason: string, room: string): Promise<void>;
+  /**
+   * 发布文件（广播邀约，**不传数据**）。返回 `{"fileId","name","size"}` 的 JSON。
+   *
+   * ⚠️ 内部要算 blake3，大文件几十秒 —— UI 要有"发布中"状态。
+   */
+  publishFile(uri: string, name: string, mime: string): Promise<string>;
+  /**
+   * 收到 `fileAccepted` 后推送数据。返回实际发出的字节数。
+   *
+   * [have] 是位图 base64（`fileAccepted` 事件的 `have`），空串 = 对方没有。
+   */
+  pushFile(
+    fileId: string,
+    have: string,
+    peerId: string,
+    peerRelay: string,
+  ): Promise<string>;
+  /** 推送完（成功/失败都）从货架移除 */
+  forgetShelf(fileId: string): Promise<void>;
 }
 
 /**
@@ -226,5 +245,33 @@ export const irohNative = {
 
   async rejectFile(fileId: string, reason: string, room: string): Promise<void> {
     await requireModule().rejectFile(fileId, reason, room);
+  },
+
+  /**
+   * 发布文件（广播邀约）。
+   *
+   * [uri] 用 `expo-document-picker` 选出来的 `uri`（Android 上是 `content://`）。
+   *
+   * 返回**完整 `FileMeta`**（Rust 侧原样给出）—— UI 拿它显示卡片。
+   * ⚠️ push 时**不要**把这份传回去：那边按 fileId 从原生货架取自己那份，
+   *    保证"显示用的"和"实际发的"必然同源。
+   */
+  async publishFile(uri: string, name: string, mime: string): Promise<unknown> {
+    const raw = await requireModule().publishFile(uri, name, mime);
+    return JSON.parse(raw) as unknown;
+  },
+
+  async pushFile(
+    fileId: string,
+    have: string,
+    peerId: string,
+    peerRelay: string,
+  ): Promise<number> {
+    const raw = await requireModule().pushFile(fileId, have, peerId, peerRelay);
+    return Number(raw);
+  },
+
+  async forgetShelf(fileId: string): Promise<void> {
+    await requireModule().forgetShelf(fileId);
   },
 };

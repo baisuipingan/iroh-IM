@@ -260,5 +260,46 @@ class IrohNativeModule : Module() {
                 IrohNative.nativeRejectFile(ptr, fileId, reason, room)
             }
         }
+
+        /* ---- 文件发送 ---- */
+
+        /**
+         * 发布文件（广播邀约，不传数据）。
+         *
+         * [uri] 是 SAF 选文件返回的 content:// URI。
+         * 返回 `{"fileId","name","size"}`。
+         *
+         * ⚠️ 内部要先流式算 blake3 —— 大文件要几十秒，所以**必须在 IO 线程**。
+         *    这期间 UI 要显示"发布中"，否则用户以为卡死（同接收的 receiving 状态）。
+         */
+        AsyncFunction("publishFile").SuspendBody<String, String, String, String> { uri, name, mime ->
+            withContext(Dispatchers.IO) {
+                if (ptr == 0L) throw IllegalStateException(ERR_NO_NODE)
+                val ctx: Context = appContext.reactContext ?: throw Exceptions.AppContextLost()
+                IrohNative.publishFile(ctx, ptr, uri, name, mime)
+            }
+        }
+
+        /**
+         * 收到 `fileAccepted` 后推送数据。
+         *
+         * [have] 是**位图 base64**（`fileAccepted` 事件的 `have` 字段）。
+         * 空串 = 对方什么都没有（v1 不做续传，见 `FileSink` 的说明）。
+         *
+         * ⚠️ 阻塞直到传完（大文件几分钟）→ 必须 IO 线程 + UI 要有进度提示。
+         */
+        AsyncFunction("pushFile")
+            .SuspendBody<String, String, String, String, String> { fileId, have, peerId, peerRelay ->
+                withContext(Dispatchers.IO) {
+                    if (ptr == 0L) throw IllegalStateException(ERR_NO_NODE)
+                    val ctx: Context = appContext.reactContext ?: throw Exceptions.AppContextLost()
+                    IrohNative.pushFile(ctx, ptr, fileId, have, peerId, peerRelay)
+                }
+            }
+
+        /** 推送完（成功/失败都）从货架移除，避免重复推。 */
+        AsyncFunction("forgetShelf").SuspendBody<Unit, String> { fileId ->
+            withContext(Dispatchers.IO) { IrohNative.forgetShelf(fileId) }
+        }
     }
 }

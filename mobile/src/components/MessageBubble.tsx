@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import type { ChatMessage } from '../bridge/types';
-import type { FileInviteState } from '../bridge/useRoom';
+import type { FileInviteState, OutFileState } from '../bridge/useRoom';
 import { avatarColor, avatarText, colors, font, sizes, spacing } from '../theme/tokens';
 import { FileCard } from './FileCard';
 
@@ -28,6 +28,7 @@ export function MessageBubble({
   message,
   mine,
   fileState,
+  outState,
   onAcceptFile,
   onRejectFile,
 }: {
@@ -35,6 +36,8 @@ export function MessageBubble({
   mine: boolean;
   /** 该文件的邀约状态（只有收到的文件才有；历史消息没有） */
   fileState?: FileInviteState;
+  /** **我发出的**文件状态 */
+  outState?: OutFileState;
   onAcceptFile?: (fileId: string) => void;
   onRejectFile?: (fileId: string) => void;
 }) {
@@ -45,6 +48,7 @@ export function MessageBubble({
         message={message}
         mine={mine}
         state={fileState}
+        outState={outState}
         onAccept={onAcceptFile}
         onReject={onRejectFile}
       />

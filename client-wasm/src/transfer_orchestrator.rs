@@ -70,6 +70,9 @@ pub trait ChunkSink: Send + Sync {
 /// 发送方：把一个已有的可读源（本地文件 / 内存）当 `ChunkSource`。
 ///
 /// 浏览器里可以用 `File.slice()` 包一层；这里提供内存实现，CLI 与测试直接可用。
+///
+/// ⚠️ **整文件驻留内存** —— 只适合小文件。发大文件请用 [`FileSource`]
+/// 或（Android）[`FdSource`]。
 pub struct BytesSource {
     pub data: Vec<u8>,
 }
@@ -86,6 +89,122 @@ impl ChunkSource for BytesSource {
             Ok(self.data[s..e].to_vec())
         })
     }
+}
+
+/// 从**文件路径**按块读（每次只读一块 = 16 KiB，内存恒定）。
+///
+/// 与 `agent.rs` 里那个同名的内部类型等价，提到库里是为了让 JNI 也能用。
+#[cfg(not(target_arch = "wasm32"))]
+pub struct FileSource {
+    path: std::path::PathBuf,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FileSource {
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ChunkSource for FileSource {
+    fn read_chunk<'a>(&'a self, seq: u32, chunk_size: u32) -> LocalBoxFuture<'a, Result<Vec<u8>>> {
+        let path = self.path.clone();
+        Box::pin(async move {
+            use std::io::{Read, Seek, SeekFrom};
+            let mut f =
+                std::fs::File::open(&path).with_context(|| format!("打开 {}", path.display()))?;
+            f.seek(SeekFrom::Start(seq as u64 * chunk_size as u64))?;
+            let mut buf = vec![0u8; chunk_size as usize];
+            let mut filled = 0usize;
+            while filled < buf.len() {
+                match f.read(&mut buf[filled..]) {
+                    Ok(0) => break,
+                    Ok(n) => filled += n,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            buf.truncate(filled);
+            Ok(buf)
+        })
+    }
+}
+
+/// 从**已打开的句柄**按块读（Android MediaStore 那条路）。
+///
+/// 为什么不用路径：Android 10+ 选文件走 SAF，拿到的是 `Uri` + fd，
+/// **没有可用的文件系统路径**（见 `FileSink::from_file` 的同款说明）。
+///
+/// 句柄必须可读**且可 seek** —— 按 `seq * chunk_size` 定位取块。
+/// 每次只读一块，内存恒定，与文件大小无关。
+///
+/// ⚠️ 内部用 `Mutex` 串行化 seek+read：两个线程同时 seek 同一个 fd
+///    会互相踩（seek 到 A、还没读就被 seek 到 B）→ 读到错块。
+///    **不能用 `try_clone`** —— 那只是 dup 文件描述符，
+///    dup 出来的 fd **共享同一个文件偏移**，照样踩。
+#[cfg(not(target_arch = "wasm32"))]
+pub struct FdSource {
+    file: std::sync::Mutex<std::fs::File>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FdSource {
+    /// 接管这个句柄的所有权（`File` 的 Drop 会关它，调用方别再关）。
+    pub fn new(file: std::fs::File) -> Self {
+        Self {
+            file: std::sync::Mutex::new(file),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ChunkSource for FdSource {
+    fn read_chunk<'a>(&'a self, seq: u32, chunk_size: u32) -> LocalBoxFuture<'a, Result<Vec<u8>>> {
+        Box::pin(async move {
+            use std::io::{Read, Seek, SeekFrom};
+            let mut f = self
+                .file
+                .lock()
+                .map_err(|_| anyhow::anyhow!("文件句柄锁已失效"))?;
+            f.seek(SeekFrom::Start(seq as u64 * chunk_size as u64))?;
+            let mut buf = vec![0u8; chunk_size as usize];
+            let mut filled = 0usize;
+            while filled < buf.len() {
+                match f.read(&mut buf[filled..]) {
+                    Ok(0) => break,
+                    Ok(n) => filled += n,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            buf.truncate(filled);
+            Ok(buf)
+        })
+    }
+}
+
+/// 流式算一个**已打开句柄**的 blake3（不整体进内存），返回 `(size, hex_hash)`。
+///
+/// 发大文件前必须算根哈希（协议要求），而整读会吃满内存 ——
+/// 这里用 1 MiB 缓冲流式算。
+///
+/// 读完把位置还原到 0：调用方多半接下来要按块读，从中间开始会读到错数据。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hash_reader(file: &mut std::fs::File) -> Result<(u64, String)> {
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut size = 0u64;
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        size += n as u64;
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok((size, hex_encode(hasher.finalize().as_bytes())))
 }
 
 /// 纯内存接收端（CLI / 测试用；浏览器里换成写文件句柄的版本）。
