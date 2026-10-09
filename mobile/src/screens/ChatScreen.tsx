@@ -10,7 +10,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { ChatMessage, PeerInfo, RelayStatus } from '../bridge/types';
+import type { ChatMessage, FileMeta, PeerInfo, RelayStatus } from '../bridge/types';
+import type { FileInviteState } from '../bridge/useRoom';
 import { MessageBubble } from '../components/MessageBubble';
 import { avatarColor, avatarText, colors, font, sizes, spacing } from '../theme/tokens';
 
@@ -22,8 +23,11 @@ export function ChatScreen({
   peers,
   relay,
   joined,
+  files,
   onSend,
   onLeave,
+  onAcceptFile,
+  onRejectFile,
 }: {
   room: string;
   nickname: string;
@@ -34,8 +38,12 @@ export function ChatScreen({
   peers: PeerInfo[];
   relay: RelayStatus;
   joined: boolean;
+  /** 文件邀约状态：file_id → 状态 */
+  files: Record<string, FileInviteState>;
   onSend: (text: string) => void;
   onLeave: () => void;
+  onAcceptFile: (fileId: string, meta: FileMeta) => void;
+  onRejectFile: (fileId: string, reason: string) => void;
 }) {
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -110,7 +118,15 @@ export function ChatScreen({
           data={messages}
           keyExtractor={(m) => m.id}
           renderItem={({ item }) => (
-            <MessageBubble message={item} mine={item.from === myId} />
+            <MessageBubble
+              message={item}
+              mine={item.from === myId}
+              fileState={item.file ? files[item.file.file_id] : undefined}
+              onAcceptFile={
+                item.file ? (id) => onAcceptFile(id, item.file as FileMeta) : undefined
+              }
+              onRejectFile={(id) => onRejectFile(id, '用户取消')}
+            />
           )}
           // 新消息进来时贴底。⚠️ Web 端这里踩过坑：
           // 简单滚到底会被"滚动锚定"和"内容还没量完"打败，

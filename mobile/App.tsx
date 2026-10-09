@@ -262,8 +262,11 @@ export default function App() {
             peers={st.peers}
             relay={st.relay}
             joined={st.joined}
+            files={st.files}
             onSend={st.send}
             onLeave={st.leave}
+            onAcceptFile={st.acceptFile}
+            onRejectFile={st.rejectFile}
           />
         ) : (
           <JoinScreen

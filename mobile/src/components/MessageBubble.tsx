@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import type { ChatMessage } from '../bridge/types';
+import type { FileInviteState } from '../bridge/useRoom';
 import { avatarColor, avatarText, colors, font, sizes, spacing } from '../theme/tokens';
 import { FileCard } from './FileCard';
 
@@ -23,10 +24,31 @@ function fmtTime(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 }
 
-export function MessageBubble({ message, mine }: { message: ChatMessage; mine: boolean }) {
+export function MessageBubble({
+  message,
+  mine,
+  fileState,
+  onAcceptFile,
+  onRejectFile,
+}: {
+  message: ChatMessage;
+  mine: boolean;
+  /** 该文件的邀约状态（只有收到的文件才有；历史消息没有） */
+  fileState?: FileInviteState;
+  onAcceptFile?: (fileId: string) => void;
+  onRejectFile?: (fileId: string) => void;
+}) {
   // 带 file 的消息渲染成卡片，不是气泡 —— 否则会出现一条空气泡（文案很丑）
   if (message.file) {
-    return <FileCard message={message} mine={mine} />;
+    return (
+      <FileCard
+        message={message}
+        mine={mine}
+        state={fileState}
+        onAccept={onAcceptFile}
+        onReject={onRejectFile}
+      />
+    );
   }
 
   return (

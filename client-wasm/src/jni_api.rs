@@ -714,6 +714,160 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeLe
     }
 }
 
+/* ===========================================================================
+ * 文件接收
+ *
+ * 设计参考 `bin/agent.rs` 的 `serve_do_accept_file` / `serve_receive_file`
+ * —— 那条路已经跑通（CLI 用同一套 Rust 核心接收文件到磁盘）。
+ *
+ * ## 与 agent / wasm 的差异只有一处：落盘目标由 **fd** 传入
+ *
+ * Android 10+ 往公共目录写文件必须走 MediaStore，它只给 `Uri`/文件描述符，
+ * **没有可用的文件系统路径**。所以 `FileSink::from_file` 从已打开的句柄构造
+ * （见 transfer_orchestrator.rs 的说明）。
+ *
+ * ## 为什么 meta 由 JS 传进来，而不是在 Rust 侧缓存邀约
+ *
+ * agent.rs 维护了一份 `Invites` 缓存（收到 `FileInvite` 时存下，accept 时取用）。
+ * 这里**不这么做**，原因有两条：
+ *
+ * 1. JS 侧本来就有 meta —— `fileInvite` 事件里带着完整 `meta`，
+ *    UI 渲染文件名/大小用的就是它（`FileCard`）。让 JS 原样传回，
+ *    比在 Rust 侧再存一份、还要处理缓存失效与淘汰，简单得多。
+ * 2. **单一真相源**：两份缓存迟早不同步（JS 显示的和 Rust 接受的可能是
+ *    不同版本的 meta）。让 accept 用 JS 手里那一份，就不会出现
+ *    "界面显示 A、实际按 B 校验"这种极难排查的错位。
+ *
+ * `accept_file` 内部仍会校验 meta 与 file_id 一致、走 `validate_meta`、
+ * 以及房间匹配 —— 传进来的 meta **不是**无条件的信任输入。
+ * ========================================================================*/
+
+/// 接收一个文件到给定的 fd。
+///
+/// `fd` 由 Kotlin 侧从 `MediaStore.openFileDescriptor("rw")` 取来。
+/// **本函数接管它的所有权**（`File::from_raw_fd`），成功失败都会在结束时关闭
+/// —— Kotlin 侧**不要**再关一次（会 double-close）。
+///
+/// 阻塞直到收完（310 MB 这种可能几十秒到几分钟）→ 必须挂 IO 线程。
+///
+/// 返回收到的字节数（字符串）；失败抛异常。
+#[no_mangle]
+pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeAcceptFile(
+    mut env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    ptr: jlong,
+    file_id: JString<'_>,
+    meta_json: JString<'_>,
+    room: JString<'_>,
+    fd: jni::sys::jint,
+) -> jstring {
+    let Some(h) = (unsafe { handle_ref(ptr) }) else {
+        return throw(&mut env, "节点未创建");
+    };
+    let (Ok(file_id), Ok(meta_json), Ok(room)) = (
+        read_jstring(&mut env, &file_id),
+        read_jstring(&mut env, &meta_json),
+        read_jstring(&mut env, &room),
+    ) else {
+        return throw(&mut env, "读取参数失败");
+    };
+    if fd < 0 {
+        return throw(&mut env, "无效的文件描述符");
+    }
+    let Ok(rt) = h.rt() else {
+        return throw(&mut env, "运行时已释放");
+    };
+
+    // ⚠️ 立刻接管 fd 的所有权，包成带 Drop 的 File。
+    //    之后任何提前 return（meta 解析失败、房间不符…）都会自动关掉它 ——
+    //    否则每失败一次泄漏一个 fd，几十次后 open 直接 EMFILE。
+    //
+    //    SAFETY: `fd` 由 Kotlin 侧从 ParcelFileDescriptor 取得并已 detach
+    //    （保证没有别人会关它）；由此处起由本 File 独占。
+    let file = unsafe {
+        use std::os::fd::FromRawFd;
+        std::fs::File::from_raw_fd(fd)
+    };
+
+    let result: Result<u64> = rt.block_on(async {
+        let meta: crate::filetransfer::FileMeta = serde_json::from_str(&meta_json)
+            .with_context(|| format!("邀约元信息解析失败：{meta_json}"))?;
+        let my_relay = h
+            .node
+            .my_relay_url()
+            .context("本端还没有可用中继地址")?;
+
+        // ⚠️ 先登记（`accept_file` 内部 expect）**再**广播 Accept ——
+        //    顺序不能反，否则对端立刻开始发数据时我们还没准备好接收，
+        //    那些块会直接丢（agent.rs 里有同样的注释）。
+        let (rx, ack_tx) = h
+            .node
+            .accept_file(&file_id, &meta_json, Vec::new(), &my_relay, &room)
+            .await
+            .context("登记/广播 Accept 失败")?;
+
+        let sink = std::sync::Arc::new(crate::transfer_orchestrator::FileSink::from_file(
+            file,
+            &meta,
+            format!("{}({} 字节)", meta.name, meta.size),
+        ));
+
+        h.node
+            .receive_file_data(&meta, sink, rx, ack_tx, |done, total, bytes| {
+                tracing::debug!("接收进度 {done}/{total}（{bytes} 字节）");
+            })
+            .await
+    });
+
+    match result {
+        Ok(bytes) => {
+            tracing::info!("文件接收完成：{file_id}（{bytes} 字节）");
+            ret_str(&mut env, bytes.to_string())
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            logcat(ANDROID_LOG_ERROR, &format!("[iroh_web] 文件接收失败：{msg}"));
+            throw(&mut env, &msg)
+        }
+    }
+}
+
+/// 拒绝接收某个文件。
+///
+/// `room` **必填**：`Reject` 会带自由文本理由广播，
+/// 发错房间等于向无关的人泄露"我为什么不要这个文件"。
+#[no_mangle]
+pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeRejectFile(
+    mut env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    ptr: jlong,
+    file_id: JString<'_>,
+    reason: JString<'_>,
+    room: JString<'_>,
+) {
+    let Some(h) = (unsafe { handle_ref(ptr) }) else {
+        throw_void(&mut env, "节点未创建");
+        return;
+    };
+    let (Ok(file_id), Ok(reason), Ok(room)) = (
+        read_jstring(&mut env, &file_id),
+        read_jstring(&mut env, &reason),
+        read_jstring(&mut env, &room),
+    ) else {
+        throw_void(&mut env, "读取参数失败");
+        return;
+    };
+    let Ok(rt) = h.rt() else {
+        throw_void(&mut env, "运行时已释放");
+        return;
+    };
+    if let Err(e) = rt.block_on(async { h.node.reject_file(&file_id, &reason, &room).await }) {
+        let msg = format!("拒绝接收失败：{e:#}");
+        tracing::warn!("{msg}");
+        throw_void(&mut env, &msg);
+    }
+}
+
 /// 拉历史：返回 `HistoryResponse` 的 JSON（含 `messages` 与可选 `snapshot`）。
 ///
 /// `beforeTs` / `beforeId` 是本项目历史游标：**`before = Some(ts)` 时返回更早的消息**

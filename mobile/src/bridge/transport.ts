@@ -18,6 +18,7 @@ import type {
   ChatMessage,
   EventListener,
   FileMeta,
+  FileSaved,
   PeerInfo,
   RelayStatus,
   Unsubscribe,
@@ -74,13 +75,25 @@ export interface Transport {
   /** 订阅事件，返回取消函数 */
   subscribe(listener: EventListener): Unsubscribe;
 
-  /* ---- 文件（v1 先只做"能收"，发送后面补）---- */
+  /* ---- 文件（v1 只做"能收"，发送后面补）---- */
 
   /** 发布一个文件，返回它的元信息 */
   publishFile(uri: string, name: string, size: number, mime: string): Promise<FileMeta>;
 
-  /** 接收某人发来的文件 */
-  acceptFile(fileId: string, savePath: string): Promise<void>;
+  /**
+   * 接收某人发来的文件。
+   *
+   * ★ 传 **meta 整体**（不是 fileId）：原因见 client-wasm/src/jni_api.rs 顶部
+   *   —— fileId 是公开广播的、不是授权凭据，真正的授权校验（`root_hash`
+   *   与大小/块数自洽）必须拿整份 meta 才能做。只传 id 会迫使原生侧
+   *   再去缓存一份 meta，多一处可能不同步的状态。
+   *
+   * 落盘位置**由实现决定**（Android：公共 Downloads/iroh，走 MediaStore），
+   * 调用方不指定路径 —— 移动端没有让用户选路径的稳定方式。
+   *
+   * 返回落盘结果（供 UI 显示"存到哪了"）。
+   */
+  acceptFile(fileId: string, meta: FileMeta): Promise<FileSaved>;
 
   /** 拒绝接收 */
   rejectFile(fileId: string, reason: string): Promise<void>;

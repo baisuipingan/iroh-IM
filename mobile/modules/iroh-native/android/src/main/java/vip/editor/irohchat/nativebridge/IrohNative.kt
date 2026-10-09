@@ -30,7 +30,12 @@
 
 package vip.editor.irohchat.nativebridge
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -178,6 +183,39 @@ object IrohNative {
         beforeId: String,
     ): String
 
+    /* ---- 文件接收 ---- */
+
+    /**
+     * 接收一个文件，直接写进给定的 fd。
+     *
+     * ⚠️ **这个 fd 会被 Rust 接管并负责关闭**（内部包成 `File`，
+     *    Drop 时 close）。调用方**不要**再关一次 —— double-close 会误关
+     *    别的线程刚拿到的同号 fd，是极难排查的一类 bug。
+     *    传之前用 `ParcelFileDescriptor.detachFd()` 交出所有权。
+     *
+     * ⚠️ **阻塞**，直到整个文件收完。310 MB 这种可能要几分钟 →
+     *    必须挂 `Dispatchers.IO`（模块层已经这么做了）。
+     *
+     * [fileId] 邀约里的 id；[metaJson] 是 `fileInvite` 事件里的完整 `meta`
+     * 序列化结果；[room] 邀约所在的房间（Rust 侧会核对）。
+     *
+     * 返回收到的字节数（字符串）。失败抛异常、logcat 有 `文件接收失败`。
+     */
+    external fun nativeAcceptFile(
+        ptr: Long,
+        fileId: String,
+        metaJson: String,
+        room: String,
+        fd: Int,
+    ): String
+
+    /**
+     * 拒绝接收某个文件。
+     *
+     * [room] **必填**：拒绝理由会广播，发错房间会泄露给无关的人。
+     */
+    external fun nativeRejectFile(ptr: Long, fileId: String, reason: String, room: String)
+
     /* =======================================================================
      * 便捷封装
      * =====================================================================*/
@@ -227,4 +265,184 @@ object IrohNative {
             buildMap { o.keys().forEach { k -> put(k, o.opt(k)) } }
         }
     }
+
+    /* =======================================================================
+     * 文件接收：MediaStore 建文件 → 拿 fd → 交给 Rust
+     * =====================================================================*/
+
+    /**
+     * 把文件收进**公共 Downloads/iroh** 目录，返回落盘后的展示名。
+     *
+     * ## 为什么必须走 MediaStore
+     *
+     * Android 10（API 29）起，App 往公共目录写文件**不能再用裸路径** ——
+     * `/sdcard/Download/...` 直接 open 会 `EACCES`。
+     * 正路是 `MediaStore.Downloads`：先 insert 一条记录拿到 `Uri`，
+     * 再用它 open 出 fd 写入。好处是**不需要任何存储权限**
+     * （`WRITE_EXTERNAL_STORAGE` 在 API 29+ 已废弃）。
+     *
+     * ## 为什么传 fd 而不是路径
+     *
+     * MediaStore 只给 `Uri`，**没有可用的文件系统路径**
+     * （`/sdcard/Download/xxx` 那种拼出来的路径在 scoped storage 下不可写）。
+     * 所以把 `ParcelFileDescriptor` 的 fd 交给 Rust，
+     * Rust 用 `File::from_raw_fd` 接管 —— 零额外拷贝，310 MB 也不会翻倍占空间。
+     *
+     * ## IS_PENDING 的意义（必须正确使用）
+     *
+     * 建记录时置 `IS_PENDING=1`：**其它 App 看不到这个半成品**。
+     * 收完再置 0 让它可见。中途失败就删掉记录 —— 否则公共目录里
+     * 会留下一个永远不完整、用户也打不开的文件。
+     */
+    private fun receiveToDownloads(
+        context: Context,
+        displayName: String,
+        mime: String,
+        sizeHint: Long,
+    ): Int {
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+            put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/iroh")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+
+        val uri = resolver.insert(collection, values)
+            ?: throw IllegalStateException("MediaStore 拒绝创建文件（$displayName）")
+
+        // openFileDescriptor("rw") 才能既可写（放数据）又可读（finish 重算哈希）
+        val pfd = resolver.openFileDescriptor(uri, "rw")
+            ?: run {
+                resolver.delete(uri, null, null)
+                throw IllegalStateException("打不开刚创建的文件（$displayName）")
+            }
+
+        // detachFd()：把 fd 的所有权交出去，之后 pfd.close() **不会**关它。
+        // 这正是 Rust 侧要的语义（由 Rust 的 File 负责关闭）。
+        val fd = pfd.detachFd()
+        lastUri = uri
+        return fd
+    }
+
+    /**
+     * 接收完成后把记录转为可见（`IS_PENDING=0`）。
+     * 失败时删除记录（不留下半成品）。
+     */
+    private fun finishDownloads(context: Context, ok: Boolean) {
+        val uri = lastUri ?: return
+        lastUri = null
+        val resolver = context.contentResolver
+        if (ok) {
+            resolver.update(uri, ContentValues().apply {
+                put(MediaStore.Downloads.IS_PENDING, 0)
+            }, null, null)
+        } else {
+            // 收失败：删掉记录，别在用户 Downloads 里留个打不开的残file
+            resolver.delete(uri, null, null)
+        }
+    }
+
+    /** 最近一次建的 MediaStore 记录（成功后置 0 可见 / 失败删除）。 */
+    private var lastUri: android.net.Uri? = null
+
+    /**
+     * JS 入口：接收文件。
+     *
+     * 返回落盘信息（JSON 字符串）：`{"bytes":"…","name":"…","location":"Downloads/iroh"}`
+     */
+    fun acceptFileToDownloads(
+        context: Context,
+        ptr: Long,
+        fileId: String,
+        metaJson: String,
+    ): String {
+        // 从 meta 里取文件名/mime/大小 —— meta 由 JS 传（见 jni_api.rs 的说明）
+        val meta = JSONObject(metaJson)
+        val rawName = meta.optString("name").ifBlank { "file" }
+        val mime = meta.optString("mime")
+        val size = meta.optLong("size", 0L)
+        val safeName = sanitizeDisplayName(rawName)
+
+        // 需要知道 room：Rust 侧会核对"是否还在邀约所在的房间"。
+        // 这里从 meta 拿不到，由调用方在 metaJson 里带上 `_room`。
+        val room = meta.optString("_room")
+        if (room.isBlank()) throw IllegalArgumentException("metaJson 缺少 _room（邀约所在房间）")
+
+        // API 28 及以下没有 MediaStore.Downloads，退回 App 私有目录
+        //（v1 只考虑了 29+；老设备走另一条路，见下面的分支）
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return acceptFileToPrivate(context, ptr, fileId, metaJson, safeName, room)
+        }
+
+        val fd = receiveToDownloads(context, safeName, mime, size)
+        var ok = false
+        try {
+            val bytes = nativeAcceptFile(ptr, fileId, metaJson, room, fd)
+            ok = true
+            return JSONObject().apply {
+                put("bytes", bytes)
+                put("name", safeName)
+                put("location", "${Environment.DIRECTORY_DOWNLOADS}/iroh")
+            }.toString()
+        } finally {
+            finishDownloads(context, ok)
+        }
+    }
+
+    /**
+     * API < 29 的退路：写 App 私有外部目录（`getExternalFilesDir`），
+     * **不需要任何权限**。这类设备上用户拿文件要靠分享/导出。
+     */
+    private fun acceptFileToPrivate(
+        context: Context,
+        ptr: Long,
+        fileId: String,
+        metaJson: String,
+        safeName: String,
+        room: String,
+    ): String {
+        val dir = File(context.getExternalFilesDir(null), "received").apply { mkdirs() }
+        val target = File(dir, safeName)
+        // 用 ParcelFileDescriptor.open 拿 fd：与上面 MediaStore 那条路**同一种类型**
+        //（`Int`），两条路给 Rust 的东西完全一致。
+        //
+        // 试过 `Os.dup(out.fd)` —— 它返回的是 `FileDescriptor` 对象，
+        // 不是要给 Rust 的 `Int`，还得再转一次，多此一举。
+        val mode = android.os.ParcelFileDescriptor.MODE_READ_WRITE or
+            android.os.ParcelFileDescriptor.MODE_CREATE or
+            android.os.ParcelFileDescriptor.MODE_TRUNCATE
+        val pfd = android.os.ParcelFileDescriptor.open(target, mode)
+        val fd = try {
+            pfd.detachFd()
+        } catch (e: Throwable) {
+            pfd.close()
+            throw e
+        }
+        val bytes = nativeAcceptFile(ptr, fileId, metaJson, room, fd)
+        return JSONObject().apply {
+            put("bytes", bytes)
+            put("name", safeName)
+            put("location", target.absolutePath)
+        }.toString()
+    }
+}
+
+/**
+ * 清理文件名：只取 basename、去掉控制字符与路径分隔符。
+ *
+ * ⚠️ 文件名**来自对端**，绝不能让 `../../foo` 这种带路径分量的名字
+ *    逃出目标目录（目录穿越）。MediaStore 的 DISPLAY_NAME 相对宽松，
+ *    但仍要在这里挡住。
+ */
+private fun sanitizeDisplayName(name: String): String {
+    val base = name.substringAfterLast('/').substringAfterLast('\\')
+    val cleaned = base.filter { it.code >= 0x20 && it != '\u007f' }.trim()
+    val fallback = "file"
+    if (cleaned.isEmpty()) return fallback
+    // 挡住 "." / ".." 这类纯点名字
+    if (cleaned.all { it == '.' }) return fallback
+    return cleaned
 }

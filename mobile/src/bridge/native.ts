@@ -35,6 +35,7 @@ import type {
   ChatMessage,
   EventListener,
   FileMeta,
+  FileSaved,
   RelayStatus,
   RoomEvent,
   Unsubscribe,
@@ -238,20 +239,29 @@ export class NativeTransport implements Transport {
     };
   }
 
-  /* ---- 文件（v1 未接，保持接口完整）---- */
+  /* ---- 文件 ---- */
 
   async publishFile(_uri: string, _name: string, _size: number, _mime: string): Promise<FileMeta> {
     throw new Error('文件发送将在后续版本开放');
   }
 
-  async acceptFile(_fileId: string, _savePath: string): Promise<void> {
-    throw new Error('文件接收将在后续版本开放');
+  /**
+   * 接收文件到公共 Downloads/iroh（走 MediaStore，不需要存储权限）。
+   *
+   * ⚠️ **这是阻塞调用**，收完才返回 —— 310 MB 可能要几分钟。
+   *    原生侧已经挂在 `Dispatchers.IO` 上，不会卡 UI，
+   *    但 UI 必须显示"接收中"，否则用户会以为卡死了。
+   */
+  async acceptFile(fileId: string, meta: FileMeta): Promise<FileSaved> {
+    const room = this.currentRoom;
+    if (!room) throw new Error('还没进房间');
+    return irohNative.acceptFile(fileId, meta, room);
   }
 
   async rejectFile(fileId: string, reason: string): Promise<void> {
-    // 没有文件功能时这是无害的（Rust 侧会忽略未知 fileId）
-    void fileId;
-    void reason;
+    const room = this.currentRoom;
+    if (!room) return; // 没进房间时拒绝也没意义（Rust 侧会忽略）
+    await irohNative.rejectFile(fileId, reason, room);
   }
 
   availableFiles(): string[] {

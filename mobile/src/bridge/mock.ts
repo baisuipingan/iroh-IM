@@ -18,6 +18,7 @@ import type {
   ChatMessage,
   EventListener,
   FileMeta,
+  FileSaved,
   RelayStatus,
   Unsubscribe,
 } from './types';
@@ -233,9 +234,14 @@ export class MockTransport implements Transport {
     return meta;
   }
 
-  async acceptFile(_fileId: string, _savePath: string): Promise<void> {
+  async acceptFile(_fileId: string, meta: FileMeta): Promise<FileSaved> {
     // mock：装装样子就宣布完成
     await new Promise((r) => setTimeout(r, 600));
+    return {
+      bytes: meta.size,
+      name: meta.name,
+      location: 'Download/iroh（假数据）',
+    };
   }
 
   async rejectFile(fileId: string, reason: string): Promise<void> {

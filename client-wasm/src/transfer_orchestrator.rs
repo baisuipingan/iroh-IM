@@ -142,11 +142,23 @@ impl ChunkSink for BytesSink {
 /// 把块**流式写入磁盘**的接收端：内存占用 = 一块（16 KiB），与文件大小无关。
 ///
 /// - 按 `seq * chunk_size` 偏移定位写入（容忍乱序/重试；不会把文件写坏）
-/// - `finish` 时重新流式读盘算整文件 blake3，与邀约里的 `root_hash` 核对
+/// - `finish` 时重新流式读回算整文件 blake3，与邀约里的 `root_hash` 核对
 /// - 失败/中断时**保留半成品文件**（便于排查；v1 不做自动续传）
+///
+/// ## 两种构造方式
+///
+/// - [`FileSink::open`]：给定路径（CLI / agent 用）—— 哈希校验时**按路径重开**
+/// - [`FileSink::from_file`]：给定**已打开的句柄**（Android MediaStore 用）
+///
+/// ⚠️ 为什么需要 `from_file`：Android 10+ 往公共目录写文件必须走 MediaStore，
+/// 它只给 `Uri`/文件描述符，**没有可用的文件系统路径**。
+/// 所以校验时不能"按路径重开"，必须**复用同一个句柄** seek 回 0 再读。
+///
+/// `label` 只用于错误信息（fd 场景下没有路径可显示，传个描述串）。
 #[cfg(not(target_arch = "wasm32"))]
 pub struct FileSink {
-    path: std::path::PathBuf,
+    /// 展示用的名字（路径或一句描述）。仅用于报错，**不**参与 IO。
+    label: String,
     size: u64,
     root_hash: String,
     chunk_size: u32,
@@ -168,7 +180,7 @@ impl FileSink {
             .open(&path)
             .with_context(|| format!("打开 {}", path.display()))?;
         Ok(Self {
-            path,
+            label: path.display().to_string(),
             size: meta.size,
             root_hash: meta.root_hash.clone(),
             chunk_size: meta.chunk_size,
@@ -176,8 +188,27 @@ impl FileSink {
         })
     }
 
-    pub fn path(&self) -> &std::path::Path {
-        &self.path
+    /// 从**已打开的句柄**构造（Android MediaStore 那条路）。
+    ///
+    /// 句柄必须可读可写**且可 seek** —— `write_chunk` 靠 `seq * chunk_size`
+    /// 偏移定位，`finish` 靠 seek 回 0 重读校验。
+    /// MediaStore 的 `openFileDescriptor("rw")` 满足这些要求。
+    ///
+    /// ⚠️ 调用方要保证这个 fd **独占**且生命周期覆盖整个接收过程；
+    ///    Rust 侧用 `File::from_raw_fd` 接管后由它负责关闭。
+    pub fn from_file(file: std::fs::File, meta: &FileMeta, label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            size: meta.size,
+            root_hash: meta.root_hash.clone(),
+            chunk_size: meta.chunk_size,
+            file: tokio::sync::Mutex::new(file),
+        }
+    }
+
+    /// 展示用的名字（路径或描述）。仅用于日志/报错。
+    pub fn label(&self) -> &str {
+        &self.label
     }
 }
 
@@ -195,31 +226,48 @@ impl ChunkSink for FileSink {
 
     fn finish<'a>(&'a self) -> LocalBoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            use std::io::{Read, Write};
-            {
-                let mut f = self.file.lock().await;
-                f.flush()?;
-            }
-            let actual = std::fs::metadata(&self.path)?.len();
+            use std::io::{Read, Seek, SeekFrom, Write};
+
+            // ⚠️ 两件事必须在**同一个锁内**做完：flush + 校验读取。
+            //    分开拿锁的话，写入侧可能在两次之间插进来改内容。
+            //
+            // ⚠️ 校验一律**复用同一个句柄** seek 回 0 读，不走"按路径重开"：
+            //    fd 场景（MediaStore）根本没有路径可开。
+            //    有路径时"重开"其实也是多此一举 —— 同一个文件的另一个句柄
+            //    看到的内容完全一样。
+            let mut f = self.file.lock().await;
+            f.flush()?;
+
+            // 大小校验：用句柄自己的 metadata（fd 场景没有路径可 stat）
+            let actual = f.metadata()?.len();
             if actual != self.size {
-                anyhow::bail!("大小不符：期望 {}，实际 {}", self.size, actual);
+                anyhow::bail!(
+                    "大小不符：期望 {}，实际 {}（{}）",
+                    self.size,
+                    actual,
+                    self.label
+                );
             }
+
             // 流式重读算哈希（1 MiB 缓冲），大文件也不吃内存
-            let mut f = std::fs::File::open(&self.path)?;
+            f.seek(SeekFrom::Start(0))?;
             let mut hasher = blake3::Hasher::new();
             let mut buf = vec![0u8; 1024 * 1024];
-            loop {
-                let n = f.read(&mut buf)?;
+            let mut remaining = self.size;
+            while remaining > 0 {
+                let want = remaining.min(buf.len() as u64) as usize;
+                let n = f.read(&mut buf[..want])?;
                 if n == 0 {
-                    break;
+                    anyhow::bail!("校验读取提前结束（还剩 {remaining} 字节，{}）", self.label);
                 }
                 hasher.update(&buf[..n]);
+                remaining -= n as u64;
             }
             let got = hex_encode(hasher.finalize().as_bytes());
             let want = self.root_hash.as_str();
             // 与 BytesSink 同款宽容比较：任一方可能是被截断的短哈希
             if !got.starts_with(&want[..want.len().min(got.len())]) {
-                anyhow::bail!("哈希不符：期望 {want}，实际 {got}");
+                anyhow::bail!("哈希不符：期望 {want}，实际 {got}（{}）", self.label);
             }
             Ok(())
         })

@@ -30,7 +30,7 @@
  * ==========================================================================*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatMessage, PeerInfo, RelayStatus, RoomEvent } from '../bridge/types';
+import type { ChatMessage, FileMeta, PeerInfo, RelayStatus, RoomEvent } from '../bridge/types';
 import type { RoomOptions, Transport } from '../bridge/transport';
 
 export interface JoinParams {
@@ -49,13 +49,29 @@ export interface RoomState {
   room: string | null;
   nickname: string;
   error: string | null;
+  /** 收到的文件邀约：file_id → 状态（UI 据此渲染文件卡片与进度） */
+  files: Record<string, FileInviteState>;
 }
 
 export interface RoomActions {
   join: (p: JoinParams) => Promise<void>;
   leave: () => Promise<void>;
   send: (text: string) => Promise<void>;
+  /** 接收一个收到的文件（耗时操作，UI 要有"接收中"状态） */
+  acceptFile: (fileId: string, meta: FileMeta) => Promise<void>;
+  /** 拒绝接收 */
+  rejectFile: (fileId: string, reason: string) => Promise<void>;
   clearError: () => void;
+}
+
+/** 一个文件邀约在 UI 上的状态 */
+export interface FileInviteState {
+  meta: FileMeta;
+  /** 来自哪个房间（拒绝时要带上，见 Rust 侧 `reject_file` 的说明） */
+  room: string;
+  status: 'invited' | 'receiving' | 'done' | 'failed';
+  /** 收完后的落盘描述（`Download/iroh`），或失败原因 */
+  detail?: string;
 }
 
 /**
@@ -75,6 +91,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   const [room, setRoom] = useState<string | null>(null);
   const [nickname, setNickname] = useState(defaultNickname);
   const [error, setError] = useState<string | null>(null);
+  const [files, setFiles] = useState<Record<string, FileInviteState>>({});
 
   /** 已见过的消息 id —— 去重用的（约束 3） */
   const seen = useRef(new Set<string>());
@@ -143,12 +160,53 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           // 这里不单独处理，避免与 presence 打架产生"幽灵成员"。
           break;
 
+        /* ---- 文件 ---- */
+
+        case 'fileInvite':
+          // 有人发文件过来 → 记一条"待接收"，UI 渲染卡片与「接收」按钮。
+          //
+          // ⚠️ 不自动接收：接收要写公共目录（用户可见的副作用），
+          //    必须由用户点确认。这与 Web 端一致。
+          setFiles((prev) => ({
+            ...prev,
+            [ev.meta.file_id]: {
+              meta: ev.meta,
+              room: ev.room,
+              status: prev[ev.meta.file_id]?.status === 'done' ? 'done' : 'invited',
+              detail: prev[ev.meta.file_id]?.detail,
+            },
+          }));
+          break;
+
+        case 'fileDone': {
+          // 收完（或失败）。ok=false 时把原因写在卡片上，别只吞掉。
+          setFiles((prev) => {
+            const cur = prev[ev.file_id];
+            if (!cur) return prev; // 不是我们正在收的文件（可能是对端视角的另一条链路）
+            return {
+              ...prev,
+              [ev.file_id]: {
+                ...cur,
+                status: ev.ok ? 'done' : 'failed',
+                detail: ev.ok ? cur.detail : ev.reason || '传输失败',
+              },
+            };
+          });
+          break;
+        }
+
+        case 'fileRejected':
+          // 对方拒绝了**我们**发的文件 —— v1 只能发不能收，这里只记一条提示。
+          setError(`对方拒绝接收文件：${ev.reason || '未说明原因'}`);
+          break;
+
         case 'error':
           setError(ev.message);
           break;
 
         default:
-          // 文件类事件 v1 暂不处理（接收功能待原生模块接入）
+          // fileAccepted / fileQueryAsked 是**发送方**才关心的（谁接受了我发的文件）。
+          // v1 移动端只能收，不处理。
           break;
       }
     };
@@ -310,6 +368,71 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     [transport],
   );
 
+  /* ---- 文件接收 ---- */
+
+  /**
+   * 接收一个文件。
+   *
+   * ⚠️ 这是个**长耗时**操作（310 MB 可能几分钟），且原生侧是阻塞调用。
+   *    所以：先同步把状态置成 `receiving`（UI 立刻有反馈），再 await。
+   *    这与 `join()` 的处理方式一致 —— 见文件头「先同步安置状态，再 await」。
+   */
+  const acceptFile = useCallback(
+    async (fileId: string, meta: FileMeta) => {
+      if (!transport) return;
+      setFiles((prev) => {
+        const cur = prev[fileId];
+        // 已经收完或正在收 → 不重复发起（重复调会让两条链路写同一个文件）
+        if (!cur || cur.status === 'receiving' || cur.status === 'done') return prev;
+        return { ...prev, [fileId]: { ...cur, status: 'receiving', detail: undefined } };
+      });
+      try {
+        const saved = await transport.acceptFile(fileId, meta);
+        setFiles((prev) => {
+          const cur = prev[fileId];
+          if (!cur) return prev;
+          return {
+            ...prev,
+            [fileId]: {
+              ...cur,
+              status: 'done',
+              detail: `已保存到 ${saved.location}/${saved.name}`,
+            },
+          };
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setFiles((prev) => {
+          const cur = prev[fileId];
+          if (!cur) return prev;
+          return { ...prev, [fileId]: { ...cur, status: 'failed', detail: msg } };
+        });
+        setError(`接收文件失败：${msg}`);
+      }
+    },
+    [transport],
+  );
+
+  const rejectFile = useCallback(
+    async (fileId: string, reason: string) => {
+      if (!transport) return;
+      const cur = files[fileId];
+      try {
+        await transport.rejectFile(fileId, reason);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+      // 无论拒绝是否成功，本地都把这条移出待办（用户意图是"不要了"）
+      void cur;
+      setFiles((prev) => {
+        const next = { ...prev };
+        delete next[fileId];
+        return next;
+      });
+    },
+    [transport, files],
+  );
+
   const clearError = useCallback(() => setError(null), []);
 
   return useMemo(
@@ -321,11 +444,29 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       room,
       nickname,
       error,
+      files,
       join,
       leave,
       send,
+      acceptFile,
+      rejectFile,
       clearError,
     }),
-    [messages, peers, relay, joined, room, nickname, error, join, leave, send, clearError],
+    [
+      messages,
+      peers,
+      relay,
+      joined,
+      room,
+      nickname,
+      error,
+      files,
+      join,
+      leave,
+      send,
+      acceptFile,
+      rejectFile,
+      clearError,
+    ],
   );
 }

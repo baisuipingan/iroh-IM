@@ -80,9 +80,23 @@ export interface PeerInfo {
   epoch: number;
 }
 
+/**
+ * 文件接收成功后的落盘信息。
+ *
+ * `location` 是给人看的（Android 上是 `Download/iroh`），
+ * 不是可用的文件路径 —— scoped storage 下不该拿它去 open。
+ */
+export interface FileSaved {
+  /** 实际收到的字节数 */
+  bytes: number;
+  /** 落盘后的文件名（已 sanitize） */
+  name: string;
+  /** 人类可读的位置描述 */
+  location: string;
+}
+
 /** 中继连接状态 */
-export interface RelayStatus {
-  url: string | null;
+export interface RelayStatus {  url: string | null;
   connected: boolean;
   /** 延迟（毫秒），未测出时为 null */
   rtt_ms?: number | null;

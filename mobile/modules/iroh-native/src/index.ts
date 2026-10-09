@@ -62,6 +62,14 @@ interface IrohNativeModuleShape {
     beforeTs: number,
     beforeId: string,
   ): Promise<string>;
+  /**
+   * 接收文件到公共 Downloads/iroh，返回 `{"bytes","name","location"}` 的 JSON。
+   *
+   * [metaJson] 是 `fileInvite` 事件里的 `meta` **原样**（snake_case 字段）。
+   * `room` 由这一层塞进 meta（Rust 侧从 `meta._room` 读）。
+   */
+  acceptFile(fileId: string, metaJson: string, room: string): Promise<string>;
+  rejectFile(fileId: string, reason: string, room: string): Promise<void>;
 }
 
 /**
@@ -191,5 +199,32 @@ export const irohNative = {
   ): Promise<{ room: string; messages: unknown[]; snapshot?: unknown }> {
     const raw = await requireModule().fetchHistory(room, limit, beforeTs, beforeId);
     return JSON.parse(raw) as { room: string; messages: unknown[]; snapshot?: unknown };
+  },
+
+  /**
+   * 接收文件到公共 Downloads/iroh。
+   *
+   * [meta] 传 `fileInvite` 事件里那个 `meta` 对象（原样，字段是 snake_case）。
+   * 这里 `JSON.stringify` 一次交给原生 —— **不要**在 JS 侧改名，
+   * Rust 侧的 `FileMeta` 是按 snake_case 反序列化的。
+   */
+  async acceptFile(
+    fileId: string,
+    meta: unknown,
+    room: string,
+  ): Promise<{ bytes: number; name: string; location: string }> {
+    const raw = await requireModule().acceptFile(fileId, JSON.stringify(meta), room);
+    const parsed = JSON.parse(raw) as { bytes: string | number; name: string; location: string };
+    // Rust 侧返回的 bytes 是**字符串**（u64 超出 JS 安全整数范围的可能性），
+    // 这里转成 number —— 文件大小在 2^53 内，安全。
+    return {
+      bytes: typeof parsed.bytes === 'string' ? Number(parsed.bytes) : parsed.bytes,
+      name: parsed.name,
+      location: parsed.location,
+    };
+  },
+
+  async rejectFile(fileId: string, reason: string, room: string): Promise<void> {
+    await requireModule().rejectFile(fileId, reason, room);
   },
 };
