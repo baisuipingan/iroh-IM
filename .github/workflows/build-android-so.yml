@@ -1,0 +1,159 @@
+# 编 Android 原生库（libiroh_web.so）并发布到 Release
+#
+# ## 为什么单独一个 workflow
+#
+# Rust 交叉编译到 Android **必须有 NDK 的 clang**（`ring` 的 C 代码要编译）。
+# 本机不一定有 NDK，而且编一次要十几分钟 —— 不适合放在开发者的日常循环里。
+# 交给 CI：编一次、产物进 Release、所有开发者直接下载，还能被缓存复用。
+#
+# ## 产物怎么用
+#
+# 下载后放进本地模块的 jniLibs：
+#
+#     mobile/modules/iroh-native/android/src/main/jniLibs/arm64-v8a/libiroh_web.so
+#
+# 然后 `npx expo prebuild` + `npx expo run:android`（或 EAS Build）。
+# 安装脚本见 scripts/fetch-android-so.sh。
+#
+# ## ABI 说明
+#
+# 只出 **arm64-v8a**：真机全是 arm64，模拟器在 Apple Silicon 上也是 arm64。
+# x86_64 模拟器（Intel Mac / CI）需要额外产一个 ABI，会显著拉长构建时间 ——
+# 等真有人需要再加（那时矩阵里加一行即可，脚本支持多 ABI）。
+
+name: build-android-so
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'android-v*'
+    paths:
+      - 'client-wasm/**'
+      - '.github/workflows/build-android-so.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  check-symbols:
+    name: 校验 JNI 符号名
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⚠️ 这一步**先于编译**跑。JNI 符号名（包/类/方法）对不上时
+      #    编得再成功，也是装到手机上才崩 UnsatisfiedLinkError，
+      #    而报错只说"找不到 xxx"、不说是名字拼错了。
+      #    在新的 .so 上浪费一整轮构建之前先拦住它 —— 几秒钟。
+      - name: 检查 Rust ↔ Kotlin 符号一致
+        run: node scripts/check-jni-symbols.mjs
+
+  build:
+    name: 构建 ${{ matrix.abi }}
+    needs: check-symbols
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+            ndk_arch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: 装 NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          # r27 LTS：与 iroh/ring 的构建要求兼容；r28+ 换掉了部分 API
+          ndk-version: r27c
+          add-to-path: false
+
+      # ⚠️ 必须显式告诉 cargo 用 NDK 的 clang，否则 ring 的 build script 会去找
+      #    `aarch64-linux-android-clang`（PATH 里没有）然后失败：
+      #      failed to run custom build command for `ring v0.17.14`
+      #    cc-rs 认这两种环境变量名（带下划线/带连字符都会读），这里给全。
+      - name: 配置交叉编译工具链
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK="${{ steps.ndk.outputs.ndk-path }}"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "NDK=$NDK"
+          echo "TOOLCHAIN=$TOOLCHAIN"
+          ls "$TOOLCHAIN/bin" | grep -E "aarch64-linux-android[0-9]+-clang$" | head -3
+
+          AR="$TOOLCHAIN/bin/llvm-ar"
+          CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
+
+          {
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC"
+            echo "CC_aarch64-linux-android=$CC"
+            echo "AR_aarch64-linux-android=$AR"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$AR"
+          } >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-${{ matrix.target }}
+
+      - name: 拉依赖（--locked 保证可复现）
+        working-directory: client-wasm
+        run: cargo fetch --locked
+
+      # ⚠️ 三个关键点：
+      #   1. `--target` 必须显式传，否则产物落在 target/release/ 且
+      #      **架构是宿主机的**（x86_64）—— 打出来的包在 arm64 上跑不起来
+      #   2. `--features cli` 是必须的：room.rs 里依赖它的 tokio/signal 等 feature
+      #      （JNI 桥本身由 target_os = "android" 自动启用）
+      #   3. crate-type 已含 cdylib（见 Cargo.toml 第 9 行），产物是 .so
+      - name: 构建 .so
+        working-directory: client-wasm
+        run: |
+          set -euo pipefail
+          cargo build --release --offline --locked \
+            --no-default-features --features cli \
+            --target ${{ matrix.target }}
+
+      - name: 打包 + 校验和
+        shell: bash
+        env:
+          ABI: ${{ matrix.abi }}
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/ci/pack-android-so.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libiroh_web-${{ matrix.abi }}
+          path: client-wasm/out-android/*
+          # 与上面的输出目录必须是同一处，否则 if-no-files-found 会让 job 失败
+          if-no-files-found: error
+
+  publish:
+    name: 上传到 Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 列出产物
+        run: ls -la dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          # ⚠️ 保留 .sha256 —— 下载脚本按 `<file>.sha256` 校验。
+          #    删掉不会报错，只会让校验静默退化成"跳过"，供应链校验等于没有。
+          files: dist/*
+          fail_on_unmatched_files: true

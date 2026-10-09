@@ -3,8 +3,16 @@ node_modules/
 dist/
 *.log
 
-# 原生工程是 `expo prebuild` 生成的产物，不入库
-android/
-ios/
+# 原生工程根目录是 `expo prebuild` 生成的（可重建），不入库。
+# ⚠️ 必须写成 `/android/` `/ios/` —— 只写 `android/` 会**匹配任意层级**的目录，
+#    把 `modules/iroh-native/android/src/**`（手写的 Kotlin 源码）一并吞掉。
+#    这个坑很隐蔽：gitignore 不报错，文件只是静静地不入库，
+#    直到别人 clone 下来发现编不出原生模块才暴露。
+#    校验：`git check-ignore -v <某个 Kotlin 文件>`，应无输出。
+/android/
+/ios/
+
+# .so 是 CI 编出来的产物（约 40MB），不入库；用 scripts/fetch-android-so.sh 取
+**/jniLibs/*.so
 
 .DS_Store

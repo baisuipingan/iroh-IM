@@ -18,19 +18,44 @@ src/bridge/native.ts       ← 待补：调 Rust 编出的 .so
 
 ## 跑起来
 
+### 方式 A：只看 UI（最快，30 秒）
+
 ```bash
 cd mobile
 npm install
-
-# 方式 A：Expo Go（最快，但**用不了原生模块**，只能看 UI）
-npm run start:go
-
-# 方式 B：development build（要装原生模块时用这个）
-npx expo run:android      # 需要 Android SDK + NDK
+npm run start:go     # 扫码；Expo Go 即可
 ```
 
-> ⚠️ **Expo Go 只够看 UI**。一旦接上 Rust 原生模块就必须用 development build
-> （自己编的 APK），因为原生模块是**已编译的二进制**，没法在运行时下载进 Expo Go。
+原生模块不可用时**自动回退到假数据**，顶部会出现一条珊瑚色提示条
+「假数据模式（未接原生模块）」—— 刻意显眼，避免"以为在测真链路、
+其实在看假数据"（这个项目在 Web 端踩过同样的坑）。
+
+### 方式 B：真链路（Android 真机）
+
+```bash
+# ① 拿 .so（CI 编好的，约 40MB；不入库）
+bash scripts/fetch-android-so.sh
+
+# ② 生成原生工程 + 跑
+cd mobile
+npx expo prebuild -p android
+npx expo run:android       # 需要 Android SDK；NDK 只有在本地编 Rust 时才要
+```
+
+> ⚠️ **Expo Go 用不了原生模块**。它是**已编译的二进制**（libiroh_web.so），
+> 必须在构建 APK 时就链接进去 —— 运行时装不进商店版的 Expo Go。
+> 所以方式 B 装的是"你自己版本的 Expo Go"（development build），
+> 用法几乎一样：装上、扫码、改 JS 热重载。
+>
+> 这也意味着**改 Rust 才需要重新编 APK**；只改 JS 的话热重载照常。
+
+### 编 .so（一般不需要，CI 已代劳）
+
+推 tag `android-v*` 触发 GitHub Actions；或本地：
+
+```bash
+bash scripts/ci/build-android-so.sh   # 需要 Android NDK
+```
 
 ## 目录
 

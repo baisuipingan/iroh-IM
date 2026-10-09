@@ -1643,6 +1643,7 @@ dependencies = [
  "hex",
  "iroh",
  "iroh-gossip",
+ "jni 0.22.4",
  "js-sys",
  "n0-future",
  "noq-proto",

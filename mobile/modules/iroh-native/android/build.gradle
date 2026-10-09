@@ -1,0 +1,34 @@
+// Android 模块的 Gradle 配置。
+//
+// ⚠️ 这里**没有**任何 Rust 编译逻辑 —— .so 是 CI 编好之后
+//    下载到 `android/src/main/jniLibs/<abi>/libiroh_web.so` 的
+//    （见 .github/workflows/build-android-so.yml）。
+//
+//    为什么不在 Gradle 里调 cargo：
+//      1. Gradle 构建机上不一定有 Rust + NDK，装了也要多花十几分钟
+//      2. 开发时改 JS 不该触发 Rust 重编（那会让热重载变成分钟级）
+//      3. CI 编一次、所有开发者复用，产物还能缓存
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'vip.editor.irohchat.nativebridge'
+version = '0.1.0'
+
+android {
+    namespace "vip.editor.irohchat.nativebridge"
+
+    defaultConfig {
+        // 与 app/build.gradle 的 minSdkVersion 保持一致（Expo 54 默认 24）
+        minSdkVersion 24
+    }
+
+    // ⚠️ jniLibs 是**默认**目录，本来不用写。这里显式声明是为了让
+    //    "把 .so 放哪"这件事在代码里看得见 —— 漏放是这套集成最常见的失败。
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+}

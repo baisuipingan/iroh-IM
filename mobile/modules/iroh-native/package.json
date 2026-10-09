@@ -1,0 +1,10 @@
+{
+  "name": "iroh-native",
+  "version": "0.1.0",
+  "description": "iroh 聊天室的 Android 原生模块：把 Rust 核心（libiroh_web.so）通过 JNI 暴露给 JS",
+  "main": "src/index.ts",
+  "private": true,
+  "peerDependencies": {
+    "expo": "*"
+  }
+}

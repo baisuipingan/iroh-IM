@@ -22,6 +22,15 @@ pub mod sigfmt;
 
 #[cfg(feature = "wasm")]
 mod wasm_api;
-
 #[cfg(feature = "wasm")]
 pub use wasm_api::{RoomNode, WebNode};
+
+/// Android JNI 桥：把 `RoomNode` 暴露给 React Native。
+///
+/// 编译条件：**Android target**（正式构建）或 **`jni-bridge` feature**
+/// （在 macOS/Linux 上做纯类型检查，不需要 NDK —— 见 Cargo.toml 的注释）。
+///
+/// 与 `wasm_api`（浏览器）、`bin/agent.rs`（CLI）并列的**第三个适配层**：
+/// 三者都只做"转格式"，协议本体全在 `room.rs`。
+#[cfg(any(target_os = "android", feature = "jni-bridge"))]
+pub mod jni_api;

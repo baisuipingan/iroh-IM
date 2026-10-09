@@ -56,6 +56,17 @@ wasm = [
 # 它需要的 signal-hook-registry 早已在 Cargo.lock 里（间接依赖），所以 --locked 不受影响。
 cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "tokio/signal", "dep:rusqlite"]
 
+# Android JNI 桥（src/jni_api.rs）。
+#
+# ⚠️ 为什么要有这个 feature，而不是只靠 `cfg(target_os = "android")`：
+#    只按 target 判断的话，**在没有 NDK 的机器上这段代码永远不会被编译**，
+#    于是"能不能编过"只能等 CI 才知道 —— 那是很糟的反馈回路。
+#    加上这个 feature 就能在 macOS/Linux 上 `cargo check --features jni-bridge`
+#    做**纯类型检查**（不链接、不需要 NDK），把语法/类型错误就地抓出来。
+#
+#    正式构建（Android）用 target 判断自动启用，不需要手动传 feature。
+jni-bridge = ["dep:jni"]
+
 [dependencies]
 anyhow = "1"
 async-channel = "2"
@@ -85,6 +96,18 @@ wasm-bindgen = { version = "=0.2.122", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
 wasm-streams = { version = "0.5", optional = true }
+
+# Android JNI 桥（src/jni_api.rs）用，**optional**：
+#   - 本地类型检查（无需 NDK）：`cargo check --no-default-features --features "cli jni-bridge"`
+#   - Android 正式构建：构建脚本加 `--features jni-bridge`
+#
+# ⚠️ 两个踩过的坑（别改回去）：
+#   1. feature 里的 `dep:jni` 要求它是**普通 optional 依赖**，不能只写在
+#      `[target.'cfg(target_os = "android")'.dependencies]` 里（清单会直接报错）。
+#   2. `[target...]` 表必须放在 `[dependencies]` **全部结束之后**：插在中间会把
+#      后面的依赖（tracing-subscriber / rusqlite / wasm 全家）全吞成"仅 Android"。
+# 版本无需下载新包：0.22.4 已在依赖树里（rustls-platform-verifier 带入）。
+jni = { version = "0.22", optional = true }
 
 # wasm-opt 需要显式打开这些 wasm 特性，否则会失败（官方示例同款配置）
 [package.metadata.wasm-pack.profile.release]
