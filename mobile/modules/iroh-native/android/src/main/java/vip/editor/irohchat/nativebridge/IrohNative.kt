@@ -358,18 +358,16 @@ object IrohNative {
         ptr: Long,
         fileId: String,
         metaJson: String,
+        room: String,
     ): String {
-        // 从 meta 里取文件名/mime/大小 —— meta 由 JS 传（见 jni_api.rs 的说明）
+        if (room.isBlank()) throw IllegalArgumentException("room 为空（邀约所在房间必填）")
+
+        // 从 meta 里取文件名/mime/大小 —— meta 由 JS 原样传来（见 jni_api.rs 的说明）
         val meta = JSONObject(metaJson)
         val rawName = meta.optString("name").ifBlank { "file" }
         val mime = meta.optString("mime")
         val size = meta.optLong("size", 0L)
         val safeName = sanitizeDisplayName(rawName)
-
-        // 需要知道 room：Rust 侧会核对"是否还在邀约所在的房间"。
-        // 这里从 meta 拿不到，由调用方在 metaJson 里带上 `_room`。
-        val room = meta.optString("_room")
-        if (room.isBlank()) throw IllegalArgumentException("metaJson 缺少 _room（邀约所在房间）")
 
         // API 28 及以下没有 MediaStore.Downloads，退回 App 私有目录
         //（v1 只考虑了 29+；老设备走另一条路，见下面的分支）

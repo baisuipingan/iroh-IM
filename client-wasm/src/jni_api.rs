@@ -761,6 +761,25 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeAc
     room: JString<'_>,
     fd: jni::sys::jint,
 ) -> jstring {
+    // ⚠️ **第一件事就是接管 fd**，早于任何参数校验。
+    //
+    // 为什么顺序重要：下面每一条 `return throw(...)` 都是一次提前退出。
+    // 如果接管放在校验之后，那么"节点未创建""读参数失败""运行时已释放"
+    // 这几条路径下那个 fd 就**永远不会被关闭** —— 每失败一次泄漏一个，
+    // 几十次后进程里 `open` 直接 EMFILE。
+    //
+    // 反过来，先把所有权收进来，`file` 就是本函数的局部变量，
+    // **任何**提前 return（包括 panic 展开）都会走它的 Drop 把 fd 关掉。
+    //
+    // SAFETY: `fd` 由 Kotlin 侧从 ParcelFileDescriptor 取得并已 detach
+    //（保证没有别人会关它）；由此处起由本 File 独占。
+    let file = if fd >= 0 {
+        use std::os::fd::FromRawFd;
+        Some(unsafe { std::fs::File::from_raw_fd(fd) })
+    } else {
+        None
+    };
+
     let Some(h) = (unsafe { handle_ref(ptr) }) else {
         return throw(&mut env, "节点未创建");
     };
@@ -771,22 +790,11 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeAc
     ) else {
         return throw(&mut env, "读取参数失败");
     };
-    if fd < 0 {
+    let Some(file) = file else {
         return throw(&mut env, "无效的文件描述符");
-    }
+    };
     let Ok(rt) = h.rt() else {
         return throw(&mut env, "运行时已释放");
-    };
-
-    // ⚠️ 立刻接管 fd 的所有权，包成带 Drop 的 File。
-    //    之后任何提前 return（meta 解析失败、房间不符…）都会自动关掉它 ——
-    //    否则每失败一次泄漏一个 fd，几十次后 open 直接 EMFILE。
-    //
-    //    SAFETY: `fd` 由 Kotlin 侧从 ParcelFileDescriptor 取得并已 detach
-    //    （保证没有别人会关它）；由此处起由本 File 独占。
-    let file = unsafe {
-        use std::os::fd::FromRawFd;
-        std::fs::File::from_raw_fd(fd)
     };
 
     let result: Result<u64> = rt.block_on(async {

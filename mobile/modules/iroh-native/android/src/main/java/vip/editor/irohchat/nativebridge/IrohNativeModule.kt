@@ -56,7 +56,6 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 /** 所有原生调用前都先查句柄 —— Rust 侧对 0 会抛异常 */
 private const val ERR_NO_NODE = "节点未创建"
@@ -241,17 +240,17 @@ class IrohNativeModule : Module() {
         /**
          * 接收文件到公共 Downloads/iroh。
          *
-         * [metaJson] 是 `fileInvite` 事件里的 `meta`（**原样**），
-         * 但外面要包一层带上 `_room` —— Rust 侧要核对"是否还在邀约的房间"。
-         * 由这一层组装，不用 JS 操心字段名。
+         * [metaJson] 是 `fileInvite` 事件里的 `meta`，**原样**传下来
+         * —— ⚠️ 千万不要往里面塞额外字段：Rust 侧会把它反序列化成
+         *    `FileMeta` 并逐项与邀约核对，多一个字段现在虽然不会报错
+         *   （serde 默认忽略未知字段），但那是**靠默认行为兜着**，脆弱。
+         *    `room` 走独立参数，见下。
          */
         AsyncFunction("acceptFile").SuspendBody<String, String, String, String> { fileId, metaJson, room ->
             withContext(Dispatchers.IO) {
                 if (ptr == 0L) throw IllegalStateException(ERR_NO_NODE)
                 val ctx: Context = appContext.reactContext ?: throw Exceptions.AppContextLost()
-                // 把 room 塞进 meta：Rust 侧统一从 meta._room 读（见 jni_api.rs 的说明）
-                val withRoom = JSONObject(metaJson).apply { put("_room", room) }.toString()
-                IrohNative.acceptFileToDownloads(ctx, ptr, fileId, withRoom)
+                IrohNative.acceptFileToDownloads(ctx, ptr, fileId, metaJson, room)
             }
         }
 
