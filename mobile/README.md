@@ -33,7 +33,8 @@ npm run start:go     # 扫码；Expo Go 即可
 ### 方式 B：真链路（Android 真机）
 
 ```bash
-# ① 拿 .so（CI 编好的，约 40MB；不入库）
+# ① 拿 .so（CI 编好的，8.5 MB；不入库）
+#    来自 Release: android-v0.1.0
 bash scripts/fetch-android-so.sh
 
 # ② 生成原生工程 + 跑
@@ -56,6 +57,25 @@ npx expo run:android       # 需要 Android SDK；NDK 只有在本地编 Rust �
 ```bash
 bash scripts/ci/build-android-so.sh   # 需要 Android NDK
 ```
+
+## 当前进度（诚实版）
+
+| 环节 | 状态 |
+|---|---|
+| 项目骨架 / UI（mock 驱动） | ✅ 可在 Expo Go 里跑 |
+| Rust 核心 `.so` | ✅ 已编出并发布（`android-v0.1.0`，8.5 MB） |
+| JNI 符号（源码层 + 产物层） | ✅ 13 个，两个脚本各自校验通过 |
+| Kotlin 桥 + Expo Module | ✅ 已写 |
+| `NativeTransport` | ✅ 已写，UI 未改一行 |
+| **真机跑通** | ❌ **还没做**（本机无 Android SDK / 设备） |
+
+也就是说：**从"点进房"到"看到真消息"这一段，还没有人真正跑过。**
+首次真机运行时按这个顺序排查：
+
+1. `npx expo prebuild -p android` 后确认
+   `modules/iroh-native/android/src/main/jniLibs/arm64-v8a/libiroh_web.so` 在
+2. `adb logcat | grep -iE "iroh|UnsatisfiedLink"` 看 `System.loadLibrary` 是否成功
+3. 界面顶部**没有**珊瑚色「假数据模式」提示条 = 走的是真链路
 
 ## 目录
 
