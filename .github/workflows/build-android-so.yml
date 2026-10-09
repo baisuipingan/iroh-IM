@@ -23,14 +23,20 @@
 
 name: build-android-so
 
+# 触发方式刻意保持**简单明确**：
+#   - 打 `android-v*` tag = 明确要出产物
+#   - 或手动 workflow_dispatch（调试用）
+#
+# ⚠️ 为什么不加 `branches` + `paths` 过滤：
+#    同时写 `tags` 和 `paths` 时，paths 是否对 tag push 生效在不同
+#    GitHub 版本/文档表述里有歧义 —— 一旦被判为"不匹配"，
+#    打 tag 后 workflow **静默不触发**（不报错，你以为在跑其实没有）。
+#    所以这里零过滤。要省 CI 额度就用手动触发。
 on:
   workflow_dispatch:
   push:
     tags:
       - 'android-v*'
-    paths:
-      - 'client-wasm/**'
-      - '.github/workflows/build-android-so.yml'
 
 permissions:
   contents: write
@@ -105,20 +111,29 @@ jobs:
 
       - name: 拉依赖（--locked 保证可复现）
         working-directory: client-wasm
-        run: cargo fetch --locked
+        # ⚠️⚠️ `--target` 在这里也**必须传**，否则漏掉整个 Android 专属依赖集
+        #    （实测：带 --target 时有 22 个 jni/cesu8/netlink 系 crate，
+        #      不带时是 **0**），接着下面 `--offline` 的构建就会以
+        #      "failed to download ... because --offline" 失败 ——
+        #      而且要到编译阶段才暴露，白跑一轮 CI。
+        run: cargo fetch --locked --target ${{ matrix.target }}
 
-      # ⚠️ 三个关键点：
+      # ⚠️ 四个关键点：
       #   1. `--target` 必须显式传，否则产物落在 target/release/ 且
       #      **架构是宿主机的**（x86_64）—— 打出来的包在 arm64 上跑不起来
-      #   2. `--features cli` 是必须的：room.rs 里依赖它的 tokio/signal 等 feature
-      #      （JNI 桥本身由 target_os = "android" 自动启用）
-      #   3. crate-type 已含 cdylib（见 Cargo.toml 第 9 行），产物是 .so
+      #   2. `--features cli` 是必须的：room.rs 依赖它的 tokio/signal 等
+      #   3. ★ `--features jni-bridge` **也必须在**：`jni` 是 optional 依赖，
+      #      不显式打开的话 `src/jni_api.rs` 的 `use jni::…` 会直接编译失败。
+      #      模块虽由 `cfg(any(target_os="android", feature="jni-bridge"))` 门控，
+      #      Android target 确实会**编译**它，但那个 optional 依赖不会自动跟着开。
+      #   4. `--lib` 只编 cdylib：agent 二进制与本产物无关，编它纯属浪费
       - name: 构建 .so
         working-directory: client-wasm
         run: |
           set -euo pipefail
           cargo build --release --offline --locked \
-            --no-default-features --features cli \
+            --no-default-features --features "cli jni-bridge" \
+            --lib \
             --target ${{ matrix.target }}
 
       - name: 打包 + 校验和

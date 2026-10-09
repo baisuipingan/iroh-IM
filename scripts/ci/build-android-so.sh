@@ -81,8 +81,13 @@ cd "$ROOT/client-wasm"
 rustup target add "$TARGET" >/dev/null 2>&1 || true
 
 # 本地第一次编是联网拉依赖（CI 里才用 --offline --locked）
+#
+# ⚠️ `--features "cli jni-bridge"`（不是只 cli）：`jni` 是 optional 依赖，
+#    不显式打开的话 src/jni_api.rs 的 `use jni::…` 直接编译失败。
+# ⚠️ `--lib` 只编 cdylib；agent 二进制与本产物无关。
 cargo build --release \
-  --no-default-features --features cli \
+  --no-default-features --features "cli jni-bridge" \
+  --lib \
   --target "$TARGET"
 
 # --- 打包 ----------------------------------------------------------------

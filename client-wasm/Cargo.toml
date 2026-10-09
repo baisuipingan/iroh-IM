@@ -63,8 +63,6 @@ cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "tokio/signal", "d
 #    于是"能不能编过"只能等 CI 才知道 —— 那是很糟的反馈回路。
 #    加上这个 feature 就能在 macOS/Linux 上 `cargo check --features jni-bridge`
 #    做**纯类型检查**（不链接、不需要 NDK），把语法/类型错误就地抓出来。
-#
-#    正式构建（Android）用 target 判断自动启用，不需要手动传 feature。
 jni-bridge = ["dep:jni"]
 
 [dependencies]
