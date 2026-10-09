@@ -266,8 +266,11 @@ impl ChunkSink for BytesSink {
 ///
 /// ## 两种构造方式
 ///
-/// - [`FileSink::open`]：给定路径（CLI / agent 用）—— 哈希校验时**按路径重开**
+/// - [`FileSink::open`]：给定路径（CLI / agent 用）
 /// - [`FileSink::from_file`]：给定**已打开的句柄**（Android MediaStore 用）
+///
+/// ⚠️ 两者都**必须可读可写**：`finish()` 要复用句柄 seek 回 0 重读校验
+///（所以 `open()` 里同时开了 `.read(true)`）。
 ///
 /// ⚠️ 为什么需要 `from_file`：Android 10+ 往公共目录写文件必须走 MediaStore，
 /// 它只给 `Uri`/文件描述符，**没有可用的文件系统路径**。
@@ -292,7 +295,14 @@ impl FileSink {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).with_context(|| format!("创建目录 {}", dir.display()))?;
         }
+        // ⚠️ **必须同时开 read**：`finish()` 要复用这个句柄 seek 回 0 重读校验
+        //    （见 finish 的说明）。只开 write 的话 `read()` 会报
+        //    `Bad file descriptor (os error 9)` —— 真机实测踩过：
+        //    数据 240/240 块全收到，最后一步校验时炸。
+        //
+        //    这也是为什么不能只写 `.write(true)`：读权限是 finish 的硬需求。
         let file = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
             .truncate(true)
@@ -881,5 +891,135 @@ mod tests {
             .build()
             .unwrap()
             .block_on(f)
+    }
+
+    /* ---- FileSink（磁盘版）的回归 ----
+     *
+     * ⚠️ 这一组是**补上的覆盖缺口**。
+     *
+     * 2026-10-09 真机实测踩到：数据 240/240 块全收到，但 `finish()`
+     * 校验时报 `Bad file descriptor (os error 9)`。
+     * 根因是 `FileSink::open()` 当时只开了 `.write(true)`，
+     * 而 `finish()` 要**复用同一个句柄** seek 回 0 读回校验 —— 只写句柄读不了。
+     *
+     * **为什么原来的测试没抓到**：上面那几个 `sink_*` 测试用的都是
+     * `BytesSink`（纯内存），**没有一个走 FileSink**。
+     * 内存版没有"打开模式"这个问题 —— 所以测试全绿、真机照炸。
+     *
+     * 教训：**凡是"内存版跑得通"的实现，都要单独补一个走真实 IO 的测试**。
+     */
+
+    /// `FileSink` 能完整收完并校验通过（覆盖"打开模式"这条最容易错的路径）。
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_sink_writes_and_verifies() {
+        let dir = std::env::temp_dir().join(format!("iroh-filesink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("payload.bin");
+
+        // 造 3 块数据（最后一块不满，覆盖边界）
+        let chunk_size = CHUNK_SIZE;
+        let payload: Vec<u8> = (0..(chunk_size as usize * 2 + 100))
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&payload);
+        let meta = FileMeta {
+            file_id: "t1".into(),
+            name: "payload.bin".into(),
+            size: payload.len() as u64,
+            mime: "application/octet-stream".into(),
+            chunk_size,
+            root_hash: hex_encode(hasher.finalize().as_bytes()),
+            sender: "me".into(),
+            sender_relay: "https://relay".into(),
+            ts: 0,
+        };
+
+        let sink = FileSink::open(&path, &meta).expect("打开目标文件");
+        // 逐块写（模拟 receive_file 的调用方式）
+        for (seq, part) in payload.chunks(chunk_size as usize).enumerate() {
+            tokio_test_block(sink.write_chunk(seq as u32, part)).expect("写块");
+        }
+        // ★ 这一步在真机上曾是 `Bad file descriptor`：
+        //   只写模式打开的句柄读不了。
+        tokio_test_block(sink.finish()).expect("校验应通过（含 seek 回读）");
+
+        // 落盘内容也要对
+        let written = std::fs::read(&path).unwrap();
+        assert_eq!(written, payload);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 哈希不符时必须判失败（不能默默成功）。
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_sink_rejects_wrong_hash() {
+        let dir = std::env::temp_dir().join(format!("iroh-filesink-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.bin");
+
+        let meta = FileMeta {
+            file_id: "t2".into(),
+            name: "bad.bin".into(),
+            size: 8,
+            mime: "application/octet-stream".into(),
+            chunk_size: CHUNK_SIZE,
+            // 故意写错哈希
+            root_hash: "00".repeat(32),
+            sender: "me".into(),
+            sender_relay: "https://relay".into(),
+            ts: 0,
+        };
+
+        let sink = FileSink::open(&path, &meta).unwrap();
+        tokio_test_block(sink.write_chunk(0, b"12345678")).unwrap();
+        assert!(
+            tokio_test_block(sink.finish()).is_err(),
+            "哈希不符却通过了校验"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `from_file` 走的是"复用句柄"那条路 —— 同样要能读回校验。
+    ///
+    /// 这条覆盖 Android MediaStore 的场景（没有路径可以重开）。
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_sink_from_file_verifies() {
+        let dir = std::env::temp_dir().join(format!("iroh-fd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd.bin");
+
+        let payload: Vec<u8> = (0..5000u32).map(|i| (i % 199) as u8).collect();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&payload);
+        let meta = FileMeta {
+            file_id: "t3".into(),
+            name: "fd.bin".into(),
+            size: payload.len() as u64,
+            mime: "application/octet-stream".into(),
+            chunk_size: CHUNK_SIZE,
+            root_hash: hex_encode(hasher.finalize().as_bytes()),
+            sender: "me".into(),
+            sender_relay: "https://relay".into(),
+            ts: 0,
+        };
+
+        // 模拟 Kotlin 侧：用可读可写的方式建文件，交出句柄
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        let sink = FileSink::from_file(file, &meta, "fd.bin");
+        tokio_test_block(sink.write_chunk(0, &payload)).unwrap();
+        tokio_test_block(sink.finish()).expect("from_file 的校验应通过");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
