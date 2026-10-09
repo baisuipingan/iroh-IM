@@ -15,8 +15,10 @@ Environment=IROH_AGENT_HOME=/opt/iroh-agent/home
 Environment=PI_CODING_AGENT_DIR=/opt/iroh-agent/pi-agent
 
 # 房间/昵称/大脑/文件策略都在这一行里改；改完 daemon-reload + restart
+# ⚠️ `--room` 必须与你实际用的房间**完全一致**：房间名就是命名空间，
+#    进错房间 = 谁也看不见谁（实测踩过：部署到 lobby、人在 patrick）。
 ExecStart=/opt/node22/bin/node src/cli.ts \
-  --room lobby \
+  --room patrick \
   --nick 服务器助手 \
   --brain pi-sdk \
   --pi-model hahacode/gpt-6.1-sol \
