@@ -145,35 +145,98 @@ static JAVA_VM_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
  *
  * **为什么必须做这件事**：没有它，`adb logcat` 里**看不到任何 Rust 侧输出** ——
  * iroh 连中继失败、鉴权被拒、DNS 解析异常，全都静默无闻。
+ * 这一点在真机调试时反复咬人：服务端一切正常，App 却一直"正在连接中继"，
+ * 而**没有任何一处能告诉你为什么**。
  *
- * 这一点在真机调试时反复咬人：明明服务端一切正常，App 却一直"正在连接中继"，
- * 而**没有任何一处能告诉你为什么**。只能靠猜。
+ * ## ⚠️ 一个实测踩过的错误假设
  *
- * Android 上 Rust 的 `stdout` 会被 libc 重定向到 logcat（tag 通常是
- * `stdout`），所以最省事的方式就是 `fmt()` + 默认 writer。
- * 不用引入 `android_logger` 之类的额外依赖（那会动 Cargo.lock）。
+ * 第一版我写了 `tracing_subscriber::fmt()` 用**默认 writer**（即 stdout），
+ * 理由是"Android 上 stdout 会被转进 logcat"。
+ * **实测不成立** —— 装到真机后 logcat 里一个字都没有，
+ * `adb logcat -s stdout` 也是空的。
+ *
+ * 所以这里**显式调用 libc 的 `__android_log_write`**（`<android/log.h>`，
+ * 由 Android 的 libc 直接提供，**不需要新增任何 crate**）。
  * ==========================================================================*/
 
-/// 日志是否已初始化（`init()` 重复调用会 panic，用这个挡住）
+/// logcat 里的 tag（`adb logcat -s iroh_web` 就能只看我们）
+const LOGCAT_TAG: &str = "iroh_web";
+
+/// 日志是否已初始化（避免重复装 subscriber）
 static LOG_INIT: std::sync::Once = std::sync::Once::new();
 
-/// 初始化 Rust 侧日志 → logcat。
+unsafe extern "C" {
+    /// Android libc 提供的日志写入（声明即可，链接时自动解析）
+    fn __android_log_write(prio: i32, tag: *const u8, text: *const u8) -> i32;
+}
+
+/// ANDROID_LOG_INFO / ERROR
+const ANDROID_LOG_INFO: i32 = 4;
+const ANDROID_LOG_ERROR: i32 = 6;
+
+/// 把一行写到 logcat（CString 处理内嵌 NUL 的问题）
+fn logcat(prio: i32, msg: &str) {
+    // 带 NUL 结尾；消息里若含 NUL 会被截断 —— 我们自己拼的串不含
+    let Ok(cmsg) = std::ffi::CString::new(msg) else {
+        return;
+    };
+    let Ok(ctag) = std::ffi::CString::new(LOGCAT_TAG) else {
+        return;
+    };
+    // SAFETY: 两个指针都指向有效的 NUL 结尾 C 串，且在调用期间存活
+    unsafe {
+        __android_log_write(prio, ctag.as_ptr() as *const u8, cmsg.as_ptr() as *const u8);
+    }
+}
+
+/// `MakeWriter`：把 `tracing` 的输出重定向到 logcat。
 ///
-/// 幂等；在 `JNI_OnLoad` 里调一次即可。
+/// 不用 `android_logger` crate —— 那要改 Cargo.lock，而 libc 这个函数
+/// 本来就能直接用。
+struct LogcatWriter;
+
+impl std::io::Write for LogcatWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // tracing 会分多次 write（前缀 / 消息 / 换行），这里逐块转；
+        // 用 lossy 避免非法 UTF-8 直接吞掉整条日志
+        logcat(ANDROID_LOG_INFO, &String::from_utf8_lossy(buf));
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// 供 `tracing_subscriber::fmt().with_writer(...)` 用的构造函数
+fn logcat_writer() -> LogcatWriter {
+    LogcatWriter
+}
+
+/// 初始化 Rust 侧日志 → logcat。幂等。
 fn init_android_logging() {
     LOG_INIT.call_once(|| {
-        // 级别：debug 构建给 TRACE（排查问题够用），release 给 INFO
-        //（Android 上 INFO 已经能看到 iroh 的连接/失败原因）
         #[cfg(debug_assertions)]
         let level = tracing::level_filters::LevelFilter::TRACE;
         #[cfg(not(debug_assertions))]
-        let level = tracing::level_filters::LevelFilter::INFO;
+        let level = tracing::level_filters::LevelFilter::DEBUG;
 
-        let _ = tracing_subscriber::fmt()
+        let ok = tracing_subscriber::fmt()
             .with_max_level(level)
-            .without_time() // logcat 自带时间戳，重复打印没意义
+            .with_writer(logcat_writer) // ★ 关键：写入 logcat，不是 stdout
+            .without_time() // logcat 自带时间戳
             .with_ansi(false) // logcat 不解析 ANSI 转义
-            .try_init(); // 已经有人装过 subscriber 就安静跳过
+            .try_init()
+            .is_ok();
+
+        // 用裸 logcat 报一句，避免"日志系统自己没起来"时彻底静默
+        logcat(
+            ANDROID_LOG_INFO,
+            if ok {
+                "[iroh_web] 日志已接入 logcat"
+            } else {
+                "[iroh_web] 日志 subscriber 已存在（跳过）"
+            },
+        );
     });
 }
 
@@ -418,9 +481,22 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeCr
     }));
 
     match r {
-        Ok(Ok(ptr)) => ptr,
-        Ok(Err(e)) => thrown_long(&mut env, &format!("{e:#}")),
-        Err(_) => thrown_long(&mut env, "nativeCreate 发生 panic"),
+        Ok(Ok(ptr)) => {
+            tracing::info!("nativeCreate 成功，句柄={ptr}");
+            ptr
+        }
+        Ok(Err(e)) => {
+            // ★ 建节点失败的原因**必须**落在 logcat 里。
+            //   这一句是排查"连不上中继"时最有用的一条 —— 之前完全静默。
+            let msg = format!("{e:#}");
+            logcat(ANDROID_LOG_ERROR, &format!("[iroh_web] nativeCreate 失败：{msg}"));
+            tracing::error!("nativeCreate 失败：{msg}");
+            thrown_long(&mut env, &msg)
+        }
+        Err(_) => {
+            logcat(ANDROID_LOG_ERROR, "[iroh_web] nativeCreate 发生 panic");
+            thrown_long(&mut env, "nativeCreate 发生 panic")
+        }
     }
 }
 
