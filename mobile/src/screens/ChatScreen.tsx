@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { ChatMessage, FileMeta, PeerInfo, RelayStatus } from '../bridge/types';
+import type { ChatMessage, PeerInfo, RelayStatus } from '../bridge/types';
 import type { FileInviteState } from '../bridge/useRoom';
 import { MessageBubble } from '../components/MessageBubble';
 import { avatarColor, avatarText, colors, font, sizes, spacing } from '../theme/tokens';
@@ -42,7 +42,7 @@ export function ChatScreen({
   files: Record<string, FileInviteState>;
   onSend: (text: string) => void;
   onLeave: () => void;
-  onAcceptFile: (fileId: string, meta: FileMeta) => void;
+  onAcceptFile: (fileId: string) => void;
   onRejectFile: (fileId: string, reason: string) => void;
 }) {
   const [draft, setDraft] = useState('');
@@ -122,9 +122,10 @@ export function ChatScreen({
               message={item}
               mine={item.from === myId}
               fileState={item.file ? files[item.file.file_id] : undefined}
-              onAcceptFile={
-                item.file ? (id) => onAcceptFile(id, item.file as FileMeta) : undefined
-              }
+              // ⚠️ 只传 fileId：完整 meta 由 useRoom 从邀约缓存里取。
+              //    消息里的 `item.file` 是 `FileRef`（少 4 个字段），
+              //    传它下去会让 Rust 反序列化失败 —— 见 RoomActions.acceptFile。
+              onAcceptFile={onAcceptFile}
               onRejectFile={(id) => onRejectFile(id, '用户取消')}
             />
           )}

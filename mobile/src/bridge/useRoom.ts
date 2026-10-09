@@ -57,8 +57,25 @@ export interface RoomActions {
   join: (p: JoinParams) => Promise<void>;
   leave: () => Promise<void>;
   send: (text: string) => Promise<void>;
-  /** 接收一个收到的文件（耗时操作，UI 要有"接收中"状态） */
-  acceptFile: (fileId: string, meta: FileMeta) => Promise<void>;
+  /**
+   * 接收一个收到的文件（耗时操作，UI 要有"接收中"状态）。
+   *
+   * ★ 只传 `fileId`，**不要**传 meta —— 完整 meta 由本 hook 从
+   *   `fileInvite` 事件缓存里取（见下面的实现）。
+   *
+   *   为什么不让调用方传：消息里的 `FileRef`（`ChatMessage.file`）与
+   *   邀约里的 `FileMeta` **不是同一个东西** —— `FileRef` 少了
+   *   `chunk_size` / `sender` / `sender_relay` / `ts` 四个字段，
+   *   而 Rust 侧反序列化 `FileMeta` 时缺字段会直接失败。
+   *
+   *   ⚠️ 这个坑**类型系统拦不住**：`FileRef` 的字段是 `FileMeta` 的子集，
+   *   TS 的结构化类型认为"字段更少的对象"可以赋给"字段更多的类型"
+   *   （只要不缺必填项就兼容）—— 于是传 `FileRef` 编译通过、运行时才炸。
+   *   真机上实测的报错：
+   *     missing field `chunk_size` at line 1 column 102
+   *   所以这里从**接口上**就不给传错的机会。
+   */
+  acceptFile: (fileId: string) => Promise<void>;
   /** 拒绝接收 */
   rejectFile: (fileId: string, reason: string) => Promise<void>;
   clearError: () => void;
@@ -109,6 +126,19 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
    */
   const nicknameRef = useRef<string>(defaultNickname);
   nicknameRef.current = nickname;
+
+  /**
+   * 文件邀约的"最新值"。
+   *
+   * `acceptFile` 的依赖只有 transport（不想每次 files 变化都重建回调），
+   * 所以闭包里的 `files` 会是旧值 —— 而"点了接收时用的 meta"必须是**当下**
+   * 这条邀约的完整 meta。用 ref 拿最新。
+   *
+   * ⚠️ 这里存的是 `fileInvite` 事件里的**完整 `FileMeta`**，
+   *    不是消息里的 `FileRef`（少了 4 个字段，传下去 Rust 会拒）。
+   */
+  const filesRef = useRef<Record<string, FileInviteState>>({});
+  filesRef.current = files;
 
   /* ---- 订阅：只依赖 transport，**不依赖 room** ---- */
   useEffect(() => {
@@ -378,8 +408,25 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
    *    这与 `join()` 的处理方式一致 —— 见文件头「先同步安置状态，再 await」。
    */
   const acceptFile = useCallback(
-    async (fileId: string, meta: FileMeta) => {
+    async (fileId: string) => {
       if (!transport) return;
+
+      // ★ 完整 meta 从**邀约缓存**里取，不从调用方传。
+      //
+      //   消息里的 `ChatMessage.file` 是 `FileRef` —— 只有 file_id/name/size/
+      //   mime/root_hash，**没有** chunk_size/sender/sender_relay/ts。
+      //   拿它当 `FileMeta` 传给 Rust 会在反序列化时失败（真机实测：
+      //   `missing field \`chunk_size\``）。详见 RoomActions.acceptFile 的注释。
+      //
+      //   从 ref 读而不是从 state 读：`files` state 在闭包里可能是旧值
+      //   （这个 hook 的既有约束 —— 见文件头「先同步安置状态，再 await」）。
+      const meta = filesRef.current[fileId]?.meta;
+      if (!meta) {
+        // 没有邀约 = 这条是历史消息（发送方早就不在了），如实告诉用户
+        setError('这条是历史记录，发送方已不在线，无法接收');
+        return;
+      }
+
       setFiles((prev) => {
         const cur = prev[fileId];
         // 已经收完或正在收 → 不重复发起（重复调会让两条链路写同一个文件）
