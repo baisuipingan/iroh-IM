@@ -99,6 +99,14 @@ export interface Transport {
   forgetShelf(fileId: string): Promise<void>;
 
   /**
+   * 回应"有人问这个文件还在不在"（点了历史卡片）。
+   *
+   * 手里还留着就重发一次邀约；没有则**静默返回 false**
+   *（协议认可的语义：沉默即视为该文件已过期）。
+   */
+  reofferFile(fileId: string): Promise<boolean>;
+
+  /**
    * 接收某人发来的文件。
    *
    * ★ 传 **meta 整体**（不是 fileId）：原因见 client-wasm/src/jni_api.rs 顶部

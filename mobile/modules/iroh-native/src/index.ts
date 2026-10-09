@@ -89,6 +89,11 @@ interface IrohNativeModuleShape {
   ): Promise<string>;
   /** 推送完（成功/失败都）从货架移除 */
   forgetShelf(fileId: string): Promise<void>;
+  /**
+   * 回应"有人问这个文件还在不在"：手里有就重发一次邀约。
+   * 返回是否重发了（false = 货架里没有 → 静默，是协议认可的语义）。
+   */
+  reofferFile(fileId: string): Promise<boolean>;
 }
 
 /**
@@ -273,5 +278,9 @@ export const irohNative = {
 
   async forgetShelf(fileId: string): Promise<void> {
     await requireModule().forgetShelf(fileId);
+  },
+
+  async reofferFile(fileId: string): Promise<boolean> {
+    return requireModule().reofferFile(fileId);
   },
 };

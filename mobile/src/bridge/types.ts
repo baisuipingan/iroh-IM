@@ -152,7 +152,18 @@ export type RoomEvent =
   | ({
       type: 'fileQueryAsked';
       file_id: string;
-      requester: string;
+      /**
+       * 提问者的 EndpointId。
+       *
+       * ⚠️ 字段名是 **`by`** 不是 `requester` —— 与 Rust
+       *    `RoomEvent::FileQueryAsked { …, by }` 对齐。
+       *
+       *    `#[serde(rename_all = "camelCase")]` **只改变体名与带名字段**，
+       *    这里是带名字段且本来就是 `by`（无下划线）→ JSON 里原样是 `by`。
+       *    早先这里写成 `requester`，**类型不报错、运行时永远是 undefined**
+       *    —— 与 `FileRef` ≠ `FileMeta` 同一类陷阱。
+       */
+      by: string;
     } & EvRoom)
   | ({ type: 'relay'; status: RelayStatus } & EvRoom)
   | ({ type: 'error'; message: string } & EvRoom);

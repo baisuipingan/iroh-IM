@@ -254,6 +254,11 @@ export class MockTransport implements Transport {
     // mock：无货架
   }
 
+  async reofferFile(_fileId: string): Promise<boolean> {
+    // mock：无货架 → 永远"手里没有"
+    return false;
+  }
+
   async rejectFile(fileId: string, reason: string): Promise<void> {
     if (this.opts) {
       this.emit({

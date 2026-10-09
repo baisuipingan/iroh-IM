@@ -257,6 +257,18 @@ object IrohNative {
         fd: Int,
     ): String
 
+    /**
+     * 重发一次邀约（回应"有人问这个文件还在不在"）。
+     *
+     * 别人点了历史卡片 → 广播 `fileQueryAsked` → 我们如果还留着这个文件
+     * （在货架上），就重发邀约让他拿到可接收的卡片。
+     *
+     * [metaJson] 必须是**完整 `FileMeta`**（从货架取）。
+     *
+     * ⚠️ 阻塞（写 gossip）→ 挂 `Dispatchers.IO`。返回是否成功。
+     */
+    external fun nativeReofferFile(ptr: Long, metaJson: String): Boolean
+
     /* =======================================================================
      * 便捷封装
      * =====================================================================*/
@@ -477,6 +489,25 @@ object IrohNative {
     /** 推送结束后从货架移除（发送完成 / 失败都清，避免重复推）。 */
     fun forgetShelf(fileId: String) {
         synchronized(shelf) { shelf.remove(fileId) }
+    }
+
+    /**
+     * 回应"有人问这个文件还在不在"：手里有就重发一次邀约。
+     *
+     * 返回是否真的重发了（false = 货架里没有，或重发失败）。
+     *
+     * ⚠️ **货架里没有就什么都不做** —— 静默是协议认可的语义
+     *    （沉默即视为该文件已过期）。别报错、别打扰用户。
+     */
+    fun reofferFile(ptr: Long, fileId: String): Boolean {
+        val metaJson = synchronized(shelf) { shelf[fileId]?.first } ?: return false
+        return try {
+            nativeReofferFile(ptr, metaJson)
+        } catch (e: Throwable) {
+            // 重发失败不影响任何既有会话（对方那张卡片本来也是过期状态）
+            android.util.Log.w("IrohNative", "重发邀约失败：$fileId", e)
+            false
+        }
     }
 
     /**

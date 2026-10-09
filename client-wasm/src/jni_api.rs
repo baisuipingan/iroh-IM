@@ -1002,6 +1002,66 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativePu
     }
 }
 
+/// 重发一次邀约（回应"有人问这个文件还在不在"）。
+///
+/// ## 什么时候用
+///
+/// 别人点了**历史里的文件卡片**（发送方早就不在线、只有卡片留着），
+/// 会广播一条 `fileQueryAsked` 问"你现在还能提供 `file_id` 吗"。
+/// 如果我们手里还留着这个文件（在货架上），就**重发一次邀约**作为回应 ——
+/// 对方直接拿到可接收的卡片，比"再播一次心跳"明确得多。
+///
+/// ⚠️ 手里没有这个文件时**不要调用**（调用方从货架判断）。
+///    静默不回应是协议认可的语义：沉默即视为过期。
+///
+/// ⚠️ `meta_json` 必须是**完整的 `FileMeta`**（9 字段）。缺字段会被
+///    serde 拒绝 —— 与 `acceptFile` 同一个坑（见其文档）。
+///
+/// 阻塞（要写 gossip）→ 挂 IO 线程。
+#[no_mangle]
+pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeReofferFile(
+    mut env: EnvUnowned<'_>,
+    _this: JObject<'_>,
+    ptr: jlong,
+    meta_json: JString<'_>,
+) -> jboolean {
+    let Some(h) = (unsafe { handle_ref(ptr) }) else {
+        throw_void(&mut env, "节点未创建");
+        return false;
+    };
+    let Ok(meta_json) = read_jstring(&mut env, &meta_json) else {
+        throw_void(&mut env, "读取参数失败");
+        return false;
+    };
+    let Ok(rt) = h.rt() else {
+        throw_void(&mut env, "运行时已释放");
+        return false;
+    };
+
+    let result: Result<()> = rt.block_on(async {
+        let meta: crate::filetransfer::FileMeta =
+            serde_json::from_str(&meta_json).context("meta 解析失败")?;
+        let room = h.node.current_room().context("还没进房间")?;
+        // 只在**当前房间**重发：这张卡片可能是别的房间的，
+        // 在错的房间广播等于泄露文件名与大小（同 query_file 的约束）。
+        h.node
+            .invite_file(&meta, &room)
+            .await
+            .context("重发邀约失败")?;
+        Ok(())
+    });
+
+    match result {
+        Ok(()) => true,
+        Err(e) => {
+            let msg = format!("{e:#}");
+            tracing::warn!("重发邀约失败：{msg}");
+            throw_void(&mut env, &msg);
+            false
+        }
+    }
+}
+
 /// 收到 `fileAccepted` 后，把文件数据推给接收方。
 ///
 /// `meta_json` 是 `nativePublishFile` 返回的那份（原样传回）。

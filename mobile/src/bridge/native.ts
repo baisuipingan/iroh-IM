@@ -278,6 +278,15 @@ export class NativeTransport implements Transport {
   }
 
   /**
+   * 回应"有人问这个文件还在不在"：手里有就重发一次邀约。
+   *
+   * 没有则返回 false（**不报错** —— 沉默是协议认可的语义）。
+   */
+  async reofferFile(fileId: string): Promise<boolean> {
+    return irohNative.reofferFile(fileId);
+  }
+
+  /**
    * 接收文件到公共 Downloads/iroh（走 MediaStore，不需要存储权限）。
    *
    * ⚠️ **这是阻塞调用**，收完才返回 —— 310 MB 可能要几分钟。

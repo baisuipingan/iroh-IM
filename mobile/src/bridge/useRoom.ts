@@ -170,6 +170,35 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   const outFilesRef = useRef<Record<string, OutFileState>>({});
   outFilesRef.current = outFiles;
 
+  /**
+   * 把"我此刻还能发出的文件"清单同步给 Rust（心跳会把它广播出去）。
+   *
+   * ## 为什么**必须**接上（不是可选优化）
+   *
+   * Rust 收到"有人问某文件还在不在"（`fileQueryAsked`）时，会先检查
+   * `j.files.iter().any(|f| f == &q.file_id)` —— **清单里没有这个 file_id
+   * 就根本不通知我们**（见 `room.rs` 里 `should_claim` 的判断）。
+   *
+   * 所以不调这个方法的后果是：**别人点历史卡片问文件，我们永远不会被问到，
+   * 也就永远没机会重发邀约** —— 那张卡片在对方那里永远救不回来。
+   *
+   * ## 清单里放什么
+   *
+   * 「我还能提供」= 我发出的、且**没有失败/被拒**的文件。
+   * 失败或对方拒收的留着没意义（重发邀约也没人接）。
+   *
+   * ⚠️ Rust 那边只做**镜像**、不做淘汰决策（注释明确写了"真相在 JS 这边"），
+   *    所以淘汰策略归这里管。上限交给 Rust 侧（它自己会裁剪）。
+   */
+  useEffect(() => {
+    if (!transport) return;
+    const ids = Object.values(outFiles)
+      .filter((f) => f.status !== 'failed' && f.status !== 'rejected')
+      .map((f) => f.meta.file_id);
+    // 失败也不打扰用户：这只是"公告"，同步不上去顶多少一次救援机会
+    void transport.setAvailableFiles(ids).catch(() => undefined);
+  }, [transport, outFiles]);
+
   /* ---- 订阅：只依赖 transport，**不依赖 room** ---- */
   useEffect(() => {
     if (!transport) return;
@@ -303,6 +332,21 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           break;
         }
 
+        case 'fileQueryAsked':
+          /* 有人点了**历史里的文件卡片**，问"你还能提供这个文件吗"。
+           *
+           * 只有被问到的那个发送方会收到（Rust 侧按 `want == me` 过滤）。
+           * 我们如果手里还留着，就**重发一次邀约**作为回应 ——
+           * 对方直接拿到可接收的卡片，比"再播一次心跳"明确。
+           *
+           * ⚠️ 手里没有就**什么都不做**（`reofferFile` 返回 false）。
+           *    沉默是协议认可的语义：沉默即视为该文件已过期。
+           *    千万别报错打扰用户 —— 这是正常情况（比如文件已随货架淘汰）。
+           */
+          if (ev.room !== roomRef.current) break;
+          void transport.reofferFile(ev.file_id).catch(() => undefined);
+          break;
+
         case 'error':
           setError(ev.message);
           break;
@@ -327,7 +371,10 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     const tick = async (): Promise<void> => {
       const t = transport as { refreshRelayStatus?: () => Promise<void> };
       await t.refreshRelayStatus?.();
-      setRelay(transport.relayStatus());
+      const now = transport.relayStatus();
+      setRelay(now);
+      // 走 ref：effect 的依赖只有 transport，不该因为回调重建而重订阅
+      onRelaySampleRef.current(now);
     };
     void tick(); // 立刻来一次（别等 5 秒）
     const id = setInterval(() => void tick(), 2000);
@@ -335,8 +382,139 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     return () => {
       unsub();
       clearInterval(id);
+      // ★ 重连定时器也要清：不清的话组件卸载后它还会触发，
+      //   去操作一个已经 shutdown 的节点（报错刷屏，且没有任何意义）。
+      if (rejoinTimer.current) {
+        clearTimeout(rejoinTimer.current);
+        rejoinTimer.current = null;
+      }
+      rejoining.current = false;
+      wasOnline.current = false;
+      rejoinAttempt.current = 0;
     };
   }, [transport]);
+
+  /* ==========================================================================
+   * ★ 断线重连
+   *
+   * ## 为什么要自己写（Rust 侧不管这件事）
+   *
+   * iroh 的 endpoint 会自己重连中继、自己重建 gossip 邻居 —— 但**进房
+   * 状态不会自动恢复**：掉线期间房间的订阅断了，恢复后没人替我们重新
+   * `join()`，界面就永久停在"在房间里但收不到任何消息"。
+   *
+   * 浏览器的等价物在 `frontend/js/net.js` 的 `_goOnline()`：
+   * 中继恢复后**自动回到刚才那个房间**（注释里那句"掉线重连后要自己回到
+   * 刚才那个房间，否则用户发现消息全没了"）。这里按同样的思路做。
+   *
+   * ## 触发条件：relay 从「连上过」变成「断了」
+   *
+   * ⚠️ 不能只看 `!connected` 就去重连 —— App 刚启动、还没连上中继时
+   *    也是 `connected: false`。那种情况由启动流程管，不该在这里插一脚。
+   *    所以要看**状态迁移**：先见过 `connected: true`，之后才把
+   *    `false` 当成"掉线"。
+   *
+   * ## 单飞 + 退避
+   *
+   * 中继抖动可能让 `connected` 反复跳；没有守卫就会连环重进房间
+   *（每次进房都会重新拉历史、重订阅，反而更糟）。
+   * 所以：同时在跑的重连**只允许一个**，且失败后按退避重试。
+   * ======================================================================*/
+  const wasOnline = useRef(false);
+  const rejoining = useRef(false);
+  const rejoinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rejoinAttempt = useRef(0);
+
+  /**
+   * `loadHistory` 的最新值。
+   *
+   * 重连成功要拉一次历史补上掉线期间的消息，但 `loadHistory` 定义在后面，
+   * 而它自己又依赖 `transport` —— 用 ref 转一手避免"定义顺序 + 循环依赖"
+   * 两个问题（同 `pushToPeerRef` 的既有模式）。
+   */
+  const loadHistoryRef = useRef<(room: string) => Promise<void>>(async () => undefined);
+
+  /**
+   * 每次 relay 采样后的回调 —— 断线重连的入口。
+   *
+   * ⚠️ 必须是 **ref 转手**：这个函数在 `useEffect` 的 2s 定时器里被调用，
+   *    而那个 effect 的依赖只有 `transport`。直接引用会让 effect 每次
+   *    重建（进而重订阅 → 冷启动丢消息，这条本项目已踩过）。
+   */
+  const onRelaySampleRef = useRef<(s: RelayStatus) => void>(() => undefined);
+
+  const onRelaySample = useCallback(
+    (s: RelayStatus) => {
+      if (!transport) return;
+      const wantRoom = roomRef.current;
+      const wantNick = nicknameRef.current;
+
+      if (s.connected) {
+        // 连上了：重置退避，并记下"确实在线过"
+        wasOnline.current = true;
+        rejoinAttempt.current = 0;
+        return;
+      }
+
+      // 从未连上过 → 还在启动阶段，不归这里管
+      if (!wasOnline.current) return;
+      // 没在房间里 → 没有要恢复的会话
+      if (!wantRoom) return;
+      // 已经在重连了（单飞）
+      if (rejoining.current || rejoinTimer.current) return;
+
+      /* 退避：1s → 2s → 4s → 8s，封顶 8s。
+       *
+       * ⚠️ 不等太久：中继恢复通常很快（iroh 自己会重连），
+       *    我们要做的是"它好了就赶紧回房"，不是跟它比谁有耐心。
+       *    但也要给一点延迟 —— `relayStatus` 是 2s 采样一次，
+       *    刚断开那一下可能只是抖动，立刻重进纯属浪费。 */
+      const delay = Math.min(1000 * 2 ** rejoinAttempt.current, 8000);
+      rejoinAttempt.current += 1;
+
+      rejoinTimer.current = setTimeout(() => {
+        rejoinTimer.current = null;
+        // 进房前再看一眼：可能在这段延迟里已经好了
+        if (transport.relayStatus().connected) {
+          wasOnline.current = true;
+          rejoinAttempt.current = 0;
+          return;
+        }
+        const room = roomRef.current;
+        if (!room) return;
+
+        rejoining.current = true;
+        console.log(`[rejoin] 中继掉线，尝试重新进入房间 ${room}`);
+        /* ⚠️ 走 `transport.join` 而**不是** `join()`，两者差别很关键：
+         *
+         *   `join()`（本 hook 的那个）会先 `setMessages([])` / `setOutFiles({})`
+         *   / `setPeers([])` —— 那是**换房**语义。
+         *   重连是**同一个房间**：把消息全清掉再拉回来，用户会看到
+         *   整屏内容闪一下（而且历史只拉最近一页，更早的就真没了）。
+         *
+         *   所以只重订底层会话，UI 状态原样留着；
+         *   重连后 `history` 事件会把最新一页合并进来（它自带去重）。 */
+        transport
+          .join({ room, nickname: nicknameRef.current })
+          .then(() => {
+            console.log(`[rejoin] 已重新进入 ${room}`);
+            // 拉一次历史补上掉线期间错过的消息（去重逻辑与事件路径相同）
+            void loadHistoryRef.current(room);
+          })
+          .catch((e: unknown) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.log(`[rejoin] 重新进房失败：${msg}`);
+          })
+          .finally(() => {
+            rejoining.current = false;
+          });
+      }, delay);
+    },
+    // ⚠️ 依赖只有 transport：它跑在 2s 定时的闭包里，
+    //    加别的依赖会让定时器反复重建（历史踩过：effect 重订阅丢消息）
+    [transport],
+  );
+  onRelaySampleRef.current = onRelaySample;
 
   /**
    * 拉取某个房间的最新一页历史。
@@ -438,6 +616,8 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     },
     [transport, defaultNickname, loadHistory],
   );
+  // 重连成功后要用它补拉历史（见 onRelaySample）
+  loadHistoryRef.current = loadHistory;
 
   const send = useCallback(
     async (text: string) => {

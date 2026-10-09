@@ -301,5 +301,17 @@ class IrohNativeModule : Module() {
         AsyncFunction("forgetShelf").SuspendBody<Unit, String> { fileId ->
             withContext(Dispatchers.IO) { IrohNative.forgetShelf(fileId) }
         }
+
+        /**
+         * 回应"有人问这个文件还在不在"（点了历史卡片）。
+         *
+         * 返回是否重发了（false = 货架里没有 → 静默不回应，这是协议认可的语义）。
+         */
+        AsyncFunction("reofferFile").SuspendBody<Boolean, String> { fileId ->
+            withContext(Dispatchers.IO) {
+                if (ptr == 0L) throw IllegalStateException(ERR_NO_NODE)
+                IrohNative.reofferFile(ptr, fileId)
+            }
+        }
     }
 }

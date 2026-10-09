@@ -107,11 +107,13 @@ export function ChatScreen({
             <View
               style={[
                 styles.dot,
-                { backgroundColor: relay.connected ? colors.emerald : colors.textFaint },
+                { backgroundColor: relay.connected ? colors.emerald : colors.coral },
               ]}
             />
             <Text style={styles.subtitle} numberOfLines={1}>
-              {peers.length} 人 · 我：{nickname}
+              {/* 中继断了要**明确说出来**：不然用户只看到"发出去没反应"，
+                  会以为是自己没点对。断线时 useRoom 会自动重连。 */}
+              {relay.connected ? `${peers.length} 人 · 我：${nickname}` : '中继断开 · 正在重连…'}
             </Text>
           </View>
         </View>

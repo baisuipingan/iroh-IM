@@ -7,19 +7,35 @@
  *
  * ⚠️ 房间与昵称的**权威状态在 useRoom 里**，这里不再自己存一份 ——
  *    两份状态一定会不同步（踩过：顶部显示昵称、气泡判定用另一份）。
+ *
+ * ## ★ 为什么不回退到 mock（2026-10-09 改）
+ *
+ * 早先的写法是"原生不可用 → 静默切 `MockTransport`，界面上挂一条提示条"。
+ * 那条路**已经拆掉了**，理由：
+ *
+ *   1. **假数据会掩盖真 bug**：本项目在 Web 端踩过一次（mock 时序不对，
+ *      掩盖了真实的订阅问题）。移动端一旦回退，聊天"看起来正常"，
+ *      但实际根本没连上任何东西 —— 比白屏还糟。
+ *   2. **回退本身没有价值**：这个 App 的**全部功能**都依赖原生节点
+ *      （连中继、进房、收发消息与文件）。没有原生 = 没有功能，
+ *      不是"降级可用"，是"完全不可用"。
+ *   3. 真正需要 mock 的是**单测**（`src/bridge/mock.test.ts` 用它的时序
+ *      契约），那与运行时路径无关。`MockTransport` 因此**保留**，
+ *      但不再被 App 引用。
+ *
+ * 现在的行为：原生起不来 = 明确的错误态 + 重试按钮，不假装能用。
  * ==========================================================================*/
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { Linking, StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import type { Transport } from './src/bridge/transport';
-import { MockTransport } from './src/bridge/mock';
 import { NativeTransport } from './src/bridge/native';
 import { useRoom, type JoinParams } from './src/bridge/useRoom';
 import { ChatScreen } from './src/screens/ChatScreen';
 import { JoinScreen } from './src/screens/JoinScreen';
-import { colors, font, spacing } from './src/theme/tokens';
+import { colors, font, sizes, spacing } from './src/theme/tokens';
 import { nativeStatus } from './modules/iroh-native/src';
 
 /* ---------------------------------------------------------------------------
@@ -83,54 +99,52 @@ export default function App() {
   const [transport, setTransport] = useState<Transport | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
-  /** 当前用的是原生模块还是假数据 —— 必须可见（见下方提示条） */
-  const [usingNative, setUsingNative] = useState(false);
+  /** 启动尝试的代数 —— 每次"重试"加一，用来重启下面那个 effect */
+  const [bootAttempt, setBootAttempt] = useState(0);
   const busy = useRef(false);
 
-  // 启动即创建节点（并开始连中继），这样进房页就能显示中继状态
+  /* 启动即创建节点（并开始连中继），这样进房页就能显示中继状态。
+   *
+   * ⚠️ 原生不可用时**不回退 mock**（理由见文件头）——直接进错误态，
+   *    由用户点"重试"重来。`bootAttempt` 是重试的触发器。 */
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         setConnecting(true);
+        setBootError(null);
 
-        // ★ 优先用原生模块；不可用（iOS / Expo Go / .so 没编出来）时回退 mock。
-        //
-        //   ⚠️ 回退**必须可见** —— 界面上要能看出在用假的，
-        //      否则"以为在测真链路、其实在看假数据"会成为常态。
-        //      见下方 uiStatus 与"用 mock 数据"提示条。
+        // 先看原生模块在不在（不在就没戏了 —— 这个 App 的全部功能都靠它）
         const status = nativeStatus();
-        if (status.available) {
-          try {
-            const t = await NativeTransport.create({
-              relays: RELAY_URLS,
-              relayToken: RELAY_TOKEN,
-              anchorId: ANCHOR_ID,
-              anchorRelay: ANCHOR_RELAY,
-            });
-            await t.online();
-            if (!alive) {
-              await t.shutdown();
-              return;
-            }
-            setTransport(t);
-            setUsingNative(true);
-            return;
-          } catch (e) {
-            // 原生可用但启动失败：记下来，继续回退 mock（别让 App 白屏）
-            setBootError(`原生节点启动失败，已回退假数据：${e instanceof Error ? e.message : String(e)}`);
+        if (!status.available) {
+          if (alive) {
+            setBootError(
+              status.reason
+                ? `原生模块不可用：${status.reason}`
+                : '原生模块不可用（这台设备/这个构建没带原生节点）',
+            );
           }
-        } else if (status.reason) {
-          setBootError(`原生模块不可用，当前是假数据：${status.reason}`);
+          return;
         }
 
-        const t = new MockTransport();
+        const t = await NativeTransport.create({
+          relays: RELAY_URLS,
+          relayToken: RELAY_TOKEN,
+          anchorId: ANCHOR_ID,
+          anchorRelay: ANCHOR_RELAY,
+        });
         await t.online();
-        if (!alive) return;
+        if (!alive) {
+          // 组件已卸载 / 又点了一次重试 → 把刚建的这个收干净，别泄漏
+          await t.shutdown().catch(() => undefined);
+          return;
+        }
         setTransport(t);
-        setUsingNative(false);
       } catch (e) {
-        if (alive) setBootError(e instanceof Error ? e.message : String(e));
+        // ★ 不回退 mock：如实报错，让用户能重试。假装能用比白屏更糟。
+        if (alive) {
+          setBootError(`原生节点启动失败：${e instanceof Error ? e.message : String(e)}`);
+        }
       } finally {
         if (alive) setConnecting(false);
       }
@@ -138,9 +152,18 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [bootAttempt]);
 
   const st = useRoom(transport);
+
+  /** 重试启动：先收掉旧的（如果有），再让上面的 effect 重跑一遍 */
+  const handleRetryBoot = useCallback(() => {
+    setTransport((old) => {
+      if (old) void old.shutdown().catch(() => undefined);
+      return null;
+    });
+    setBootAttempt((n) => n + 1);
+  }, []);
 
   const handleJoin = useCallback(
     async (p: JoinParams) => {
@@ -243,21 +266,19 @@ export default function App() {
     <SafeAreaProvider>
       <View style={styles.root}>
         <StatusBar style="dark" />
-        {/* ★ 假数据提示条：**必须可见**。
-            否则"以为在测真链路、其实在看假数据"会成为常态 ——
-            这个项目在 Web 端已经踩过一次（mock 时序不对导致掩盖真 bug）。 */}
-        {transport && !usingNative ? (
-          <View style={styles.mockBar}>
-            <Text style={styles.mockBarText}>
-              假数据模式（未接原生模块）
-            </Text>
-          </View>
-        ) : null}
-        {st.room ? (
+        {/* ★ 启动失败 = 明确的错误态 + 重试入口。
+            不再回退假数据（理由见文件头）。 */}
+        {!transport ? (
+          <BootErrorScreen
+            error={bootError}
+            connecting={connecting}
+            onRetry={handleRetryBoot}
+          />
+        ) : st.room ? (
           <ChatScreen
             room={st.room}
             nickname={st.nickname}
-            myId={transport?.endpointId ?? ''}
+            myId={transport.endpointId}
             messages={st.messages}
             peers={st.peers}
             relay={st.relay}
@@ -283,17 +304,75 @@ export default function App() {
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * 启动失败页
+ *
+ * 存在的意义：**把"不可用"如实说清楚，并给一条出路**。
+ * 早先这里是一条珊瑚色提示条 + 继续用假数据，结果是"看起来能用、
+ * 其实什么都没连" —— 比直接失败更危险（见文件头那段说明）。
+ * -------------------------------------------------------------------------*/
+function BootErrorScreen({
+  error,
+  connecting,
+  onRetry,
+}: {
+  error: string | null;
+  connecting: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <View style={styles.bootBox}>
+      <Text style={styles.bootTitle}>无法启动</Text>
+      <Text style={styles.bootMsg}>
+        {error ?? '原生节点还没起来'}
+      </Text>
+      {connecting ? (
+        <Text style={styles.bootHint}>正在重试…</Text>
+      ) : (
+        <TouchableOpacity
+          style={styles.retryBtn}
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="重试"
+        >
+          <Text style={styles.retryText}>重试</Text>
+        </TouchableOpacity>
+      )}
+      <Text style={styles.bootHint}>
+        这个客户端需要原生节点才能收发消息与文件 —— 没有它就没有可用的功能，
+        所以这里不会用假数据兜底。
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.canvas },
-  // 假数据提示条：刻意显眼（珊瑚色），但只占一行不挡内容
-  mockBar: {
-    backgroundColor: colors.coral,
-    paddingVertical: spacing.xs + 1,
-    paddingHorizontal: spacing.md,
+  bootBox: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
   },
-  mockBarText: {
-    color: '#fff',
+  bootTitle: { fontSize: 20, fontWeight: '500', color: colors.navy },
+  bootMsg: {
+    fontSize: font.sm,
+    color: colors.coral,
+    marginTop: spacing.md,
+    lineHeight: 20,
+  },
+  bootHint: {
     fontSize: font.xs,
-    textAlign: 'center',
+    color: colors.textFaint,
+    marginTop: spacing.lg,
+    lineHeight: 18,
   },
+  retryBtn: {
+    height: 46,
+    borderRadius: sizes.radiusCard,
+    backgroundColor: colors.gold,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.xl,
+  },
+  retryText: { fontSize: font.body, fontWeight: '500', color: colors.onGold },
 });
