@@ -153,6 +153,28 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: bash scripts/ci/pack-android-so.sh
 
+      # ★ 校验**产物**里的 JNI 符号（不是源码）。
+      #
+      # 与前面「校验 JNI 符号名」的分工：那一步对的是**源码清单**
+      # （Rust 导出名 ↔ Kotlin external fun），这一步对的是**编出来的 .so**。
+      # 有些错只在产物里才暴露：
+      #   · 忘了 #[no_mangle] → 符号被 mangle
+      #   · strip 用了 --strip-all → 动态符号表被整个删掉
+      #   · crate-type / target 不对 → 编出来的不是我们要的那个 .so
+      #   · LTO 把"看起来没人调用"的导出函数优化掉
+      # 这几类一旦漏了，症状都是机上 UnsatisfiedLinkError —— 最难查的一种。
+      # 在**上传之前**拦住，成本只有几秒。
+      - name: 校验产物里的 JNI 符号
+        shell: bash
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          set -euo pipefail
+          SO="client-wasm/out-android/libiroh_web-$ABI.so"
+          # macOS 的 nm 读不了 ELF，所以显式用 NDK 自带的 llvm-nm
+          export PATH="$(dirname "$(find "${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt" -maxdepth 3 -name llvm-nm -type f | head -1)"):$PATH"
+          node scripts/verify-so-symbols.mjs "$SO"
+
       - uses: actions/upload-artifact@v4
         with:
           name: libiroh_web-${{ matrix.abi }}

@@ -94,6 +94,21 @@ cargo build --release \
 export ABI TARGET WORKSPACE="$ROOT"
 bash "$ROOT/scripts/ci/pack-android-so.sh"
 
+# --- 校验产物里的 JNI 符号 -------------------------------------------------
+# 源码层检查（check-jni-symbols.mjs）看不出"忘了 #[no_mangle]""strip 过头"
+# 这类问题 —— 只有产物里能看出来，而症状是机上 UnsatisfiedLinkError。
+echo
+echo "🔍 校验产物符号"
+ANALYZER="$TOOLCHAIN/bin/llvm-nm"
+if [ -x "$ANALYZER" ]; then
+  # 脚本自己会找 llvm-nm，这里把 NDK 的加进 PATH 更稳
+  PATH="$(dirname "$ANALYZER"):$PATH" node "$ROOT/scripts/verify-so-symbols.mjs" \
+    "$ROOT/client-wasm/out-android/libiroh_web-$ABI.so"
+else
+  node "$ROOT/scripts/verify-so-symbols.mjs" \
+    "$ROOT/client-wasm/out-android/libiroh_web-$ABI.so"
+fi
+
 echo
 echo "下一步（把 .so 放进模块）："
 echo "  mkdir -p $ROOT/mobile/modules/iroh-native/android/src/main/jniLibs/$ABI"

@@ -42,9 +42,36 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 cp "$SRC" "$OUT_DIR/$ASSET"
-# strip 调试符号：.so 会从 ~40MB 降到十几 MB（Release 包里全是符号）
-if command -v "${STRIP:-llvm-strip}" >/dev/null 2>&1; then
-  "${STRIP}" --strip-unneeded "$OUT_DIR/$ASSET" || true
+
+# strip 调试符号：Release 构建里符号占大头，剥掉后体积能小一半以上。
+#
+# ⚠️ 三件事都要注意：
+#   1. **找不到 strip 工具时必须自己去找** —— `llvm-strip` 在 CI 里不在 PATH 上，
+#      它在 NDK 的 toolchains/llvm/prebuilt/<host>/bin/ 下。原先只 `command -v`，
+#      结果 CI 上静默跳过 strip，产物体积翻倍而没有任何提示。
+#   2. **不用 `|| true` 吞掉失败** —— strip 失败通常意味着二进制有问题
+#      （格式不对 / 架构不匹配），静默吞掉等于把问题推迟到手机上去发现。
+#   3. `--strip-unneeded` 才是对共享库正确的级别（`--strip-all` 会连
+#      动态符号表一起删，`.so` 直接加载不了）。
+STRIP_BIN="${STRIP:-}"
+if [ -z "$STRIP_BIN" ]; then
+  for c in llvm-strip strip; do
+    if command -v "$c" >/dev/null 2>&1; then STRIP_BIN="$c"; break; fi
+  done
+fi
+if [ -z "$STRIP_BIN" ] && [ -n "${ANDROID_NDK_HOME:-}" ]; then
+  found="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -maxdepth 2 -name 'llvm-strip' -type f 2>/dev/null | head -1)"
+  [ -n "$found" ] && STRIP_BIN="$found"
+fi
+
+BEFORE=$(wc -c < "$OUT_DIR/$ASSET" | tr -d ' ')
+if [ -n "$STRIP_BIN" ]; then
+  "$STRIP_BIN" --strip-unneeded "$OUT_DIR/$ASSET"
+  AFTER=$(wc -c < "$OUT_DIR/$ASSET" | tr -d ' ')
+  echo "🔻 strip: $((BEFORE / 1024 / 1024)) MB → $((AFTER / 1024 / 1024)) MB  ($STRIP_BIN)"
+else
+  echo "⚠️  没找到 strip 工具，保留调试符号（体积会大一倍左右）"
+  echo "     CI 上应设 ANDROID_NDK_HOME，或在 workflow 里把 llvm-strip 加进 PATH"
 fi
 
 SIZE=$(wc -c < "$OUT_DIR/$ASSET" | tr -d ' ')
