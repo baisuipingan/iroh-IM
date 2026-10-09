@@ -633,11 +633,22 @@ export const net = {
     return msgs.sort((a, b) => a.ts - b.ts || String(a.id).localeCompare(String(b.id)));
   },
 
-  /** 同步"我此刻还能发出的文件"清单（去重、上限都在 Worker 里做） */
-  setAvailableFiles(ids) {
-    if (!this.client) return;
-    this.client.call('setAvailableFiles', ids).catch(() => {});
-  },
+  /* ⚠️ 这里曾经有个 `setAvailableFiles(ids)` —— 已删除（2026-10-09）。
+   *
+   * 它调 `client.call('setAvailableFiles', ...)`，但**Worker 的命令表里
+   * 根本没有这个名字**（见 `js/iroh-worker.js` 的 switch），于是每次调用
+   * 都会走 unknown-command 分支，而它又 `.catch(() => {})` 把错误吞了 ——
+   * **调了没反应、也不报错**，是最难查的那类。
+   *
+   * ★ 真正的路在 Worker 内部：`syncAvailableFiles()`（同文件），
+   *   它有 6 处调用点（发布 / 完成 / 失败 / 淘汰 / 进房 / 切房），
+   *   直接调 `node.set_available_files(ids)`，**不需要主线程参与**。
+   *   所以这个方法是**多余的重复实现**，删掉它比修它更对 ——
+   *   留着只会让下一个人以为"调这个就能同步"。
+   *
+   * 主线程要查当前有哪些可提供文件，用 `__iroh_outFileRefs()` 测试钩子
+   * （或在 Worker 加一条只读命令），别再造一条会静默失败的写路。
+   */
 
   /**
    * 广播一条**可用性质询**：我点了某张卡但联系不上发送方，公开问一句。
