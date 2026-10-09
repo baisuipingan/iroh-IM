@@ -1,0 +1,32 @@
+[Unit]
+Description=iroh chatroom agent (agent-pi + pi-sdk brain)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/iroh-agent/agent-pi
+
+# ⚠️ npm/node 的 PATH 必须显式给（node 装在独立目录时系统 PATH 里没有）
+Environment=PATH=/opt/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# iroh 侧身份与配置目录（独立于其他 agent/roomd）
+Environment=IROH_AGENT_HOME=/opt/iroh-agent/home
+# pi 侧 provider 配置目录（models.json；独立于用户的 ~/.pi）
+Environment=PI_CODING_AGENT_DIR=/opt/iroh-agent/pi-agent
+
+# 房间/昵称/大脑/文件策略都在这一行里改；改完 daemon-reload + restart
+ExecStart=/opt/node22/bin/node src/cli.ts \
+  --room lobby \
+  --nick 服务器助手 \
+  --brain pi-sdk \
+  --pi-model hahacode/gpt-6.1-sol \
+  --agent-bin /opt/iroh-agent/bin/agent \
+  --files accept \
+  --files-max-mb 64 \
+  --files-dir /opt/iroh-agent/received
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

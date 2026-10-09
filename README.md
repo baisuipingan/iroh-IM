@@ -160,6 +160,7 @@ frontend/
 | [`docs/agent-daemon-protocol.md`](docs/agent-daemon-protocol.md) | **Agent daemon 行协议**：给 TS/LLM 侧用的 `iroh-agent serve` 命令/事件 schema、RoomEvent 映射表、错误码与 supervisor 约定 |
 | [`agent-pi/README.md`](agent-pi/README.md) | **TS/pi Agent 适配器**：把聊天室接给 LLM 大脑（规则 / 子进程 / pi SDK 三种接法；spawn `serve` 走行协议） |
 | [`skills/iroh-agent/`](skills/iroh-agent/) | **Agent Skill**：教 Agent 何时与如何使用 `iroh-agent`（含安装脚本，随 Skill 分发） || [`deploy/roomd/README.md`](deploy/roomd/README.md) | 常驻节点：部署细节、环境变量、容量上限、历史访问边界 |
+| [`deploy/agent/README.md`](deploy/agent/README.md) | 常驻 Agent 部署（systemd）：Node + agent-pi + pi-sdk 大脑、Release 安装脚本、运维与实测坑 |
 | [`deploy/relay/README.md`](deploy/relay/README.md) · [`docs/relay-deploy-minimal.md`](docs/relay-deploy-minimal.md) | 中继部署 |
 | [`deploy/install/README.md`](deploy/install/README.md) | 中继一键安装脚本 |
 | [`scripts/e2e/README.md`](scripts/e2e/README.md) | 浏览器回归：用例清单 + 前置 + 已知坑 |
