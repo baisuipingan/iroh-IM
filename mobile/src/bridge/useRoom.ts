@@ -542,6 +542,42 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
             detail: '已发出，等对方接收…',
           },
         }));
+
+        /* ★ 本地回显：自己的文件卡片自己显示。
+         *
+         * ⚠️ 为什么必须在这里做：Rust 的 `invite_file()` 会调
+         *    `send_file_proof()` 广播一条带 `FileRef` 的消息（这样后进房间的
+         *    人也能看到"这里曾经有过这个文件"），但它和 `send()` 一样
+         *    **只广播 + 写本地历史，不给订阅者发 `RoomEvent::Message`**。
+         *
+         *    症状与 `send()` 完全一样：文件**真的发出去了**（对方能看到卡片），
+         *    但自己界面上一片空白 —— "发出去了却看不见"。
+         *
+         *    真机实测确认过：发布成功（logcat 有「已发布文件：s1.png」），
+         *    但消息流里找不到它。
+         */
+        const id = `local-file-${meta.file_id}`;
+        if (seen.current.has(id)) return;
+        seen.current.add(id);
+        const mine: ChatMessage = {
+          id,
+          from: transport.endpointId,
+          nickname: nicknameRef.current,
+          text: '',
+          ts: meta.ts || Date.now(),
+          sig: '',
+          // ⚠️ 这里只需要 `FileRef` 的 5 个字段（消息内嵌用），
+          //    不是完整 `FileMeta` —— 完整 meta 在 `outFiles` 里
+          //    （UI 渲染卡片读的是 `message.file` + `outFiles[file_id]`）。
+          file: {
+            file_id: meta.file_id,
+            name: meta.name,
+            size: meta.size,
+            mime: meta.mime,
+            root_hash: meta.root_hash,
+          },
+        };
+        setMessages((prev) => [...prev, mine].sort((a, b) => a.ts - b.ts));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(`发布文件失败：${msg}`);
