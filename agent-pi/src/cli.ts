@@ -53,8 +53,13 @@ pi-sdk 大脑（直接调 pi SDK；长会话，需 agent-pi 里装有 SDK）：
   --pi-append-prompt 'T' 追加到人设之后的全局指令
   --pi-prompt-template 'T' 每条触发消息进模型的正文模板（默认 [{room}] {nick}：{text}）
   --pi-cwd DIR          会话工作目录（默认当前目录）
-  --pi-tools none|read-only  工具面：默认 none（零工具，最安全）；read-only 只开 read/grep/find/ls
+  --pi-tools VALUE      启用 pi 自带工具：none（默认）| read-only（read/grep/find/ls）| all | 逗号名单
+                        ⚠️ bash/edit/write 有服务器执行权，房间内容不可信，慎开
   --pi-model provider/id     显式指定模型（如 hahacode/gpt-6.1-sol）；默认用 pi 的选择
+  --tools weather,fetch_url 启用自定义工具（默认无）：
+                        weather   查实时天气与预报（Open-Meteo，免 key）
+                        fetch_url 抓取 https 链接文本（带 SSRF/体积/重定向防线）
+  --fetch-allow a.com,b.com fetch_url 的域名白名单（不设 = 只靠内置防线）
 
 示例：
   # 规则模式（最快冒烟）
@@ -91,6 +96,8 @@ const VALUE_FLAGS = new Set([
   'pi-cwd',
   'pi-tools',
   'pi-model',
+  'tools',
+  'fetch-allow',
   'files',
   'files-max-mb',
   'files-allow',
@@ -125,6 +132,8 @@ interface Flags {
   piCwd?: string;
   piTools?: string;
   piModel?: string;
+  tools?: string;
+  fetchAllow?: string;
   files?: string;
   filesMaxMb?: string;
   filesAllow?: string;
@@ -202,9 +211,31 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
     return new AsyncBrain(async () => {
       // ⚠️ 动态 import：不装 pi SDK 时，rule/command 两条路照常能用（零依赖保留）
       const { createPiSdkBrain } = await import('./brains/pi-sdk.ts');
-      const tools = flags.piTools === 'read-only' ? 'read-only' : 'none';
+      const { buildCustomTools, CUSTOM_TOOL_NAMES } = await import('./tools.ts');
+
+      const tools = parsePiTools(flags.piTools);
+      const wanted = (flags.tools ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const name of wanted) {
+        if (!(CUSTOM_TOOL_NAMES as readonly string[]).includes(name)) {
+          throw new Error(`未知自定义工具：${name}（可选：${CUSTOM_TOOL_NAMES.join(' | ')}）`);
+        }
+      }
+      const customTools = buildCustomTools(wanted, {
+        fetchAllow: flags.fetchAllow
+          ? flags.fetchAllow
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : undefined,
+        log: (...args2: unknown[]) => log(args2.map(String).join(' ')),
+      });
       log(
-        `[cli] pi-sdk 大脑：tools=${tools} model=${flags.piModel ?? '默认选择'} 人设=${flags.piSystemPrompt ? '自定义' : '默认'} cwd=${flags.piCwd ?? '当前目录'}`,
+        `[cli] pi-sdk 大脑：tools=${Array.isArray(tools) ? tools.join(',') : tools}` +
+          `${wanted.length ? ` +自定义[${wanted.join(',')}]` : ''} ` +
+          `model=${flags.piModel ?? '默认选择'} 人设=${flags.piSystemPrompt ? '自定义' : '默认'} cwd=${flags.piCwd ?? '当前目录'}`,
       );
       return await createPiSdkBrain({
         agentNick: flags.nick,
@@ -214,12 +245,24 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
         promptTemplate: flags.piPromptTemplate,
         cwd: flags.piCwd,
         tools,
+        customTools,
         model: flags.piModel,
         log: (...args2: unknown[]) => log(args2.map(String).join(' ')),
       });
     });
   }
   throw new Error(`未知 brain：${kind}（支持 rule | command | pi-sdk；SDK 接法见 README）`);
+}
+
+/** `--pi-tools` 解析：none / read-only / all / 逗号名单（如 read,weather）。 */
+function parsePiTools(value: string | undefined): 'none' | 'read-only' | 'all' | string[] {
+  if (!value || value === 'none') return 'none';
+  if (value === 'read-only' || value === 'all') return value;
+  const list = value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : 'none';
 }
 
 /**

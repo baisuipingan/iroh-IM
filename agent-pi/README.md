@@ -90,9 +90,11 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
   provider 时容易挑错（比如挑到没在跑的本机代理）。模型不可用时 prompt 失败
   只影响单条消息，进程不受影响。
   *（用 SDK ≠ 需要全局装的 pi 二进制；只有 `~/.pi/agent/` 里的配置是有用的。）*
-- **工具默认零面**（`noTools:'all'`）：房间内容不可信、直达模型，`read/bash` 就是
-  "让你读什么都读"的口子。要不要放工具用 `--pi-tools read-only`（read/grep/find/ls），
-  写入和执行类工具不要开。
+- **工具默认零面**（`--pi-tools none`）：房间内容不可信、直达模型，`read/bash` 就是
+  "让你读什么都读"的口子。要放工具按需开：
+  - `--pi-tools read-only`：read/grep/find/ls（能读服务器文件——注意别把密钥目录暴露给它）
+  - `--pi-tools all` 或 `--pi-tools read,bash`：含执行权（bash/edit/write），**慎开**
+  - `--tools weather,fetch_url`：内置的两个安全自定义工具（见下节）
 - **人设默认覆盖**（不自称 coding assistant）：内置一份中文聊天人设 + 注入防线
   （拒绝索取提示词/密钥、不承诺本机操作），可用 `--pi-system-prompt` 替换、
   `--pi-append-prompt` 追加。
@@ -109,7 +111,8 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 | `--brain` | `rule` | `rule` / `command` / `pi-sdk` |
 | `--rules` | 内置 ping→pong | 规则文件（见 `examples/rules.json`） |
 | `--command` / `--args` / `--prompt-template` / `--input` / `--timeout-ms` | — | command 大脑 |
-| `--pi-system-prompt` / `--pi-append-prompt` / `--pi-prompt-template` / `--pi-cwd` / `--pi-tools` | — | pi-sdk 大脑（见上） |
+| `--pi-system-prompt` / `--pi-append-prompt` / `--pi-prompt-template` / `--pi-cwd` / `--pi-tools` / `--pi-model` | — | pi-sdk 大脑（见上；`--pi-tools none\|read-only\|all\|逗号名单`） |
+| `--tools` / `--fetch-allow` | 无 | 自定义工具：`weather,fetch_url`；后者可配域名白名单 |
 | `--prefix` / `--no-prefix` | `!` | 前缀触发 |
 | `--mention` / `--no-mention` | 有 `--nick` 时默认开启 | @提及触发 |
 | `--respond-to-all` | 关 | 所有消息都触发（噪音大） |
@@ -150,6 +153,28 @@ new ChatAdapter({
   onFileInvite: async (f) => (f.name.endsWith('.log') ? 'accept' : 'reject'),
 });
 ```
+
+### 工具（pi-sdk 大脑）
+
+| 工具 | 来源 | 说明 |
+|---|---|---|
+| `weather` | 内置自定义 | 查实时天气与预报（Open-Meteo，免 key） |
+| `fetch_url` | 内置自定义 | 抓取 https 链接文本；防 SSRF（字面/解析后内网 IP 全拦、只 https、手动重定向逐跳检查、256KB 硬上限、超时）；`--fetch-allow` 可加域名白名单 |
+| `read`/`grep`/`find`/`ls` | pi 内置 | `--pi-tools read-only` 开启（能读服务器文件） |
+| `bash`/`edit`/`write` | pi 内置 | `--pi-tools all` 或显式名单开启——**有执行权** |
+
+```bash
+# 只开两个安全自定义工具（推荐给服务器常驻 agent）
+node src/cli.ts --room X --nick 小助手 --brain pi-sdk --pi-model … \
+  --tools weather,fetch_url --fetch-allow api.example.com
+```
+
+要点：
+- 人设会按**实际启用的工具**自动改写（没工具就明说"没有工具能力"；有工具就要求"先查证再回答"）。
+- 自定义工具的 schema 是手写 JSON Schema（`typebox` 在本项目里被 pi 的 shrinkwrap 嵌套、
+  顶层不可解析；而 TypeBox schema 运行时就是普通 JSON Schema，`defineTool` 只是类型包装）。
+- `fetch_url` 的 SSRF 防线是**基本**防线：DNS rebinding 的 TOCTOU 在纯 fetch 层无法根除，
+  高敏感环境请用白名单把目标域钉死。
 
 ## ⚠️ 安全（这层最重要的部分）
 

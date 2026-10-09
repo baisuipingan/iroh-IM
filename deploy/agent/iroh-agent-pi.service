@@ -23,6 +23,7 @@ ExecStart=/opt/node22/bin/node src/cli.ts \
   --brain pi-sdk \
   --pi-model hahacode/gpt-6.1-sol \
   --agent-bin /opt/iroh-agent/bin/agent \
+  --tools weather,fetch_url \
   --files accept \
   --files-max-mb 64 \
   --files-dir /opt/iroh-agent/received

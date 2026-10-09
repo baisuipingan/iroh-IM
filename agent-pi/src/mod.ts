@@ -15,3 +15,4 @@ export * from './client.ts';
 export * from './adapter.ts';
 export * from './brains/rule.ts';
 export * from './brains/command.ts';
+export * from './tools.ts';

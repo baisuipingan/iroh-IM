@@ -19,7 +19,9 @@ const SDK = `${AGENT_PI}/node_modules/@earendil-works/pi-coding-agent`;
 const PI_AI = `${SDK}/node_modules/@earendil-works/pi-ai/dist`;
 
 const { registerFauxProvider } = await import(pathToFileURL(`${PI_AI}/compat.js`).href);
-const { fauxAssistantMessage } = await import(pathToFileURL(`${PI_AI}/providers/faux.js`).href);
+const { fauxAssistantMessage, fauxToolCall, fauxText } = await import(
+  pathToFileURL(`${PI_AI}/providers/faux.js`).href
+);
 const { ModelRuntime } = await import(pathToFileURL(`${SDK}/dist/index.js`).href);
 const { createPiSdkBrain } = await import(pathToFileURL(`${AGENT_PI}/src/brains/pi-sdk.ts`).href);
 
@@ -94,7 +96,43 @@ const n = r.match(/msgs=(\d+)/);
 check('会话有积累（ messages 数 > 察觉最低 ）', n && Number(n[1]) >= 7, String(r));
 console.log('   工厂回复：', r);
 
-check('faux 调用计数 = 4', faux.state.callCount === 4, String(faux.state.callCount));
+// 7) 工具调用循环：自定义工具 + fauxToolCall（stopReason: toolUse → 执行 → 再回一轮）
+{
+  let toolRan = false;
+  const echoTool = {
+    name: 'echo_test',
+    label: '回显测试',
+    description: '把输入原样回显（仅冒烟测试用）',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string', description: '要回显的文本' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    async execute(_id: string, params: { text: string }) {
+      toolRan = true;
+      return { content: [{ type: 'text', text: `ECHO:${params.text}` }], details: {} };
+    },
+  };
+  const toolBrain = await createPiSdkBrain({
+    agentNick: '冒烟助手',
+    customTools: [echoTool],
+    extraSessionOptions: { model: faux.getModel(), modelRuntime },
+    log: (...args) => console.log('   〔brain-tool〕', ...args),
+  });
+  faux.setResponses([
+    fauxAssistantMessage([fauxText('我去查一下。'), fauxToolCall('echo_test', { text: 'ping' })], {
+      stopReason: 'toolUse',
+    }),
+    fauxAssistantMessage('工具返回结果了。'),
+  ]);
+  const r3 = await toolBrain.onMessage(msg('用工具查一下'), ctx);
+  check('工具循环：工具被执行', toolRan);
+  check('工具循环：最终回复非空', typeof r3 === 'string' && r3.length > 0, String(r3));
+  await toolBrain.close();
+}
+
+check('faux 调用计数 = 6', faux.state.callCount === 6, String(faux.state.callCount));
 
 await brain.close();
 faux.unregister();
