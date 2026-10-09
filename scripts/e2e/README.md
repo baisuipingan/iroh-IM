@@ -69,6 +69,59 @@ Worker超时用例缩短测试计时器，生产启动上限仍为45秒。
 在同一输出目录写入 `restart-complete.json`（内容为 `{"ok":true}`）继续验证新浏览器能读回全部历史、
 重启后新消息仍能持久化。输出目录应为本次运行的独立目录，避免使用上一轮的重启确认文件。
 
+## Agent / 适配器回归（非浏览器）
+
+这些脚本不走 CDP、不需要浏览器，直接用**真实中继**验证 `iroh-agent serve`（行协议）
+与 `agent-pi` 适配器。前置：
+
+```bash
+cd client-wasm && cargo build --no-default-features --features cli --bin agent
+cd ../agent-pi && npm ci      # 只有 pi-* 脚本需要（pi SDK）
+```
+
+中继与令牌自动读 `frontend/relay-config.json`（公开信息，随页面下发）；
+身份目录不给参数就自动建临时目录。**每个进程必须独立 `IROH_AGENT_HOME`**
+（同一身份两个端点同时在线会打架，见 `docs/agent-daemon-protocol.md` §1）。
+
+```bash
+python3 scripts/e2e/agent-serve-smoke.py     # 单进程协议往返（~1 分钟）
+python3 scripts/e2e/agent-serve-two-peer.py  # 双进程真实收发 + presence（~2 分钟）
+python3 scripts/e2e/agent-file-receive.py    # agent 收文件：3MB 真实传输 + sha256 校验（~1 分钟）
+python3 scripts/e2e/agent-pi-e2e.py          # 适配器：触发/冷却/@提及/杀进程自愈/SIGTERM（~4 分钟）
+python3 scripts/e2e/agent-pi-files.py        # 适配器文件策略：自动收小文件/按上限拒大文件（~1 分钟）
+python3 scripts/e2e/agent-pi-llm-down.py     # LLM 不可用时：只影响单条消息、进程存活（~2 分钟，需 agent-pi npm ci）
+node scripts/e2e/agent-pi-faux.ts            # pi-sdk brain 离线冒烟（faux provider，秒级）
+E2E_PI_MODEL=hahacode/gpt-6.1-sol \
+  python3 scripts/e2e/agent-pi-live.py       # 真实 LLM 房间级问答（opt-in，~2 分钟起）
+```
+
+`agent-pi-live.py` 需要 `~/.pi/agent/models.json` 里有可用 provider，并用
+`E2E_PI_MODEL=provider/modelId` 指定模型（不设会直接退出并提示）。
+
+`serve` 的**黄金转录**不在这里 —— 它是离线的 Rust 测试，已进标准套件：
+
+```bash
+cd client-wasm
+cargo test --offline --locked --no-default-features --features cli --test daemon-protocol
+# 有意改协议后重新生成（review diff 再提交）：
+UPDATE_GOLDEN=1 cargo test --offline --locked --no-default-features --features cli --test daemon-protocol
+```
+
+| 脚本 | 覆盖 |
+|---|---|
+| `agent-serve-smoke.py` | hello/reply 往返、错误码（badRequest/unsupportedCmd/tooLarge）、事件流、退出码 0 |
+| `agent-serve-two-peer.py` | A 以 B 为 bootstrap 入房；消息互收（mine/from 正确）、presence 互见、优雅退出 |
+| `agent-file-receive.py` | B 发 3MB → A `accept_file` 落盘；sha256 逐字节一致、`fileRecv*` 事件齐全、双方优雅退出 |
+| `agent-pi-e2e.py` | `!ping`→pong、无关文本不触发、@提及 + `{bot}` 模板、杀 serve 子进程后自动重启并重新进房、SIGTERM 退出码 0 |
+| `agent-pi-files.py` | `--files accept`：小文件自动接收（sha256 一致）、超上限文件自动拒绝（理由含大小）、大文件不落盘 |
+| `agent-pi-llm-down.py` | LLM 失败只影响单条消息（无回复、有日志）、双进程存活、SIGTERM 仍优雅退出 |
+| `agent-pi-faux.ts` | pi-sdk 真会话（faux 模型）：两轮回复、队列耗尽错误路径、会话有记忆、dispose 干净 |
+| `agent-pi-live.py` | **真实 LLM 房间级**：@触发 → 房间内真实回答 → 优雅退出（opt-in，`E2E_PI_MODEL` 指定模型） |
+| `daemon-protocol.rs`（Rust） | serve 协议黄金转录（归一化 + 排序对比；seq 严格递增单独断言） |
+
+> 这些脚本互相独立、可并发跑（房名都有随机后缀），但都会连线上中继、占用带宽；
+> 与浏览器套件同时跑时注意吞吐类用例别受干扰。
+
 ## 用例
 
 全部用例都在本目录（原来散在 `/tmp`，重启即丢；已搬进版本控制）。

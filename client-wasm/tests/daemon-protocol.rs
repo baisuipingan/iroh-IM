@@ -259,6 +259,14 @@ fn serve_黄金转录不漂移() {
         "notJoined",
     );
     expect_error(&s.send_cmd("6", "history", json!({"limit": 3})), "notJoined");
+    expect_error(
+        &s.send_cmd("af0", "accept_file", json!({"fileId": "x"})),
+        "notJoined",
+    );
+    expect_error(
+        &s.send_cmd("rf0", "reject_file", json!({"fileId": "x"})),
+        "notJoined",
+    );
 
     // ---- 进房（离线：无 anchor，gossip 本地订阅即可）----
     let join = s.send_cmd("7", "join", json!({"room": "golden-room", "nickname": "录音机"}));
@@ -295,7 +303,7 @@ fn serve_黄金转录不漂移() {
         "badRequest",
     );
 
-    // ---- 昵称 / 货架 / 离开 ----
+    // ---- 昵称 / 货架 / 文件接收 / 离开 ----
     let nick = s.send_cmd("12", "nick", json!({"nickname": "录音机2"}));
     assert_eq!(nick["ok"], true);
 
@@ -307,11 +315,23 @@ fn serve_黄金转录不漂移() {
     let unpublish = s.send_cmd("15", "unpublish", json!({"fileId": "not-there"}));
     assert_eq!(unpublish["ok"], true);
 
-    let leave = s.send_cmd("16", "leave", json!({}));
+    // 文件接收：没有邀约（没收到过或缓存过期）
+    expect_error(
+        &s.send_cmd("16", "accept_file", json!({"fileId": "not-there"})),
+        "noInvite",
+    );
+    expect_error(&s.send_cmd("17", "accept_file", json!({})), "badRequest");
+    expect_error(
+        &s.send_cmd("18", "reject_file", json!({"fileId": "not-there"})),
+        "noInvite",
+    );
+    expect_error(&s.send_cmd("19", "reject_file", json!({})), "badRequest");
+
+    let leave = s.send_cmd("20", "leave", json!({}));
     assert_eq!(leave["ok"], true);
 
     // ---- 优雅退出 ----
-    let shutdown = s.send_cmd("17", "shutdown", json!({"reason": "golden"}));
+    let shutdown = s.send_cmd("21", "shutdown", json!({"reason": "golden"}));
     assert_eq!(shutdown["ok"], true);
     let bye = s.wait_line(
         |v| v["type"] == "event" && v["event"]["type"] == "bye",

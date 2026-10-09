@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/cli.ts",
     "example": "node src/cli.ts --room lobby --nick 演示助手 --brain rule --prefix '!'",
-    "pi": "node src/cli.ts --room lobby --nick 小助手 --brain pi-sdk"
+    "pi": "node src/cli.ts --room lobby --nick 小助手 --brain pi-sdk --pi-model hahacode/gpt-6.1-sol"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0"

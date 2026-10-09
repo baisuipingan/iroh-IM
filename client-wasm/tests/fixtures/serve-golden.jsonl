@@ -3,10 +3,16 @@
 {"error":{"code":"badRequest","message":"不是合法 JSON：expected value at line 1 column 1"},"id":null,"ok":false,"type":"reply","v":1}
 {"error":{"code":"badRequest","message":"命令行超过 1 MiB 上限"},"id":null,"ok":false,"type":"reply","v":1}
 {"error":{"code":"badRequest","message":"缺少 fileId"},"id":"14","ok":false,"type":"reply","v":1}
+{"error":{"code":"badRequest","message":"缺少 fileId"},"id":"17","ok":false,"type":"reply","v":1}
+{"error":{"code":"badRequest","message":"缺少 fileId"},"id":"19","ok":false,"type":"reply","v":1}
 {"error":{"code":"badRequest","message":"缺少 id"},"id":null,"ok":false,"type":"reply","v":1}
+{"error":{"code":"noInvite","message":"没有这个邀约（没收到过、或缓存已过期）"},"id":"16","ok":false,"type":"reply","v":1}
+{"error":{"code":"noInvite","message":"没有这个邀约（没收到过、或缓存已过期）"},"id":"18","ok":false,"type":"reply","v":1}
 {"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"4","ok":false,"type":"reply","v":1}
 {"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"5","ok":false,"type":"reply","v":1}
 {"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"6","ok":false,"type":"reply","v":1}
+{"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"af0","ok":false,"type":"reply","v":1}
+{"error":{"code":"notJoined","message":"还没进房间（先发 join）"},"id":"rf0","ok":false,"type":"reply","v":1}
 {"error":{"code":"tooLarge","message":"文本 33792 字节，超过上限 32768"},"id":"9","ok":false,"type":"reply","v":1}
 {"error":{"code":"unsupportedCmd","message":"未知命令 nope"},"id":"c1","ok":false,"type":"reply","v":1}
 {"error":{"code":"unsupportedVersion","message":"仅支持 v1，收到 v99"},"id":"v1","ok":false,"type":"reply","v":1}
@@ -17,9 +23,9 @@
 {"id":"12","ok":true,"type":"reply","v":1,"value":{}}
 {"id":"13","ok":true,"type":"reply","v":1,"value":{"files":[]}}
 {"id":"15","ok":true,"type":"reply","v":1,"value":{}}
-{"id":"16","ok":true,"type":"reply","v":1,"value":{}}
-{"id":"17","ok":true,"type":"reply","v":1,"value":{}}
 {"id":"2","ok":true,"type":"reply","v":1,"value":{"ts":0}}
+{"id":"20","ok":true,"type":"reply","v":1,"value":{}}
+{"id":"21","ok":true,"type":"reply","v":1,"value":{}}
 {"id":"3","ok":true,"type":"reply","v":1,"value":{"endpointId":"<id>","files":[],"peers":[],"relays":"<relays>","room":null,"uptimeMs":0}}
 {"id":"7","ok":true,"type":"reply","v":1,"value":{"room":"golden-room"}}
 {"id":"8","ok":true,"type":"reply","v":1,"value":{"id":"<msgid>","ts":0}}

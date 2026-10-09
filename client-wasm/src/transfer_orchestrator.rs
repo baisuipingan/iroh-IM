@@ -136,6 +136,102 @@ impl ChunkSink for BytesSink {
 }
 
 // ---------------------------------------------------------------------------
+// 接收侧：落盘 sink（仅原生；wasm 侧由 JS 回调写 OPFS / 文件句柄）
+// ---------------------------------------------------------------------------
+
+/// 把块**流式写入磁盘**的接收端：内存占用 = 一块（16 KiB），与文件大小无关。
+///
+/// - 按 `seq * chunk_size` 偏移定位写入（容忍乱序/重试；不会把文件写坏）
+/// - `finish` 时重新流式读盘算整文件 blake3，与邀约里的 `root_hash` 核对
+/// - 失败/中断时**保留半成品文件**（便于排查；v1 不做自动续传）
+#[cfg(not(target_arch = "wasm32"))]
+pub struct FileSink {
+    path: std::path::PathBuf,
+    size: u64,
+    root_hash: String,
+    chunk_size: u32,
+    file: tokio::sync::Mutex<std::fs::File>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FileSink {
+    /// 打开（必要时创建父目录并截断）目标文件。
+    pub fn open(path: impl Into<std::path::PathBuf>, meta: &FileMeta) -> Result<Self> {
+        let path = path.into();
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).with_context(|| format!("创建目录 {}", dir.display()))?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .with_context(|| format!("打开 {}", path.display()))?;
+        Ok(Self {
+            path,
+            size: meta.size,
+            root_hash: meta.root_hash.clone(),
+            chunk_size: meta.chunk_size,
+            file: tokio::sync::Mutex::new(file),
+        })
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ChunkSink for FileSink {
+    fn write_chunk<'a>(&'a self, seq: u32, bytes: &'a [u8]) -> LocalBoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut f = self.file.lock().await;
+            f.seek(SeekFrom::Start(seq as u64 * self.chunk_size as u64))?;
+            f.write_all(bytes)?;
+            Ok(())
+        })
+    }
+
+    fn finish<'a>(&'a self) -> LocalBoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            use std::io::{Read, Write};
+            {
+                let mut f = self.file.lock().await;
+                f.flush()?;
+            }
+            let actual = std::fs::metadata(&self.path)?.len();
+            if actual != self.size {
+                anyhow::bail!("大小不符：期望 {}，实际 {}", self.size, actual);
+            }
+            // 流式重读算哈希（1 MiB 缓冲），大文件也不吃内存
+            let mut f = std::fs::File::open(&self.path)?;
+            let mut hasher = blake3::Hasher::new();
+            let mut buf = vec![0u8; 1024 * 1024];
+            loop {
+                let n = f.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+            }
+            let got = hex_encode(hasher.finalize().as_bytes());
+            let want = self.root_hash.as_str();
+            // 与 BytesSink 同款宽容比较：任一方可能是被截断的短哈希
+            if !got.starts_with(&want[..want.len().min(got.len())]) {
+                anyhow::bail!("哈希不符：期望 {want}，实际 {got}");
+            }
+            Ok(())
+        })
+    }
+
+    fn have_bitmap(&self, n_chunks: usize) -> Vec<u8> {
+        // v1 不做续传：始终从空位图开始（要续传需要扫描已有文件，另立项）
+        crate::filetransfer::bitmap_new(n_chunks)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 发送侧编排
 // ---------------------------------------------------------------------------
 

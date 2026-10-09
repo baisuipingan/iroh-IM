@@ -31,6 +31,13 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
   --cooldown-ms 3000    两次回复的最小间隔
   --ping-interval-ms 45000  serve 看门狗（0 = 关）
 
+文件接收策略：
+  --files off|accept|reject  收到文件邀约怎么办（默认 off = 只记日志不接）
+  --files-max-mb 64          accept 模式的大小上限（超过自动拒绝）
+  --files-allow ID,ID        只接收这些发送方（EndpointId；不设 = 不限）
+  --files-dir DIR            落盘目录（不设 = daemon 默认 <IROH_AGENT_HOME>/received/）
+  --files-max-concurrent 2   并发接收上限（满了自动拒绝，让对端稍后重发）
+
 rule brain：
   --rules PATH          规则文件（JSON，见 examples/rules.json；默认 ping→pong）
 
@@ -47,6 +54,7 @@ pi-sdk 大脑（直接调 pi SDK；长会话，需 agent-pi 里装有 SDK）：
   --pi-prompt-template 'T' 每条触发消息进模型的正文模板（默认 [{room}] {nick}：{text}）
   --pi-cwd DIR          会话工作目录（默认当前目录）
   --pi-tools none|read-only  工具面：默认 none（零工具，最安全）；read-only 只开 read/grep/find/ls
+  --pi-model provider/id     显式指定模型（如 hahacode/gpt-6.1-sol）；默认用 pi 的选择
 
 示例：
   # 规则模式（最快冒烟）
@@ -55,8 +63,9 @@ pi-sdk 大脑（直接调 pi SDK；长会话，需 agent-pi 里装有 SDK）：
   # pi print 模式（每次触发起一次 pi，取 stdout 当回复）
   node src/cli.ts --room 我的房间 --nick 小助手 --brain command --command pi --args '["-p","{prompt}"]'
 
-  # pi SDK 模式（长会话有记忆；认证走 ~/.pi/agent，本机 localproxy 需 3050 在跑）
-  node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
+  # pi SDK 模式（长会话有记忆；认证/模型走 ~/.pi/agent 的 models.json）
+  node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk \
+    --pi-model hahacode/gpt-6.1-sol
 `;
 
 const VALUE_FLAGS = new Set([
@@ -81,6 +90,12 @@ const VALUE_FLAGS = new Set([
   'pi-prompt-template',
   'pi-cwd',
   'pi-tools',
+  'pi-model',
+  'files',
+  'files-max-mb',
+  'files-allow',
+  'files-dir',
+  'files-max-concurrent',
 ]);
 const BOOL_FLAGS = new Set(['no-prefix', 'no-mention', 'respond-to-all', 'help']);
 
@@ -109,6 +124,12 @@ interface Flags {
   piPromptTemplate?: string;
   piCwd?: string;
   piTools?: string;
+  piModel?: string;
+  files?: string;
+  filesMaxMb?: string;
+  filesAllow?: string;
+  filesDir?: string;
+  filesMaxConcurrent?: string;
   help?: boolean;
 }
 
@@ -183,7 +204,7 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
       const { createPiSdkBrain } = await import('./brains/pi-sdk.ts');
       const tools = flags.piTools === 'read-only' ? 'read-only' : 'none';
       log(
-        `[cli] pi-sdk 大脑：tools=${tools} 人设=${flags.piSystemPrompt ? '自定义' : '默认'} cwd=${flags.piCwd ?? '当前目录'}`,
+        `[cli] pi-sdk 大脑：tools=${tools} model=${flags.piModel ?? '默认选择'} 人设=${flags.piSystemPrompt ? '自定义' : '默认'} cwd=${flags.piCwd ?? '当前目录'}`,
       );
       return await createPiSdkBrain({
         agentNick: flags.nick,
@@ -193,6 +214,7 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
         promptTemplate: flags.piPromptTemplate,
         cwd: flags.piCwd,
         tools,
+        model: flags.piModel,
         log: (...args2: unknown[]) => log(args2.map(String).join(' ')),
       });
     });
@@ -213,7 +235,14 @@ class AsyncBrain implements AgentBrain {
   }
 
   async #ensure(): Promise<AgentBrain> {
-    if (!this.#inner) this.#inner = this.#factory();
+    if (!this.#inner) {
+      this.#inner = this.#factory().catch((error) => {
+        // 创建失败不要把 rejected promise 永久缓存住：清掉，下一条消息可重试
+        // （典型场景：models.json 没配好，改完不用重启适配器）
+        this.#inner = null;
+        throw error;
+      });
+    }
     return this.#inner;
   }
 
@@ -294,6 +323,8 @@ async function main(): Promise<void> {
   const brain = buildBrain(flags, log);
   // 默认 @昵称触发（用 --nick）；没有 --nick 就不开提及触发
   const mention = flags.noMention ? null : (flags.mention ?? nick ?? null);
+  // 文件策略：只认 accept/reject，其余（含拼错）一律当 off（默认最安全）
+  const filesMode = flags.files === 'accept' || flags.files === 'reject' ? flags.files : 'off';
   const adapter = new ChatAdapter({
     client,
     brain,
@@ -303,11 +334,22 @@ async function main(): Promise<void> {
     respondToAll: flags.respondToAll === true,
     cooldownMs: num(flags.cooldownMs, 3_000),
     maxReplyBytes: num(flags.maxReplyBytes, 30_000),
+    files: filesMode,
+    filesMaxBytes: num(flags.filesMaxMb, 64) * 1024 * 1024,
+    filesAllowFrom: flags.filesAllow
+      ? flags.filesAllow
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : undefined,
+    filesSaveDir: flags.filesDir,
+    filesMaxConcurrent: num(flags.filesMaxConcurrent, 2),
     log: (...args) => log(args.map(String).join(' ')),
   });
   adapter.start();
   log(
-    `[cli] 已就绪：prefix=${flags.noPrefix ? '关' : (flags.prefix ?? '!')} mention=${mention ?? '关'}`,
+    `[cli] 已就绪：prefix=${flags.noPrefix ? '关' : (flags.prefix ?? '!')} mention=${mention ?? '关'} ` +
+      `files=${filesMode}${filesMode === 'accept' ? `（上限 ${num(flags.filesMaxMb, 64)} MiB）` : ''}`,
   );
 
   const signal = await waitForSignal();

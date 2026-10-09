@@ -128,6 +128,16 @@ export type RoomEvent =
     }
   | { type: 'fileSendFinished'; fileId: string; peer: string }
   | { type: 'fileSendFailed'; fileId: string; peer: string; reason: string }
+  | {
+      type: 'fileRecvStarted';
+      fileId: string;
+      peer: string;
+      room: string;
+      path: string;
+      size: number;
+    }
+  | { type: 'fileRecvFinished'; fileId: string; peer: string; path: string; bytes: number }
+  | { type: 'fileRecvFailed'; fileId: string; peer: string; reason: string }
   | { type: 'relayStatus'; relays: RelayInfo[] }
   | { type: 'error'; message: string }
   | { type: 'fatal'; reason: string }

@@ -97,6 +97,8 @@ pi 适配器（TS，supervisor）
 | `send_file` | `{path, name?, mime?}` | `{fileId, name, size, chunkSize, rootHash}` | 发布文件（整读算 blake3 后广播邀约）；有人接收后 daemon **自动推送** |
 | `unpublish` | `{fileId}` | `{}` | 从"可提供"清单撤下（更新心跳）；已在途的推送不中断 |
 | `list_files` | `{}` | `{files:[{fileId,name,size}]}` | 当前货架 |
+| `accept_file` | `{fileId, savePath?}` | `{fileId, path, bytes}` | **接收**一个文件（fileId 来自 `fileInvite` 事件）。省略 savePath 落 `<agent home>/received/`；是目录则拼文件名。超时按 10 分钟给（传输本身可能很久） |
+| `reject_file` | `{fileId, reason?}` | `{}` | 拒绝接收（广播带理由的 Reject；对方能看到是谁拒绝的） |
 | `nick` | `{nickname}` | `{}` | 改名（立刻重播 presence） |
 | `history` | `{limit?, before?}` | `{messages, snapshot?}` | **拉取**历史。`before` = `"<ts>:<id>"` 复合游标（空 = 最新一页） |
 | `status` | `{}` | `{endpointId, room, relays, peers, files, uptimeMs}` | 诊断/外部健康检查 |
@@ -115,6 +117,10 @@ pi 适配器（TS，supervisor）
 - **换房（join 到不同房间）时 daemon 自动清空货架**，并在 `joined` 事件里带
   `clearedFiles:[...]`。理由：文件清单按房间隔离（F7 那类缺陷的教训），
   心照不宣地保留会产生"在 A 房广播 B 房文件"的错位。
+- `accept_file` 的前提是**收到过 `fileInvite`**：daemon 把最近 64 个邀约连完整 meta
+  缓存在内存里（accept 授权必须拿 `meta.sender` 核对数据流来源，只给 fileId 等于
+  放弃授权）。缓存过期/没收到 → `noInvite`，让对端重发邀约即可。
+  v1 不做断点续传（空位图从头收）；失败时**保留半成品文件**便于排查。
 
 ---
 
@@ -140,7 +146,7 @@ pi 适配器（TS，supervisor）
 | `Presence{room,peers}` | `presence` | `{room,peers:[{id,nickname,lastSeenMs,files,epoch}]}` | "谁在线/谁有文件"；@触发判断的成员来源 |
 | `PeerUp{id}` / `PeerDown{id}` | `peerUp` / `peerDown` | `{id}` | **gossip 邻居**变化，不等于成员进出（成员看 presence） |
 | `History{…}` | — | — | ⚠️ 核心**从未 emit** 此变体；历史统一走 `history` 命令（pull） |
-| `FileInvite{room,meta}` | `fileInvite` | `{room,meta}` | 别人发文件。daemon 目前**不能接收**（见 §11 待定 4），TS 可选择忽略 |
+| `FileInvite{room,meta}` | `fileInvite` | `{room,meta}` | 别人发文件。daemon 会缓存 meta 供 `accept_file` 用；接不接由 TS 决策 |
 | `FileAccepted{room,file_id,have,receiver_relay,by}` | `fileAccepted` | 同左 | daemon **自动**开始推送；TS 只观察/记录 |
 | `FileRejected{room,file_id,reason,by}` | `fileRejected` | 同左 | 记录，降噪 |
 | `FileDone{room,file_id,ok,reason}` | `fileDone` | 同左 | 协议级传输结束（收发两向都会收到） |
@@ -159,6 +165,15 @@ pi 适配器（TS，supervisor）
 | `Progress{done,total,bytes}` | `fileProgress` | `{fileId, peer, direction:"send", doneChunks, totalChunks, bytes}` | 高频；TS 可采样，勿触发 LLM |
 | `Finished` | `fileSendFinished` | `{fileId, peer}` | 本端已发完（回执另见 `fileDone`） |
 | `Failed{reason}` | `fileSendFailed` | `{fileId, peer, reason}` | 推送失败 |
+
+接收方向（daemon 自产；`accept_file` 触发，进度可丢、起止不可丢）：
+
+| 时机 | event.type | 负载 |
+|---|---|---|
+| 登记+广播 Accept 之后 | `fileRecvStarted` | `{fileId, peer, room, path, size}` |
+| 传输中（每 64 块合并一次） | `fileProgress` | `{fileId, peer, direction:"recv", doneChunks, totalChunks, bytes}` |
+| 落盘并校验通过 | `fileRecvFinished` | `{fileId, peer, path, bytes}` |
+| 超时/校验失败/写盘失败 | `fileRecvFailed` | `{fileId, peer, reason}` |
 | `Ack{..}` | —（不暴露） | — | 与 `fileDone` 重复；v1 不加，需要时按"加字段/加事件不破坏兼容"补 |
 
 ## 6c. daemon 自产的生命周期事件（不在 RoomEvent 里）
@@ -189,6 +204,7 @@ pi 适配器（TS，supervisor）
 | `tooLarge` | 文本超上限 | 拒绝，不重试 |
 | `fileReadFailed` | 路径不可读 | 修路径；重试无意义 |
 | `noRelay` | 本端没有可用中继地址（`my_relay_url()` = None） | 等 `relayStatus` 恢复后重试 |
+| `noInvite` | `accept_file`/`reject_file` 的 fileId 没有对应邀约（没收到过或缓存过期） | 让对方重发邀约（或忽略） |
 | `joinFailed` | 进房失败（核心已内建 4 次/20s 重试，`room.rs:1690`） | 退避重试，message 里有原因 |
 | `internal` | 其它 | 记日志；连续出现考虑重启进程 |
 
@@ -249,8 +265,9 @@ daemon → {"v":1,"type":"event","seq":5,"event":{"type":"bye","reason":"收到�
    `RoomCtx` 重构把 `joined` 变 `HashMap`（见 `room.rs:1375`），再谈多房间。
 3. **`fileId` 跨重启稳定**：是否让 daemon 缓存 `(path,size,mtime)→meta`（存
    `~/.config/iroh-agent/files/`）？有缓存才能大文件跨重启续传，但要定义失效判定。
-4. **接收能力**：原生侧已有完整接收（`receive_file_data` + `filetest`），补一个
-   `accept_file {fileId, savePath}` 命令 + 落盘 sink 就能让 agent 也收文件。进不进 v1？
+4. ~~接收能力~~ **已完成**：`accept_file`/`reject_file` 命令 + 原生 `FileSink`
+   （流式落盘、内存恒定、结束重算哈希校验；v1 不做断点续传）。e2e 见
+   `scripts/e2e/agent-file-receive.py`。
 5. **presence 标记**：先用昵称约定（`[bot] 小助手`），不动协议（v5 的代价见前文）。
 6. **稳定性承诺**：v1 期间允许"加可选字段/加新事件"，不允许"改字段语义/删字段"。
 
@@ -270,14 +287,19 @@ Rust 侧 v1 已完成：
 - [x] `SendEvent` → `fileSendStarted/fileProgress/...`；`FileQueryAsked` → 自动重发邀约
 - [x] `history` ← `fetch_history_before`（复合游标 `"<ts>:<id>"`）
 - [x] stdin EOF / SIGTERM / SIGINT → 优雅退出（`biased` 保证显式退出优先于 EOF）
+- [x] **接收能力**：`accept_file`/`reject_file` 命令 + `FileSink`（流式落盘、哈希校验）；
+      邀约缓存（64 条上限）；进度合并（每 64 块）；`fileRecvStarted/Finished/Failed` 事件
 - [x] 本文件 + README 索引一行
 - [x] `Cargo.toml`：cli feature 加 `tokio/signal`（`signal-hook-registry` 已在锁里，`--locked` 无影响）
 
-还没做：
+测试（回归）已就位：
 
-- [ ] 黄金转录回归（`client-wasm/tests/`，固定 fixture，忽略 ts/seq 等易变字段）
-- [ ] daemon 版 e2e（⚠️ 独立 `IROH_AGENT_HOME`，别和别的进程共用身份）
-- [ ] 接收能力（`accept_file`，见 §11 待定 4）
+- [x] **黄金转录**：`client-wasm/tests/daemon-protocol.rs` + `tests/fixtures/serve-golden.jsonl`
+      （离线、驱动式、归一化+排序对比；事件 `seq` 严格递增单独断言；已并入 cargo test /
+      `scripts/verify.sh local`；改协议后 `UPDATE_GOLDEN=1` 重新生成并 review diff）
+- [x] 真实链路 e2e：`scripts/e2e/agent-serve-smoke.py`、`agent-serve-two-peer.py`、
+      `agent-file-receive.py`（agent 收文件：真实收发 + 逐字节校验；
+      ⚠️ 每个进程独立 `IROH_AGENT_HOME`）
 
 TS 侧（`agent-pi/`，已完成 v0.1；`pi-sdk` 大脑 v0.2）：
 
@@ -285,9 +307,11 @@ TS 侧（`agent-pi/`，已完成 v0.1；`pi-sdk` 大脑 v0.2）：
 - [x] `ChatAdapter`：前缀/@提及触发、去重、冷却、UTF-8 安全截断
 - [x] `RuleBrain`（规则文件）与 `CommandBrain`（子进程，可直接接 `pi -p`）
 - [x] `PiSdkBrain`：pi SDK 长会话（默认人设 + 注入防线、`noTools:'all'`、inMemory 会话、
-      认证走 `~/.pi/agent`）；faux 冒烟已过（会话连续性/错误路径/工厂响应）
+      认证走 `~/.pi/agent`、`--pi-model provider/id` 显式选模型）；faux 冒烟已过
+      （会话连续性/错误路径/工厂响应）
 - [x] CLI 与库入口；已过真实链路 e2e（触发/非触发/提及/杀进程自愈/SIGTERM 退出码 0）
-- [ ] pi-sdk × 真实 LLM 的房间级 e2e（待本机 3050 代理在跑时实测）
+- [x] pi-sdk × 真实 LLM 的房间级 e2e：`scripts/e2e/agent-pi-live.py`（opt-in，
+      `E2E_PI_MODEL=provider/id`；实测 hahacode/gpt-6.1-sol 房间内问答通过）
 
 ---
 

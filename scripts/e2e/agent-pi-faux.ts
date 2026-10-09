@@ -1,14 +1,19 @@
 /** pi-sdk brain 的 faux 冒烟：真实 pi 会话 + 本地零网络 provider（对齐 skill H03）。
  *
+ * 前置：`cd agent-pi && npm ci`（要装 pi SDK）。
+ * 用法：node scripts/e2e/agent-pi-faux.ts
+ *
  * 为什么用直接文件路径 import pi-ai：pi-coding-agent 带 npm-shrinkwrap，
  * 本项目里 pi-ai 被嵌套在 `pi-coding-agent/node_modules/` 下、顶上没有提升，
  * "@earendil-works/pi-ai" 对用户代码不可解析——H03 的标准写法在这里走不通。
  * 直接指向嵌套 dist 文件 = 与 pi-coding-agent **同一个模块实例**，
  * api-registry 才是共享的（registry 分裂会让 faux 失效）。
  */
-import { pathToFileURL } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const REPO = process.argv[2];
+// 仓库根 = scripts/e2e/../..（相对本文件，不依赖调用时的 cwd）
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const AGENT_PI = `${REPO}/agent-pi`;
 const SDK = `${AGENT_PI}/node_modules/@earendil-works/pi-coding-agent`;
 const PI_AI = `${SDK}/node_modules/@earendil-works/pi-ai/dist`;

@@ -45,7 +45,7 @@
 //! 身份：首次运行生成 `~/.config/iroh-agent/identity.key`（0600）并**持久复用**
 //! —— 它在房间里是"固定的那个人"，你能认出它。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -59,7 +59,7 @@ use iroh_web::filetransfer::{
     bitmap_from_b64, chunk_count, hex_encode, new_file_id, FileMeta, CHUNK_SIZE,
 };
 use iroh_web::room::{now_ms, RoomEvent, RoomNode, RoomOptions};
-use iroh_web::transfer_orchestrator::{ChunkSource, LocalBoxFuture};
+use iroh_web::transfer_orchestrator::{ChunkSource, FileSink, LocalBoxFuture};
 use n0_future::StreamExt;
 use serde_json::json;
 use tracing::{info, warn};
@@ -757,6 +757,41 @@ fn req_str(v: &serde_json::Value, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// 最近收到的文件邀约（有上限）。
+///
+/// serve 收到 `FileInvite` 事件时把 meta 存这里；`accept_file` 命令靠它拿到
+/// **完整 meta**（接收授权必须拿 meta.sender 核对数据流来源，只给 file_id
+/// 等于放弃授权 —— 见 `RoomNode::accept_file` 的说明）。
+///
+/// 上限 64：长时间运行的常驻进程不能攒出一个无限表；满了丢最旧的。
+/// 它是**缓存不是权威**：过期了让对端重发邀约即可（FileQueryAsked 会触发）。
+struct Invites {
+    map: HashMap<String, (FileMeta, String)>,
+    order: VecDeque<String>,
+}
+
+impl Invites {
+    fn put(&mut self, meta: FileMeta, room: String) {
+        if self.map.insert(meta.file_id.clone(), (meta.clone(), room)).is_none() {
+            self.order.push_back(meta.file_id);
+        }
+        while self.order.len() > 64 {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+    }
+
+    fn get(&self, file_id: &str) -> Option<(FileMeta, String)> {
+        self.map.get(file_id).cloned()
+    }
+
+    fn remove(&mut self, file_id: &str) {
+        self.map.remove(file_id);
+        self.order.retain(|id| id != file_id);
+    }
+}
+
 struct ServeCtx {
     node: Arc<RoomNode>,
     key: SecretKey,
@@ -765,6 +800,10 @@ struct ServeCtx {
     started: Instant,
     /// 货架：file_id → (meta, path)。真相在这里，核心那边只是镜像。
     files: Mutex<HashMap<String, (FileMeta, PathBuf)>>,
+    /// 最近收到的邀约（accept_file 的 meta 来源）
+    invites: Mutex<Invites>,
+    /// 正在接收的 file_id（同一文件并发 accept 只允许一条链路）
+    accepting: Mutex<HashSet<String>>,
     /// 默认昵称（join 不带 nickname 时用；nick 命令会更新它）。
     default_nick: Mutex<String>,
     /// 上一个已进过的房间（用于判断"换房"→ 清空货架）。
@@ -978,6 +1017,24 @@ fn serve_handle_line(ctx: &Arc<ServeCtx>, line: String) {
             let c = ctx.clone();
             tokio::spawn(async move { serve_do_leave(c, id).await });
         }
+        "accept_file" => {
+            let Some(file_id) = req_str(&v, "fileId") else {
+                ctx.reply_err(&id, "badRequest", "缺少 fileId");
+                return;
+            };
+            let save_path = req_str(&v, "savePath");
+            let c = ctx.clone();
+            tokio::spawn(async move { serve_do_accept_file(c, id, file_id, save_path).await });
+        }
+        "reject_file" => {
+            let Some(file_id) = req_str(&v, "fileId") else {
+                ctx.reply_err(&id, "badRequest", "缺少 fileId");
+                return;
+            };
+            let reason = req_str(&v, "reason");
+            let c = ctx.clone();
+            tokio::spawn(async move { serve_do_reject_file(c, id, file_id, reason).await });
+        }
         other => ctx.reply_err(&id, "unsupportedCmd", &format!("未知命令 {other}")),
     }
 }
@@ -1118,6 +1175,178 @@ async fn serve_do_leave(ctx: Arc<ServeCtx>, id: String) {
     ctx.reply_ok(&id, json!({}));
 }
 
+/// 接一个文件：拿邀约 meta → 登记接收 → 广播 Accept → 落盘 → 校验 → 回执。
+///
+/// 与浏览器接收流程完全同款（`accept_file` → `receive_file_data`），区别只在
+/// sink：浏览器写 OPFS/文件句柄，这里写磁盘（`FileSink`，内存恒定）。
+async fn serve_do_accept_file(
+    ctx: Arc<ServeCtx>,
+    id: String,
+    file_id: String,
+    save_path: Option<String>,
+) {
+    if ctx.node.current_room().is_none() {
+        ctx.reply_err(&id, "notJoined", "还没进房间（先发 join）");
+        return;
+    }
+    let Some((meta, room)) = ctx.invites.lock().unwrap().get(&file_id) else {
+        ctx.reply_err(&id, "noInvite", "没有这个邀约（没收到过、或缓存已过期）");
+        return;
+    };
+    if ctx.node.current_room().as_deref() != Some(room.as_str()) {
+        ctx.reply_err(&id, "roomMismatch", &format!("邀约来自 {room}，当前不在该房间"));
+        return;
+    }
+    if !ctx.accepting.lock().unwrap().insert(file_id.clone()) {
+        ctx.reply_err(&id, "badRequest", "该文件正在接收中");
+        return;
+    }
+
+    let result = serve_receive_file(&ctx, &meta, &room, save_path).await;
+    ctx.accepting.lock().unwrap().remove(&file_id);
+
+    match result {
+        Ok((path, bytes)) => {
+            ctx.invites.lock().unwrap().remove(&file_id);
+            ctx.reply_ok(
+                &id,
+                json!({
+                    "fileId": meta.file_id, "path": path.display().to_string(), "bytes": bytes,
+                }),
+            );
+        }
+        Err((code, message)) => ctx.reply_err(&id, &code, &message),
+    }
+}
+
+/// 真正的接收流程（在 accept_file 的并发保护内执行）。
+/// 返回 (落盘路径, 收到字节数)；错误是 (协议错误码, 人类可读消息)。
+async fn serve_receive_file(
+    ctx: &Arc<ServeCtx>,
+    meta: &FileMeta,
+    room: &str,
+    save_path: Option<String>,
+) -> Result<(PathBuf, u64), (String, String)> {
+    let my_relay = ctx
+        .node
+        .my_relay_url()
+        .ok_or_else(|| ("noRelay".to_string(), "本端没有可用中继地址".to_string()))?;
+    let path = resolve_save_path(save_path, meta);
+    let meta_json = serde_json::to_string(meta)
+        .map_err(|e| ("internal".to_string(), format!("meta 序列化失败：{e}")))?;
+
+    // ⚠️ 顺序：先登记（`accept_file` 内部完成 expect）再广播 Accept —— 反了数据会丢。
+    //    have 传空位图：v1 不做断点续传（见 FileSink 注释）。
+    let (rx, ack_tx) = ctx
+        .node
+        .accept_file(&meta.file_id, &meta_json, Vec::new(), &my_relay, room)
+        .await
+        .map_err(|e| ("internal".to_string(), format!("登记/广播 Accept 失败：{e:#}")))?;
+
+    let sink = FileSink::open(&path, meta)
+        .map_err(|e| ("fileReadFailed".to_string(), format!("打不开落盘路径：{e:#}")))?;
+    ctx.emit_event(json!({
+        "type": "fileRecvStarted",
+        "fileId": meta.file_id, "peer": meta.sender, "room": room,
+        "path": path.display().to_string(), "size": meta.size,
+    }));
+
+    let last = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+    let got = ctx
+        .node
+        .receive_file_data(meta, std::sync::Arc::new(sink), rx, ack_tx, {
+            let ctx = ctx.clone();
+            let last = last.clone();
+            let fid = meta.file_id.clone();
+            let peer = meta.sender.clone();
+            move |done, total, bytes| {
+                // 合并进度：每 64 块或结束时发一条（可丢事件，别把 stdout 淹了）
+                let mut l = last.lock().unwrap();
+                if done == total || done.saturating_sub(*l) >= 64 {
+                    *l = done;
+                    ctx.emit_progress_event(json!({
+                        "type": "fileProgress", "fileId": fid, "peer": peer,
+                        "direction": "recv", "doneChunks": done, "totalChunks": total, "bytes": bytes,
+                    }));
+                }
+            }
+        })
+        .await;
+
+    match got {
+        Ok(bytes) => {
+            ctx.emit_event(json!({
+                "type": "fileRecvFinished", "fileId": meta.file_id, "peer": meta.sender,
+                "path": path.display().to_string(), "bytes": bytes,
+            }));
+            Ok((path, bytes))
+        }
+        Err(e) => {
+            ctx.emit_event(json!({
+                "type": "fileRecvFailed", "fileId": meta.file_id, "peer": meta.sender,
+                "reason": format!("{e:#}"),
+            }));
+            Err(("internal".to_string(), format!("接收失败：{e:#}")))
+        }
+    }
+}
+
+/// 拒绝一个文件（广播 Reject 带理由；房间核对防 F7）。
+async fn serve_do_reject_file(
+    ctx: Arc<ServeCtx>,
+    id: String,
+    file_id: String,
+    reason: Option<String>,
+) {
+    if ctx.node.current_room().is_none() {
+        ctx.reply_err(&id, "notJoined", "还没进房间（先发 join）");
+        return;
+    }
+    let Some((_meta, room)) = ctx.invites.lock().unwrap().get(&file_id) else {
+        ctx.reply_err(&id, "noInvite", "没有这个邀约（没收到过、或缓存已过期）");
+        return;
+    };
+    if ctx.node.current_room().as_deref() != Some(room.as_str()) {
+        ctx.reply_err(&id, "roomMismatch", &format!("邀约来自 {room}，当前不在该房间"));
+        return;
+    }
+    let reason = reason.unwrap_or_else(|| "用户拒绝".to_string());
+    match ctx.node.reject_file(&file_id, &reason, &room).await {
+        Ok(()) => {
+            ctx.invites.lock().unwrap().remove(&file_id);
+            ctx.reply_ok(&id, json!({}));
+        }
+        Err(e) => ctx.reply_err(&id, "internal", &format!("广播 Reject 失败：{e:#}")),
+    }
+}
+
+/// 落盘路径：`savePath` 是目录就拼文件名；没给就放 `<agent home>/received/`。
+fn resolve_save_path(requested: Option<String>, meta: &FileMeta) -> PathBuf {
+    let safe_name = sanitize_file_name(&meta.name);
+    match requested {
+        Some(p) if !p.trim().is_empty() => {
+            let path = PathBuf::from(p);
+            if path.is_dir() {
+                path.join(safe_name)
+            } else {
+                path
+            }
+        }
+        _ => home().join("received").join(safe_name),
+    }
+}
+
+/// 只取 basename、去控制字符 —— 文件名来自对端，**不能**让它带路径分量（防穿越）。
+fn sanitize_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("file").trim();
+    let cleaned: String = base.chars().filter(|c| !c.is_control()).collect();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "file".to_string()
+    } else {
+        cleaned
+    }
+}
+
 // ---------------------------------------------------------- 事件转发（stdout）
 
 /// 订阅 RoomEvent，转成协议事件；顺带做两件自动动作（与浏览器 Worker 对齐）：
@@ -1165,6 +1394,13 @@ async fn serve_forward_events(ctx: Arc<ServeCtx>) {
                 room,
             } => {
                 serve_start_push(&ctx, file_id, have, receiver_relay, by, room);
+            }
+            RoomEvent::FileInvite { room, meta } => {
+                // 存下来供 accept_file 用（有上限的缓存；meta 完整才可能通过授权核对）
+                ctx.invites
+                    .lock()
+                    .unwrap()
+                    .put(meta.clone(), room.clone());
             }
             RoomEvent::FileQueryAsked { room, file_id, .. } => {
                 // 有人点了历史卡片问文件：手里还有就重播一次邀约（只在同一房间）
@@ -1361,6 +1597,11 @@ async fn cmd_serve(cfg: &Config, key: &SecretKey, auto_room: &str) -> Result<()>
         seq: AtomicU64::new(0),
         started: Instant::now(),
         files: Mutex::new(HashMap::new()),
+        invites: Mutex::new(Invites {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }),
+        accepting: Mutex::new(HashSet::new()),
         default_nick: Mutex::new(cfg.nickname.clone()),
         last_room: Mutex::new(None),
         inflight: Mutex::new(HashSet::new()),

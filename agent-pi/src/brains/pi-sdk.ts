@@ -21,6 +21,7 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
+  ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent';
 import { renderTemplate } from '../brain.ts';
@@ -39,6 +40,12 @@ export interface PiSdkBrainOptions {
   promptTemplate?: string;
   /** 工具面：none（默认，零工具）或 read-only */
   tools?: 'none' | 'read-only';
+  /**
+   * 显式指定模型，`provider/modelId` 格式（如 `hahacode/gpt-6.1-sol`）。
+   * 不传则用 pi 的默认选择（settings → 第一个可用模型）——当 models.json 里
+   * 配了多个 provider 时，默认可能挑到不是你想要的那个。
+   */
+  model?: string;
   /**
    * **仅供测试**（faux provider 冒烟等）：透传给 createAgentSession 的额外选项，
    * 比如 model / modelRuntime。正常使用不要传。
@@ -114,7 +121,27 @@ export async function createPiSdkBrain(options: PiSdkBrainOptions): Promise<PiSd
     // ⚠️ 传了 resourceLoader 就必须自己 reload，否则 overrides 不生效
     await loader.reload();
 
-    const extra = options.extraSessionOptions ?? {};
+    const extra = { ...(options.extraSessionOptions ?? {}) } as Record<string, unknown>;
+    // `--pi-model provider/id`：解析成 Model 实例（自定义 provider 走 modelRuntime.getModel，
+    // 见 skill A02 方式三）。不传就交给 pi 的默认选择。
+    if (options.model && !extra.model) {
+      const slash = options.model.indexOf('/');
+      const provider = slash > 0 ? options.model.slice(0, slash) : '';
+      const modelId = slash > 0 ? options.model.slice(slash + 1) : '';
+      if (!provider || !modelId) {
+        throw new Error(`--pi-model 需要 "provider/modelId" 格式，收到：${options.model}`);
+      }
+      const runtime =
+        (extra.modelRuntime as ModelRuntime | undefined) ?? (await ModelRuntime.create());
+      const model = runtime.getModel(provider, modelId);
+      if (!model) {
+        throw new Error(
+          `models.json 里没有 ${provider}/${modelId}（检查 ~/.pi/agent/models.json）`,
+        );
+      }
+      extra.modelRuntime = runtime;
+      extra.model = model;
+    }
     const sessionOptions: Record<string, unknown> = {
       cwd,
       agentDir,

@@ -70,9 +70,26 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 - **同一个进程内一个 pi 会话** = 有记忆（`SessionManager.inMemory`，不落盘）；
   每条触发的消息作为一条 prompt 进入会话，回复取最后一条 assistant 文本。
 - **认证与模型**：完全由 pi 默认的 `~/.pi/agent/` 决定（`auth.json` / `models.json`）。
-  ⚠️ 本机当前走 `localproxy`（`http://127.0.0.1:3050/v1`）——**代理没跑时 prompt 会失败**，
-  适配器会记 `No model selected./请求失败` 日志并跳过回复，进程不受影响。
-  *（用 SDK ≠ 需要全局装的 pi 二进制——认证配置同理，只有 `~/.pi/agent/` 里的文件是有用的。）*
+  自定义 provider 直接写进 `models.json`（本机已配 `hahacode`，OpenAI 兼容网关）：
+
+  ```json
+  {
+    "providers": {
+      "hahacode": {
+        "baseUrl": "https://hahacode.com/v1",
+        "api": "openai-completions",
+        "apiKey": "sk-…",
+        "models": [{ "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol" }]
+      }
+    }
+  }
+  ```
+
+  `--pi-model provider/id` 显式选择（如 `--pi-model hahacode/gpt-6.1-sol`）；
+  不传就用 pi 的默认选择（settings → 第一个可用模型）——models.json 里配了多个
+  provider 时容易挑错（比如挑到没在跑的本机代理）。模型不可用时 prompt 失败
+  只影响单条消息，进程不受影响。
+  *（用 SDK ≠ 需要全局装的 pi 二进制；只有 `~/.pi/agent/` 里的配置是有用的。）*
 - **工具默认零面**（`noTools:'all'`）：房间内容不可信、直达模型，`read/bash` 就是
   "让你读什么都读"的口子。要不要放工具用 `--pi-tools read-only`（read/grep/find/ls），
   写入和执行类工具不要开。
@@ -99,11 +116,40 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 | `--cooldown-ms` | 3000 | 两次回复最小间隔（期间触发丢弃并记日志） |
 | `--max-reply-bytes` | 30000 | 回复 UTF-8 字节上限（防超过 `say` 的 32768 被拒） |
 | `--ping-interval-ms` | 45000 | 看门狗；连续两次 ping 失败会杀掉重启（0 = 关） |
+| `--files` | `off` | 收到文件邀约：`off`（只记日志）/ `accept`（自动接收）/ `reject`（自动拒绝） |
+| `--files-max-mb` | 64 | `accept` 模式的大小上限，超过自动拒绝（拒绝理由会告诉对方） |
+| `--files-allow` | — | 只接收这些发送方（EndpointId 逗号分隔；不设 = 不限） |
+| `--files-dir` | daemon 默认 | 落盘目录（默认 `<IROH_AGENT_HOME>/received/`） |
+| `--files-max-concurrent` | 2 | 并发接收上限；满了自动拒绝并让对方稍后重发 |
 
 行为细节：同一 `message.id` 只处理一次；`mine` 消息不回；昵称以 `[bot]` 开头的
 消息不回（防机器人互相刷屏）；`serve` 崩溃后指数退避自动重启并重新进房。
 `SIGINT`/`SIGTERM` 走优雅退出（leave → close → bye）；重复信号会被忽略——
 pi SDK 依赖的 `signal-exit` 清理时会重抛信号，不挡的话进程会被它带杀（实测 -15）。
+
+### 文件接收策略
+
+收到 `fileInvite` 时的决策（默认 `off` 最安全）：
+
+| 模式 | 行为 |
+|---|---|
+| `off`（默认） | 只记日志，不响应（发送方的卡片会一直挂着） |
+| `reject` | 自动拒绝（拒绝理由会说清是"功能未开启"） |
+| `accept` | 自动接收：白名单 + 大小上限 + 并发上限三重守卫，落盘到 `--files-dir`（或 daemon 默认目录） |
+
+守卫规则（`accept` 模式）：发送方不在 `--files-allow`（若设了）→ 拒绝并说明"不在白名单"；
+超过 `--files-max-mb` → 拒绝并附"X MiB > Y MiB"；并发已满 → 拒绝并让对端稍后重发。
+接收失败会**允许重发重试**（fileId 从去重表移除）；接收成功/拒绝过的 fileId 不会重复处理。
+
+需要更复杂的策略（按人、按扩展名、问模型）时用库入口的 `onFileInvite` 钩子，
+它完全接管决策（返回 `accept` / `reject` / `ignore`，可 async）：
+
+```ts
+new ChatAdapter({
+  client, brain, room: '我的房间',
+  onFileInvite: async (f) => (f.name.endsWith('.log') ? 'accept' : 'reject'),
+});
+```
 
 ## ⚠️ 安全（这层最重要的部分）
 
@@ -119,7 +165,9 @@ pi SDK 依赖的 `signal-exit` 清理时会重抛信号，不挡的话进程会�
 ## 限制（v0.1）
 
 - 单进程单房间（多房间 = 起多个实例，各用独立 `IROH_AGENT_HOME`）
-- **不能接收文件**（serve 尚未实现 `accept_file`；可以让它发文件，见协议 §11）
+- **可以收发文件**：发是 `send_file`（有人接收就自动推送）；收是 `accept_file` /
+  `reject_file`（`AgentClient.acceptFile()/rejectFile()`，落盘走原生 `FileSink`，
+  内存恒定）。v1 不做断点续传：失败时保留半成品文件、重收从头开始。
 - `serve` 重启后不会自动重发文件（需要就重新 `send_file`）
 - pi-sdk 模式的会话/记忆**只活在进程内**（不落盘）——重启后从头开始；
   长跑会话要注意上下文窗口（pi 自带 compaction，但聊天场景建议观察 token 用量）
@@ -137,6 +185,17 @@ pi SDK 依赖的 `signal-exit` 清理时会重抛信号，不挡的话进程会�
 | `src/cli.ts` `mod.ts` | 命令行入口 / 库入口 |
 
 改完先过 lint（在仓库根目录）：`npx biome lint agent-pi`。
-真实链路验证：起一个适配器 + 另一个成员发 `!ping`，应收到 `pong`。
-pi-sdk 大脑的验证：faux provider 冒烟（离线、会话、错误路径）已过；
-真实 LLM 需要本机 3050 代理在跑，然后用 pi-sdk 模式起适配器实测。
+回归与验证（清单和前置见 [`scripts/e2e/README.md`](../scripts/e2e/README.md) 的
+「Agent / 适配器回归」）：
+
+```bash
+node scripts/e2e/agent-pi-faux.ts       # pi-sdk brain 离线冒烟（秒级）
+python3 scripts/e2e/agent-pi-e2e.py     # 真实链路：触发/自愈/SIGTERM（~4 分钟）
+python3 scripts/e2e/agent-pi-llm-down.py  # LLM 不可用路径（~2 分钟）
+E2E_PI_MODEL=hahacode/gpt-6.1-sol python3 scripts/e2e/agent-pi-live.py  # 真实 LLM 房间级（opt-in）
+```
+
+`serve` 侧的黄金转录（离线 Rust 测试）：
+`cargo test --offline --locked --no-default-features --features cli --test daemon-protocol`。
+真实 LLM 房间级对话用上面的 `agent-pi-live.py`（需要 `~/.pi/agent/models.json` 里有
+可用 provider，并用 `E2E_PI_MODEL` 指定 `provider/modelId`）。

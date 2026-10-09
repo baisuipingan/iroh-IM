@@ -142,6 +142,31 @@ export class AgentClient extends EventEmitter {
     return this.request('say', { text }, 60_000) as Promise<{ id: string; ts: number }>;
   }
 
+  /**
+   * 接收一个文件（`fileId` 从 `fileInvite` 事件拿）。
+   * `savePath` 省略时落在 `<IROH_AGENT_HOME>/received/`；是目录则拼文件名。
+   * 超时给到 10 分钟：传输本身可能很久，别把它当命令超时杀掉。
+   */
+  acceptFile(
+    fileId: string,
+    savePath?: string,
+  ): Promise<{ fileId: string; path: string; bytes: number }> {
+    return this.request(
+      'accept_file',
+      savePath ? { fileId, savePath } : { fileId },
+      10 * 60_000,
+    ) as Promise<{
+      fileId: string;
+      path: string;
+      bytes: number;
+    }>;
+  }
+
+  /** 拒绝一个文件（会广播带理由的 Reject；对方能看到"是谁拒绝的"）。 */
+  rejectFile(fileId: string, reason?: string): Promise<unknown> {
+    return this.request('reject_file', reason ? { fileId, reason } : { fileId }, 30_000);
+  }
+
   history(limit = 200, before?: string): Promise<unknown> {
     return this.request('history', before ? { limit, before } : { limit }, 60_000);
   }
