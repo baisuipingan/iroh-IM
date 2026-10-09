@@ -58,6 +58,15 @@ export interface RoomActions {
   clearError: () => void;
 }
 
+/**
+ * 进房时拉多少条历史。
+ *
+ * 与 Web 端保持一致（`frontend/js/ui/timeline.js` 的 `PAGE`）。
+ * 更大不是更好：这是**一屏的初始内容**，不是全部历史；
+ * 往上翻由分页（`fetchHistory` 带游标）继续取。
+ */
+const HISTORY_PAGE = 50;
+
 export function useRoom(transport: Transport | null, defaultNickname = '匿名'): RoomState & RoomActions {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [peers, setPeers] = useState<PeerInfo[]>([]);
@@ -168,6 +177,47 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     };
   }, [transport]);
 
+  /**
+   * 拉取某个房间的最新一页历史。
+   *
+   * 拉回来的消息走和 `<history>` 事件**完全相同**的去重 + 整体替换逻辑 ——
+   * 两条路径（事件 / 主动拉）必须收敛到同一个结果，
+   * 否则同一批消息会因为来源不同而表现不一致。
+   */
+  const loadHistory = useCallback(
+    async (roomName: string) => {
+      if (!transport) return;
+      try {
+        const page = await transport.fetchHistory(HISTORY_PAGE);
+        // 期间换房了 → 丢弃（否则会把旧房的记录塞进新房）
+        if (roomRef.current !== roomName) return;
+        setMessages(() => {
+          const deduped: ChatMessage[] = [];
+          for (const m of page.messages) {
+            if (seen.current.has(m.id)) continue;
+            seen.current.add(m.id);
+            deduped.push(m);
+          }
+          return deduped.sort((a, b) => a.ts - b.ts);
+        });
+      } catch (e) {
+        // 历史拉不到不该挡住聊天 —— 只记一条错误，房间照常可用
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [transport],
+  );
+
+  const leave = useCallback(async () => {
+    roomRef.current = null;
+    setRoom(null);
+    setJoined(false);
+    setMessages([]);
+    setPeers([]);
+    seen.current = new Set();
+    await transport?.leaveRoom().catch(() => undefined);
+  }, [transport]);
+
   /* ---- join：**先同步安置状态，再 await** ---- */
   const join = useCallback(
     async (p: JoinParams) => {
@@ -195,20 +245,34 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
         setError(e instanceof Error ? e.message : String(e));
         roomRef.current = null;
         setRoom(null);
+        return;
       }
-    },
-    [transport, defaultNickname],
-  );
 
-  const leave = useCallback(async () => {
-    roomRef.current = null;
-    setRoom(null);
-    setJoined(false);
-    setMessages([]);
-    setPeers([]);
-    seen.current = new Set();
-    await transport?.leaveRoom().catch(() => undefined);
-  }, [transport]);
+      /* ---- ④ 拉历史（进房后补上"这间屋子之前说过什么"）----
+       *
+       * ★ 这一步**必须显式做**，不能指望进房时自动带回来。
+       *
+       *   Rust 的 `RoomNode::join()` 内部**确实**会调一次
+       *   `fetch_history(room, 1)`，但那是为了"敲一下常驻节点让它订阅本房间"
+       *   （见 room.rs 里 "已通知常驻节点订阅房间" 那条 log），
+       *   **只取 `snapshot`，`messages` 直接丢弃** —— limit=1 也说明它
+       *   压根没打算显示历史。
+       *
+       *   症状就是：房间明明有 4 条历史（服务端 SQLite 里查得到），
+       *   但进房后界面永远是「还没有消息，说什么吧」。
+       *   真机上排查了很久 —— 连接、TLS、ALPN 全正常，快照也回来了
+       *   （所以能看到"2 人"），就是消息空着。
+       *
+       *   Web 端有这一步（frontend/js/ui/timeline.js 的 `_loadLatest`：
+       *   `net.history(room, PAGE, '')`，空游标 = 取最新一页），移动端漏了。
+       *
+       * ⚠️ 用 await 而不是并发：历史要**先于**实时消息落定，
+       *    否则新消息会被随后的整体替换冲掉。
+       */
+      await loadHistory(roomName);
+    },
+    [transport, defaultNickname, loadHistory],
+  );
 
   const send = useCallback(
     async (text: string) => {
