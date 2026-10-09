@@ -21,6 +21,23 @@
 
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
+/**
+ * 单条中继状态。
+ *
+ * ⚠️ 字段名是 **camelCase** —— Rust 侧 `RelayInfo` 带
+ *    `#[serde(rename_all = "camelCase")]`，所以 `last_error` 会变成 `lastError`。
+ *    （注意区分：**匿名变体字段**不受 rename_all 影响，那是另一码事。）
+ *
+ * ⚠️ **没有 RTT 字段** —— Rust 侧只给这四项。UI 上就别显示毫秒数了，
+ *    读一个不存在的键只会永远拿到 undefined。
+ */
+export interface RelayStatusInfo {
+  url: string;
+  connected: boolean;
+  lastError: string | null;
+  authDenied: string | null;
+}
+
 /** 原生模块的返回形状（与 IrohNativeModule.kt 一一对应） */
 interface IrohNativeModuleShape {
   getStatus(): { available: boolean; loadError: string | null };
@@ -33,7 +50,7 @@ interface IrohNativeModuleShape {
   release(): Promise<void>;
   pollEvent(timeoutMs: number): Promise<string | null>;
   endpointId(): Promise<string>;
-  relayStatus(): Promise<Record<string, unknown>[]>;
+  relayStatus(): Promise<RelayStatusInfo[]>;
   online(): Promise<void>;
   join(room: string, nickname: string): Promise<void>;
   send(text: string): Promise<string>;
@@ -136,7 +153,7 @@ export const irohNative = {
     return requireModule().endpointId();
   },
 
-  async relayStatus(): Promise<Record<string, unknown>[]> {
+  async relayStatus(): Promise<RelayStatusInfo[]> {
     return requireModule().relayStatus();
   },
 

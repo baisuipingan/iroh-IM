@@ -76,6 +76,13 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
    *    - 闭包捕获更糟：换房后回调里还是旧房名
    */
   const roomRef = useRef<string | null>(null);
+  /**
+   * 当前昵称的"最新值"。
+   * `send` 的依赖只有 transport（不想每次改昵称都重建回调），
+   * 所以读 state 会拿到旧值 —— 用 ref 拿最新。
+   */
+  const nicknameRef = useRef<string>(defaultNickname);
+  nicknameRef.current = nickname;
 
   /* ---- 订阅：只依赖 transport，**不依赖 room** ---- */
   useEffect(() => {
@@ -138,7 +145,22 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     };
 
     const unsub = transport.subscribe(onEvent);
-    const id = setInterval(() => setRelay(transport.relayStatus()), 5000);
+
+    // ★ 中继状态刷新。
+    //
+    // ⚠️ 必须**先 await 刷新、再读缓存**：`relayStatus()` 是同步方法，
+    //    它读的是 transport 内部的缓存；真实数据要异步问 Rust。
+    //    不刷新的话进房页会永远停在「正在连接中继…」（真踩过）。
+    //
+    // 用 optional 调用而非原型判断：MockTransport 没有这个方法，
+    // 它自己的 relayStatus 已经返回合理值。
+    const tick = async (): Promise<void> => {
+      const t = transport as { refreshRelayStatus?: () => Promise<void> };
+      await t.refreshRelayStatus?.();
+      setRelay(transport.relayStatus());
+    };
+    void tick(); // 立刻来一次（别等 5 秒）
+    const id = setInterval(() => void tick(), 2000);
 
     return () => {
       unsub();
@@ -193,7 +215,30 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       const body = text.trim();
       if (!body || !transport) return;
       try {
-        await transport.send(body);
+        const id = await transport.send(body);
+        // ★ 本地回显（自己的消息自己显示）。
+        //
+        // ⚠️ 为什么必须在这里做：Rust 的 `RoomNode::send()` **只广播 + 写本地历史，
+        //    不会给订阅者发 `RoomEvent::Message`** —— 那是**有意为之**的一致性设计，
+        //    远端消息才走 gossip 事件那条路。
+        //    Web 端同样在 JS 侧回显（见 frontend/js/ui/composer.js 里
+        //    `bus.emit(EV.MSG, { …, mine: true })`）。
+        //
+        //    少了这一步的症状：消息**真的发出去了**（gossip 层能看到
+        //    多出一条 Broadcast），但自己界面上一片空白 ——
+        //    "发出去了却看不见"，真机上卡了很久才定位。
+        const mine: ChatMessage = {
+          id,
+          from: transport.endpointId,
+          nickname: nicknameRef.current,
+          text: body,
+          ts: Date.now(),
+          sig: '',
+          file: null,
+        };
+        if (seen.current.has(id)) return; // 万一某天 Rust 也回推了同一条，别重复
+        seen.current.add(id);
+        setMessages((prev) => [...prev, mine].sort((a, b) => a.ts - b.ts));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }

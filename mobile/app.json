@@ -9,7 +9,13 @@
     "newArchEnabled": true,
     "android": {
       "package": "vip.editor.irohchat",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "//permissions": "★ ACCESS_NETWORK_STATE 是**必需**的，不是可选优化。iroh 的 DNS 解析（n0-dns-resolver）要通过 ConnectivityManager 读系统 nameserver，没这个权限会抛 SecurityException 并静默退回硬编码的 8.8.8.8 / 9.9.9.9 —— 国内到那些地址的 DoH(443) 基本不通，于是解析不了中继域名、连不上中继。症状是 UI 一直「正在连接中继…」而服务端一切正常（真机上就是这样卡住的）。INTERNET 是联网基本权限；ACCESS_WIFI_STATE 用于读 Wi-Fi 网络的 DNS。",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE"
+      ]
     },
     "ios": {
       "bundleIdentifier": "vip.editor.irohchat",

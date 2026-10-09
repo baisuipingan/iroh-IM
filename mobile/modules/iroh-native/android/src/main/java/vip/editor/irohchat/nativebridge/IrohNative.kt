@@ -193,12 +193,25 @@ object IrohNative {
         anchorId: String? = null,
         anchorRelay: String? = null,
     ): Long {
+        // ⚠️⚠️ 键名必须是 **snake_case**，与 Rust 的 `RoomOptions` 字段名逐字一致。
+        //
+        //    `RoomOptions` 上**没有** `#[serde(rename_all = "camelCase")]`
+        //    （它只有 #[serde(default)]），所以 Rust 只认 `relay_token` /
+        //    `anchor_id` / `anchor_relay` / `secret_key_hex`。
+        //
+        //    写成 camelCase 的后果是**静默丢弃** —— serde 对未知字段不报错，
+        //    于是这些参数变成 None：token 丢了 → 中继鉴权失败 →
+        //    "The relay denied our authentication (not authorized)"。
+        //    这个 bug 真机上耗了很久才定位（真踩过）。
+        //
+        //    注意区分：`RelayInfo`（状态上报）**有** rename_all="camelCase"，
+        //    所以那边反而是 camelCase 对。**两边规则不同，别互相推。**
         val opts = JSONObject().apply {
             put("relays", JSONArray(relays))
-            put("serveHistory", false)
-            relayToken?.let { put("relayToken", it) }
-            anchorId?.let { put("anchorId", it) }
-            anchorRelay?.let { put("anchorRelay", it) }
+            put("serve_history", false)
+            relayToken?.let { put("relay_token", it) }
+            anchorId?.let { put("anchor_id", it) }
+            anchorRelay?.let { put("anchor_relay", it) }
         }
         val ptr = nativeCreate(opts.toString())
         if (ptr == 0L) throw IllegalStateException("nativeCreate 返回 0（详见 logcat）")

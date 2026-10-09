@@ -66,8 +66,13 @@ export class NativeTransport implements Transport {
   }): Promise<NativeTransport> {
     const ptr = await irohNative.create(opts);
     const t = new NativeTransport(ptr);
+    // 先记住配置里的中继 URL —— 这样进房页在**还没 join** 时
+    // 也能显示"在连哪一台"，而不是 url: null
+    t.relays = opts.relays ?? [];
     t._endpointId = await irohNative.endpointId();
     t.loop = t.runEventLoop();
+    // 立刻问一次真实连接状态（此后由 useRoom 的定时器持续刷新）
+    await t.refreshRelayStatus();
     return t;
   }
 
@@ -122,16 +127,54 @@ export class NativeTransport implements Transport {
   relayStatus(): RelayStatus {
     // 注意：原生侧返回的是**数组**（多中继），移动端 v1 只取第一个
     // （配置里就一台）。要支持多中继时这里改成聚合。
+    //
+    // ★ 数据来自 `refreshRelayStatus()` 缓存的快照 —— JS 这边不能同步调
+    //   Rust（原生调用全是 async 的，而这个方法是同步签名）。
+    //   缓存由 `create()` 立刻填一次，并由 useRoom 的定时器持续刷新。
     return {
       url: this.relays[0] ?? null,
       connected: this.lastRelayConnected,
+      // RTT 暂不可得：Rust 的 RelayInfo 不带这个字段（见 refreshRelayStatus）
       rtt_ms: null,
     };
   }
 
-  /** 由 join 时传入的配置记下来，供 relayStatus 用 */
+  /**
+   * 主动去 Rust 问一次中继状态，更新缓存。
+   *
+   * ⚠️⚠️ 这个方法**必须有人定期调**，否则 [relayStatus] 永远返回
+   *     "未连接" —— 因为它读的是这里的缓存。
+   *
+   *     踩过的坑：第一版只在 `join()` 之后把 `lastRelayConnected` 置 true，
+   *     于是**进房页必然一直显示「正在连接中继…」**（那时还没 join），
+   *     而 Rust 侧其实早就连上了。看起来像"连不上中继"，
+   *     实际是 UI 压根没去问。
+   */
+  async refreshRelayStatus(): Promise<void> {
+    try {
+      const list = await irohNative.relayStatus();
+      const first = list[0];
+      this.lastRelayConnected = Boolean(first?.connected);
+      // ⚠️ RelayInfo 里**没有 rtt 字段**（Rust 侧只给 url / connected /
+      //    lastError / authDenied），所以 RTT 保持 null —— UI 会省掉
+      //    "· 58ms" 那一段。别凭印象读一个不存在的键。
+      this.lastRelayError =
+        (first?.lastError as string | null) ??
+        (first?.authDenied as string | null) ??
+        null;
+      // 原生返回里带 url 时以它为准（配置可能和实际被选中的中继不同）
+      if (typeof first?.url === 'string' && first.url) {
+        this.relays = [first.url];
+      }
+    } catch {
+      // 节点还没建好 / 已释放 —— 保持上一次的状态，不要瞎清空
+    }
+  }
+
+  /** 由 create/join 记下来，供 relayStatus 用 */
   private relays: string[] = [];
   private lastRelayConnected = false;
+  private lastRelayError: string | null = null;
 
   async join(opts: RoomOptions): Promise<void> {
     this.relays = opts.relays ?? [];
