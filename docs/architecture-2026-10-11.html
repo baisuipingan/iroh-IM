@@ -1,0 +1,117 @@
+<!-- iroh 聊天室 · 当前架构图（源文件）。
+     渲染：用 Chrome/Chromium 打开本文件，按内容高度截图即可 ——
+     本次是 1320px 宽、deviceScaleFactor=2、fullPage=true。 -->
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  :root{--ink:#0e2439;--dim:#5b7a8c;--line:#cfe0e8;--gold:#f0b429;--blue:#1f6feb;--coral:#e8543f;--teal:#0e8f8f;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:26px 30px;background:#f4f8fa;color:var(--ink);
+       font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif}
+  h1{margin:0 0 4px;font-size:21px}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:18px}
+  .layer{display:grid;grid-template-columns:96px 1fr;gap:14px;align-items:stretch;margin-bottom:9px}
+  .tag{background:#0e2439;color:#fff;border-radius:10px;padding:8px 6px;font-size:11.5px;text-align:center;
+       display:flex;flex-direction:column;justify-content:center;line-height:1.35}
+  .tag small{opacity:.65;font-size:9.5px;display:block;margin-top:2px}
+  .body{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .row{display:flex;gap:9px;flex-wrap:wrap}
+  .box{flex:1 1 0;min-width:150px;border:1px solid var(--line);border-radius:9px;padding:7px 9px;background:#fbfdfe}
+  .box b{display:block;font-size:13px;margin-bottom:2px}
+  .box span{font-size:11px;color:var(--dim);line-height:1.45}
+  .box span b{display:inline;color:var(--ink)}
+  .alpn{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#0b6b6b;background:#e8f6f6;
+        border-radius:4px;padding:1px 4px;display:inline-block;margin-top:3px}
+  .wire{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;color:#7a5b00;background:#fff7e0;
+        border-radius:4px;padding:1px 4px;margin-right:4px;display:inline-block}
+  .arrow{text-align:center;color:var(--dim);font-size:12px;margin:-3px 0 6px 110px}
+  .arrow em{font-style:normal;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;background:#eef4f7;
+            border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:#33576b}
+  .note{font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.5}
+  .pill{display:inline-block;font-size:10px;border-radius:99px;padding:1px 7px;margin-left:4px;vertical-align:1px}
+  .p-gold{background:#fff3d1;color:#8a6100}.p-blue{background:#e5efff;color:#14538f}
+  .p-coral{background:#fdeceb;color:#a33220}.p-teal{background:#e2f6f6;color:#0b6b6b}
+  .foot{margin-top:12px;font-size:11px;color:var(--dim);border-top:1px dashed var(--line);padding-top:9px;line-height:1.6}
+</style></head><body>
+<h1>iroh 聊天室 · 当前架构</h1>
+<div class="sub">2026-10-11 · 全部按代码与线上配置核对（roomd <code>7280433a</code>｜前端 <code>fec066c5</code>｜协议 v5）</div>
+
+<div class="layer">
+  <div class="tag">端点层<small>都是对等点</small></div>
+  <div class="body"><div class="row">
+    <div class="box"><b>浏览器（wasm）<span class="pill p-blue">relay-only</span></b>
+      <span>房间消息 + 文件收发</span><div><span class="alpn">iroh-chat/1</span> <span class="alpn">iroh-file/1</span></div></div>
+    <div class="box"><b>手机 App（RN + JNI）<span class="pill p-teal">原生端点</span></b>
+      <span>同一套 Rust 核心；能打洞直连，失败回落中继</span><div><span class="alpn">iroh-chat/1</span> <span class="alpn">iroh-file/1</span></div></div>
+    <div class="box"><b>CLI / AI Agent<span class="pill p-teal">原生端点</span></b>
+      <span>就是房间里一个普通用户（"服务器助手"）</span><div><span class="alpn">iroh-chat/1</span> <span class="alpn">iroh-file/1</span></div></div>
+  </div></div>
+</div>
+<div class="arrow">▲ ▼ <em>gossip 广播</em> 房间 = gossip topic，房间名就是唯一地址</div>
+
+<div class="layer">
+  <div class="tag">房间层<small>广播总线</small></div>
+  <div class="body">
+    <span class="wire">Message 聊天</span><span class="wire">Presence 心跳</span><span class="wire">File 文件控制</span>
+    <span class="wire">Leave 离开</span><span class="wire">FileQuery 可用性质询</span>
+    <div class="note">房间名即凭据（知道房名就能进）；消息逐条验签、id 由签名载荷派生。房间是软状态：靠心跳+超时派生"谁在线"。</div>
+  </div>
+</div>
+<div class="arrow">▲ ▼ <em>直连 ALPN</em>（不是广播，点对点问）</div>
+
+<div class="layer">
+  <div class="tag">常驻用户<small>roomd 一个插件一个 ALPN</small></div>
+  <div class="body"><div class="row">
+    <div class="box" style="border-color:#f0c66b;background:#fffdf6"><b>history<span class="pill p-gold">历史插件</span></b>
+      <span>文本历史（SQLite，<b>明文</b>）+ 房间快照（成员/文件清单）给新进房的人</span>
+      <div><span class="alpn">iroh-history/1</span></div></div>
+    <div class="box" style="border-color:#f0c66b;background:#fffdf6"><b>rendezvous<span class="pill p-gold">入口插件</span></b>
+      <span>回答"这房间现在有谁"→ 进房候选；拿不到也照常进房</span>
+      <div><span class="alpn">iroh-rendezvous/1</span></div></div>
+    <div class="box" style="border-color:#f0c66b;background:#fffdf6"><b>announce<span class="pill p-gold">声明插件</span></b>
+      <span>"我要用这个房间了" → 触发常驻节点订阅（取代旧的"敲门"副作用）</span>
+      <div><span class="alpn">iroh-announce/1</span></div></div>
+  </div>
+  <div class="note">随用随建：线上已订阅过 <b>190</b> 个房间；容量 256 + LRU + 每秒限速 + 30 分钟空闲回收（<code>ROOMD_MAX_ROOMS</code>/<code>ROOMD_ROOM_IDLE_MS</code>）。
+  两个插件的开关、信号量、字节上限各自独立 —— 今天同进程跑，要拆机器只改配置。</div>
+  </div>
+</div>
+<div class="arrow">▲ ▼ <em>iroh-file/1</em> 数据面：按需推送、断点续传、BLAKE3 校验</div>
+
+<div class="layer">
+  <div class="tag">中继层<small>iroh-relay</small></div>
+  <div class="body"><div class="row">
+    <div class="box"><b>hk-1（与 roomd/agent 同机）</b><span>线上主用，~9ms</span></div>
+    <div class="box"><b>eu-1 / fr-1</b><span>异地备份中继（~1s，跨洲）</span></div>
+    <div class="box" style="background:#fffdf6;border-color:#f0c66b"><b>浏览器 = 永久 relay-only</b>
+      <span>平台限制（不能发 UDP ⇒ 不能打洞）；原生端点会先试打洞、失败回落中继</span></div>
+  </div></div>
+</div>
+
+<div class="layer">
+  <div class="tag">协议层<small>单一来源</small></div>
+  <div class="body"><div class="row">
+    <div class="box"><b>线协议 v5<span class="pill p-coral">破坏性</span></b>
+      <span>一个版本串管全部消息族 + 版本握手：history/rendezvous/announce 响应都带 <code>protocol</code>；
+      对不上就明确提示刷新，不再静默丢消息</span></div>
+    <div class="box"><b>类型只有一份来源</b>
+      <span>Rust 生成 mobile / agent-pi 的 <code>protocol.gen.ts</code>，<code>verify.sh</code> 里有一致性闸门；
+      web 纯 JS，用"事件名必须真实存在"补等价保证</span></div>
+  </div></div>
+</div>
+
+<div class="layer">
+  <div class="tag">部署层<small>线上</small></div>
+  <div class="body"><div class="row">
+    <div class="box"><b>Cloudflare Worker</b><span>静态站点 <code>im.pinkstar.cc</code>（纯 assets，无 Worker 逻辑）</span></div>
+    <div class="box"><b>服务器 189.24.70.253</b><span>iroh-relay(hk-1) + roomd(Docker，健康检查+看门狗) + <code>iroh-agent-pi.service</code>（非 root）</span></div>
+    <div class="box"><b>GitHub Releases</b><span><code>agent-v1.2.0</code>（6 平台）、<code>android-v0.2.0</code>（v5 的 .so）</span></div>
+  </div></div>
+</div>
+
+<div class="foot">
+  <b>进房路径</b>：问 rendezvous 拿候选 → <code>subscribe_and_join</code> → 发 announce 声明 → 拉一次 history（同时拿到房间快照）。
+  任何一步失败都<b>不阻断</b>：降级为"孤立进房"（消息排队等邻居），后台指数退避重连，接上后自动补历史。<br>
+  <b>边界（刻意不做的）</b>：消息格式与签名<b>不</b>插件化（它是协议底座）；不做动态库加载式插件；历史保持明文存常驻节点（端到端加密历史不做）。
+</div>
+</body></html>

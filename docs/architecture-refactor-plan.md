@@ -202,3 +202,25 @@ trait RoomCapability: Send + Sync {
 | 补齐交付链（同窗口） | ✅ 已完成 | 六期改动入库：分支 `codex/protocol-v5` / [PR #1](https://github.com/baisuipingan/iroh-IM/pull/1)；Release `agent-v1.2.0`（6 平台 14 资产），服务器上的 agent **用它装的**（`c18a09277c025a0a…`）；顺带修掉 `install-release.sh` 的默认版本 |
 | 交付链修链（同窗口） | ✅ 已完成 | Release `android-v0.2.0`（v5 的 `.so`，`dbbe0b75…`）；`latest` 改为**按产物族 tag 前缀**解析（`bc9dfcf`）—— `releases/latest` 是全局的，两条产物线互相砸对方的安装路径，两个方向都实测复现过。修完之后**脚本不再依赖全局 Latest**：实测 `agent-v → agent-v1.2.0`、`android- → android-v0.2.0`，与谁被标成 Latest 无关 |
 | 阶段 E（多历史提供者） | ⏳ 暂缓 | 需先确认隐私边界 |
+
+## 11. 当前架构（2026-10-11 的"定妆照"）
+
+![当前架构](architecture-2026-10-11.png)
+
+（源文件 `architecture-2026-10-11.html`；改动架构时用 Chrome 打开它、按内容高度截图重出。）
+
+一句话读法：**四个端点（浏览器 / 手机 / CLI·agent / roomd）都是 iroh 对等点**，
+房间是一个 gossip topic，**roomd 只是"一个装了插件、总在线的用户"** ——
+它的两个插件（history / rendezvous）各有自己的 ALPN、开关与闸门，"常驻"不等于"必需"。
+
+| 层 | 关键事实 | 代码位置 |
+|---|---|---|
+| 端点 | 浏览器 **relay-only**（平台限制：不能发 UDP ⇒ 打不了洞）；原生端点先试打洞、失败回落中继 | `client-wasm/src/room.rs`（`Endpoint::builder`）、`docs/iroh-chatroom-feasibility.md` |
+| 房间 | gossip 广播 `Message` / `Presence` / `File` / `Leave` / `FileQuery`；房间名即地址 | `room.rs` `GOSSIP_ALPN` + `Wire` |
+| 常驻用户 | roomd = 三个插件（history / rendezvous / announce），各自开关与闸门；房间**随用随建**（线上已订阅过 190 个，容量 256 + LRU + 新房间限速 + 30 分钟空闲回收） | `room.rs` `CapabilityRegistry`、`bin/roomd.rs` |
+| 数据面 | 文件走独立 ALPN 点对点直连：按需推送 + 断点续传 + BLAKE3 校验 | `filetransfer.rs` `FILE_ALPN` |
+| 协议 | v5：**一个**版本串管全部消息族 + 三个能力的版本握手（响应带 `protocol`） | `sigfmt.rs` `PROTO_V5` |
+| 类型 | Rust 生成 mobile / agent-pi 的 `protocol.gen.ts`，`verify.sh` 校验一致；web 纯 JS，用"事件名必须真实存在"补等价保证 | `ts_export.rs`、`scripts/check-*.sh` |
+
+**刻意不做的边界**（写在这就是不许被"顺手"越过的）：消息格式与签名**不**插件化（协议底座）；
+不做动态库加载式插件；插件不许绕过自己的资源闸门；历史**明文**存常驻节点（不做端到端加密历史）。
