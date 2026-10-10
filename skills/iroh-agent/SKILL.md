@@ -58,8 +58,13 @@ description_en: >-
 > ```
 > 下面讲的是**装 CLI 二进制**，跟装 Skill 本身是两件事。
 
-**先看平台**：有预编译产物的只有这 6 种组合（Release `agent-v1.0.0` 已发布，
-安装脚本会从 `releases/latest/download` 取，不需要你手动指定版本）。
+**先看平台**：有预编译产物的只有这 6 种组合（当前 Release：`agent-v1.2.0`）。
+安装脚本会自动取**最新的 `agent-*` Release**（不是 GitHub 的 "latest" —— 见下），
+不需要你手动指定版本；要锁版本就用 `AGENT_VERSION`。
+
+> ⚠️ 为什么不能靠 GitHub 的 `releases/latest`：这个仓库有**两条产物线**
+> （`agent-v*` 与 `android-v*`），而 Latest 全局只有一个 —— 谁最后发布谁就是它，
+> 另一条线立刻 404（2026-10-10 真踩到过）。所以脚本改成按 tag 前缀解析。
 不在表里（如 32 位 Windows、FreeBSD、musl 静态链接）就别试安装脚本，直接走源码构建。
 
 | 平台 | 有预编译产物 |

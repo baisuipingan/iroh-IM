@@ -173,7 +173,8 @@ cp -R skills/iroh-agent ~/.workbuddy/skills/      # 或你的 Agent 的 skills �
 
 > ✅ **现在的状态（已全部验证完毕）**：6 个平台的产物都已产出并通过架构断言，
 > Release `agent-v1.0.0` 已发布。**在真机上实测过**：
-> 用 `releases/latest/download` 跑安装脚本 → 校验和通过 → 装出的二进制
+> 用 Release 产物跑安装脚本（当时是 `releases/latest/download`；现在脚本按
+> **最新的 `agent-*` tag** 解析，见下面的"两条产物线"注意）→ 校验和通过 → 装出的二进制
 > `--help` 正常 → `whoami` **连上真实中继**（`已连上中继`）→
 > `say` **成功进入真实房间并发出消息**。
 > Windows 安装器（`.ps1`）本身仍未在真实 Windows 机器上跑过 —— 那是唯一剩下的未验证项。
@@ -200,7 +201,7 @@ cp -R skills/iroh-agent ~/.workbuddy/skills/      # 或你的 Agent 的 skills �
 bash 会把**第一个字节**当作变量名的一部分。修法永远是用 `${have}` 定界。
 
 **验证方式**（可复现，不需要真实 Release）：本地起一个静态服务冒充
-`releases/latest/download`，把上面打包脚本的产物丢进去，然后：
+Release 的下载地址（`AGENT_RELEASE_BASE`），把上面打包脚本的产物丢进去，然后：
 
 ```bash
 # 正常路径：应打印「校验和通过」并写出 config.json
@@ -246,7 +247,7 @@ AGENT_RELEASE_BASE=http://127.0.0.1:8927 … bash skills/iroh-agent/scripts/inst
 |---|---|---|
 | 体积 | 6 个产物 × ~8.7 MB ≈ **52 MB**（Skill 通常应是纯文本） | Skill 本体 **< 30 KB** |
 | 可维护性 | 每次改代码都要**重新提交几十 MB 二进制**，git 历史迅速膨胀 | 只改文本 |
-| 版本更新 | Skill 可能被缓存/分发各处，**版本容易不一致** | 每次安装拿 `releases/latest`，或用 `AGENT_VERSION` 锁版本 |
+| 版本更新 | Skill 可能被缓存/分发各处，**版本容易不一致** | 每次安装拿**最新的 `agent-*` Release**，或用 `AGENT_VERSION` 锁版本 |
 | 离线可用 | ✅ 天然离线 | ❌ 需要能访问 GitHub（或用 `AGENT_RELEASE_BASE` 指内网镜像） |
 | 供应链安全 | 二进制直接进仓库，评审负担重 | 有 `.sha256` 校验，且发布流程可见 |
 
