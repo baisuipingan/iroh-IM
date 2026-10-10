@@ -171,13 +171,19 @@ trait RoomCapability: Send + Sync {
 - 线上前端当前版本：`1483915c-a1cf-40de-b151-b5810a956e63`（v5）；上一版 `7eb4fa8a-…`（C′）。
 - roomd 当前二进制 `7280433a…`（v5）；回滚副本 `/opt/iroh/roomd/roomd.bak-20261010-200154`（= C′ `77280f12…`）。
 - 常驻 agent 跑在 `iroh-agent-pi.service`，账号 `iroh-agent`（非 root），房间 `patrick`；
-  Rust 二进制 `fd906732…` 与 `agent-pi/src/protocol.gen.ts`（v5）**都已更新**。
-  ⚠️ 但那个二进制是**本地构建**（与 roomd 同一次 `build-wasm.sh native`），
-  **不在任何 GitHub Release 里** —— 违反第 6 节的硬约束，缺口与补法见
-  `docs/release-2026-10-10-protocol-v5.md` 的"未完成 / 偏离"。
-- **发布前必读**：本仓库是**公开**的，所以 `docs/*` 里不要写服务器 IP 与私钥路径 ——
-  但本文件 §9 第一行与 `release-2026-10-10-roomd-decouple.md` 里**已经写了**，
-  真要提交前得先处理掉（见发版记录的同一节）。
+  Rust 二进制现在来自 **GitHub Release `agent-v1.2.0`**（`c18a09277c025a0a…`），
+  `agent-pi/src/protocol.gen.ts` 也已是 v5 —— 第 6 节那条硬约束（服务器上的二进制必须
+  属于某个 Release）到此满足。
+  ⚠️ **`deploy/agent/install-release.sh` 的默认 `VERSION` 必须跟着协议走**：
+  它是 `agent-v1.2.0`。默认值停在 `agent-v1.1.0`（v4）的那种状态会让新装的人
+  对着 v5 的 roomd 一个字都发不出去（这条链路当时还叠了另一个坑：GitHub 的
+  "Latest" 一度是 `android-v0.1.0`，所以 `releases/latest/download` 直接 404）。
+- **发布前必读**：本仓库是**公开**的，所以 `docs/*` 里不要写服务器地址与私钥路径 ——
+  本文件 §9 与 `release-2026-10-10-roomd-decouple.md` 里原本写了，**2026-10-10 已脱敏**，
+  值只留在本机 `scripts/build.env`（不入库）。改这块时别写回去。
+- **代码入库状态（2026-10-10 起）**：六期改动提交在分支 **`codex/protocol-v5`**（`6f44026`）
+  并开了 [PR #1](https://github.com/baisuipingan/iroh-IM/pull/1)；`main` 在合并前仍是
+  `c65ef56`（v4 时代）。tag `agent-v1.2.0` 指向 `6f44026`，与线上源码一致。
 - **`deploy-web.sh` 的 DNS 修正代理现在是"按需"的**：它会先探一下
   `api.cloudflare.com` 能不能直连，能直连就不起代理。原因：那个代理会把 OAuth
   续期用的 `sparrow.cloudflare.com` 一起拦掉，令牌一过期就变成
@@ -192,5 +198,6 @@ trait RoomCapability: Send + Sync {
 | 阶段 D | ✅ 已完成 | `docs/release-2026-10-10-protocol-single-source.md`；当场抓出 5 处真实漂移；线上 `77f83798-…`；`verify.sh all` 退出码 0（浏览器 594 项）；顺带修掉窄屏抽屉盖住输入框的真 bug |
 | 阶段 B′ | ✅ 已完成 | `docs/release-2026-10-10-rendezvous-split.md`；roomd `857dcd4c…`、前端 `77b7da5e-…`；`verify.sh all` 退出码 0；线上"入口拆分"6/6 |
 | 阶段 C′ | ✅ 已完成 | `docs/release-2026-10-10-capability-registry.md`；roomd `77280f12…`、前端 `7eb4fa8a-…`；`verify.sh all` 退出码 0（浏览器 618 项）；线上"入口拆分"6/6 |
-| v5 切换 | ✅ 已完成 | `docs/release-2026-10-10-protocol-v5.md`；roomd `7280433a…`、前端 `1483915c-…`；Rust 71；浏览器逐套件全绿（2 处负载抖动单独复跑均绿）；线上哈希逐一相等 |
+| v5 切换 | ✅ 已完成 | `docs/release-2026-10-10-protocol-v5.md`；roomd `7280433a…`、前端 `e152e816-…`（`BUILD=v15`）；Rust 71；`verify.sh all` 退出码 0（23 组浏览器套件全 0 失败）；线上哈希逐一相等 |
+| 补齐交付链（同窗口） | ✅ 已完成 | 六期改动入库：分支 `codex/protocol-v5` / `6f44026` / [PR #1](https://github.com/baisuipingan/iroh-IM/pull/1)；Release `agent-v1.2.0`（6 平台 14 资产、当前 Latest），服务器上的 agent 用它装的（`c18a09277c025a0a…`）；顺带修掉 `install-release.sh` 的默认版本与 "Latest 指向 Android 发布" 导致的安装 404 |
 | 阶段 E（多历史提供者） | ⏳ 暂缓 | 需先确认隐私边界 |

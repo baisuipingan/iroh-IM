@@ -130,7 +130,8 @@
   ⚠️ 校验方式：**把这几个文件 scp 到服务器再 curl 比对**。本机直连下 3.8 MB 的 wasm
   会**被截断**（实测拿到 2,035,328 / 168,106 字节的不完整副本，且 curl 不报错）——
   本机比出来的哈希不可信。
-- agent：`/opt/iroh-agent/bin/agent` `fd90673229b29a58…`（**见下节的重要说明**），
+- agent：先用工作区源码本地构建的那份（`fd90673229b29a58…`）把窗口合上，
+  **随后换成 Release `agent-v1.2.0` 的产物**（`c18a09277c025a0a…`，见"补齐 Release"一节），
   同时把 `agent-pi/src/protocol.gen.ts` 更新到 v5（`1190b257…`）。
   适配器自带的那道闸门当场拦住了错误组合：
   `启动失败：protocolMismatch: agent 报告 chatProtocol=v5，适配器只支持 v4；请同步升级` ——
@@ -145,27 +146,50 @@
     `agent-pi/src/protocol.gen.ts.bak-v4-20261010-201955`。
   - **回滚要三件一起回**：任何一侧单独回退都会回到"新×旧"的组合 ⇒ 全线丢消息。
 
-## 未完成 / 偏离（必须有人接手）
+## 补齐 Release（同一个窗口里做完）
 
-1. **`agent-v1.2.0` 这个 Release 还没出出来。**
-   服务器上现在跑的 agent 是**从工作区源码本地构建**的（同一次 `build-wasm.sh native`，
-   与 roomd 是同一份源码），**不来自任何 GitHub Release** —— 这违反了方案第 6 节的
-   "不许让服务器上跑的二进制处在不属于任何 Release 的状态"。
-   要补上需要：`git commit` + `git push` + `git tag agent-v1.2.0` + 推 tag，
-   让 `release-agent.yml` 编出多平台产物，再用
-   `VERSION=agent-v1.2.0 deploy/agent/install-release.sh` 覆盖安装。
-   **在那之前，这个二进制怎么复现**（免得它真的变成孤儿）：它和 roomd 出自
-   **同一次** `bash scripts/build-wasm.sh native`（构建机上就是
-   `/opt/iroh-build/client-wasm/target/release/agent`，sha256 `fd90673229b29a58…`），
-   安装方式与 `deploy/agent/install-release.sh` 的最后一步等价：
-   `install -m 755 -o iroh-agent -g iroh-agent <agent> /opt/iroh-agent/bin/agent`。
-   ⚠️ 提交前要先处理：`docs/architecture-refactor-plan.md` §9 与
-   `docs/release-2026-10-10-roomd-decouple.md` 里**写了服务器 IP 与私钥路径**，
-   而本仓库是**公开**的（`build-wasm.sh` 头部就写着"本仓库是公开的，所以不写主机名与密钥路径"）。
-2. 阶段 E（多历史提供者）仍暂缓 —— 需要先确认隐私边界。
-3. 顺带观察到一条**非本轮引入**的噪音：roomd 在客户端"连上就断"时会打
+`agent-v1.2.0` **已经出出来了**，服务器上跑的 agent 现在就是**这个 Release 的产物**
+（硬约束"服务器上跑的二进制必须属于某个 Release"这一条到此才真正满足）。
+过程与一个意外发现：
+
+1. 六期改动（A / 0 / D / B′ / C′ / v5）此前**全都还没提交**。本次把它们提交到分支
+   **`codex/protocol-v5`**（commit `6f44026`）并开了 PR
+   [**#1**](https://github.com/baisuipingan/iroh-IM/pull/1)。走分支而不是直接推 `main`，
+   是为了留一个可评审的落点（`main` 原本停在 `c65ef56`，即 v4 时代）。
+   ⚠️ **提交前先脱敏**：`docs/architecture-refactor-plan.md` §9 与
+   `docs/release-2026-10-10-roomd-decouple.md` 里原本写着**服务器地址与私钥路径**，
+   而本仓库是公开的（`build-wasm.sh` 头部就写着"不写主机名与密钥路径"）。
+   已改成指向 `scripts/build.env`（`.gitignore:59` 已排除，不入库）。
+2. 先 `gh workflow run release-agent.yml --ref codex/protocol-v5` 跑了一次**只构建不发布**
+   的矩阵（6 个平台全绿，`8m17s`）—— 确认没问题再打 tag，免得 tag 打出去、
+   CI 挂在 `windows-11-arm` 这类 runner 上，Release 半死不活。
+3. 打 tag `agent-v1.2.0`（指向 `6f44026`）→ CI 编 6 平台 → 14 个资产
+   （每个产物旁边都有 `.sha256`，另有 `SHA256SUMS.txt`）就位，
+   Release 现在是 **Latest**（`2026-10-10T13:46Z`）。
+4. 用**文档里同一条路**装上去：`VERSION=agent-v1.2.0 bash deploy/agent/install-release.sh`
+   → `sha256sum -c` 通过 → `/opt/iroh-agent/bin/agent` = `c18a09277c025a0a…`
+   → 重启服务 → `hello：… chatProtocol=v5`、`已进入房间 patrick`、roomd 侧 `服务器助手 在线`。
+
+### ★ 顺手挖出来的一个真 bug：agent 的安装链路本来就是坏的
+
+`skills/iroh-agent/scripts/install.sh` 与 `deploy/install/agent-install.sh` 在不指定版本时
+都走 `https://github.com/<repo>/releases/latest/download`。而 GitHub 的 **"Latest" 当时是
+`android-v0.1.0`**（它只有一个 `libiroh_web-arm64-v8a.so`）—— 也就是说
+**任何人照着文档装 agent 都会 404**；就算他手动锁到 `agent-v1.1.0`，装到的也是
+**v4 客户端，对着已经切到 v5 的 roomd 一个字都发不出去**。
+把 `agent-v1.2.0` 推成 Latest 顺带把这条链路修好了。
+`deploy/agent/install-release.sh` 的默认 `VERSION` 也从 `agent-v1.1.0` 改成了
+`agent-v1.2.0`（默认值必须跟着协议走，注释里写了原因）。
+
+## 仍未做
+
+1. 阶段 E（多历史提供者）仍暂缓 —— 需要先确认隐私边界。
+2. 顺带观察到一条**非本轮引入**的噪音：roomd 在客户端"连上就断"时会打
    `router.accept{… alpn="editor.vip/iroh-announce/1"}: … timed out`（WARN）。
    agent 重启那一下能看到一条。语义无害（对端自己走了），但噪音级别可以再压。
+3. **PR #1 还没合**。合之前 `main` 仍是 v4 时代的代码；tag `agent-v1.2.0` 指向分支上的
+   `6f44026`，与线上跑的源码一致。另外手机上的 Android 包是 v4 签名，
+   要重新构建安装才会重新收发消息。
 
 ## 反漂移自检（方案 §8 逐条）
 
@@ -180,8 +204,11 @@
    再重跑生成脚本**得到的，三端（web/mobile/agent-pi）没有一处手抄。
    `daemon-protocol` 的黄金转录也改成引用 `iroh_web::sigfmt::PROTO_V5` 而不是字面量。
 4. **能不能单独回滚？回滚步骤写了吗？** 能，写在上面（但要三件一起回）。
-5. **有没有哪条已拍板决策与现实冲突？** 有**一条与本次实现无关但影响交付**的：
-   决策 ⑤"每期一发"要求"服务器上的二进制都属于某个 Release"，而本地工作区
-   **四期改动（D/B′/C′/v5）全都还没提交**（`git status` 里全是未提交文件）。
-   要做 Release 就必须先提交+推送，而提交会把服务器 IP 带进公开仓库。
-   **已按"停下来报告"处理**，没有擅自提交。
+5. **有没有哪条已拍板决策与现实冲突？** 出现过**一条与实现无关但挡住交付**的：
+   决策 ⑤与第 6 节要求"服务器上的二进制都属于某个 Release"，而六期改动
+   当时**全都还没提交**（`git status` 里 76 个文件未跟踪/未提交），
+   要做 Release 就必须先提交+推送，而提交会把服务器地址带进公开仓库。
+   **处理方式**：先脱敏（把地址/私钥路径换成指向 `scripts/build.env`）→
+   提交到**分支** `codex/protocol-v5` + 开 PR #1（不动 `main`）→ 先跑一次只构建的
+   矩阵验证 → 打 tag `agent-v1.2.0` → 用 Release 产物覆盖安装。
+   到此第 6 节那条硬约束满足，方向没有被静默改掉。
