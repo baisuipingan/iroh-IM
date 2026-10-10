@@ -59,7 +59,13 @@ async fn main() -> anyhow::Result<()> {
         anchor_id,
         anchor_relay,
         history_dir: None,
+        rendezvous_id: None,
+        rendezvous_relay: None,
+        history_id: None,
+        history_relay: None,
         serve_history: false,
+        serve_rendezvous: false,
+        join_timeout_ms: None,
     })
     .await?;
 
@@ -100,6 +106,21 @@ async fn main() -> anyhow::Result<()> {
                 RoomEvent::PeerUp { id } => println!("[邻居上线] {id}"),
                 RoomEvent::PeerDown { id } => println!("[邻居下线] {id}"),
                 RoomEvent::History { messages, .. } => println!("[历史] {} 条", messages.len()),
+                // 联系不上任何其他人（常驻节点在重启 / 中继不可达）。
+                // ⚠️ 这不是失败：房间已经进了，消息会排队等邻居。
+                RoomEvent::Isolated { isolated, .. } => {
+                    println!("[孤立] isolated={isolated}（{}）",
+                        if isolated { "暂时看不到别人，后台重连中" } else { "已重新接上" })
+                }
+                // v5 握手：对端版本不一致（本端能发现，因为响应里带了版本）
+                RoomEvent::ProtocolMismatch { ours, theirs, .. } => println!(
+                    "[协议不一致] 本端 {ours}，对端 {} —— 旧的那端要升级/刷新",
+                    if theirs.is_empty() { "未上报（旧版）" } else { &theirs }
+                ),
+                // 插件自定义事件（终态 ③ 的扩展点）：核心不认识它的内容，原样打出来
+                RoomEvent::Plugin { name, payload } => {
+                    println!("[插件:{name}] {payload}")
+                }
                 RoomEvent::RelayStatus { relays } => {
                     for r in relays {
                         println!("[中继] {} connected={} denied={:?}", r.url, r.connected, r.auth_denied);
@@ -128,12 +149,13 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    println!("\n=== 进房间「{room}」（含 anchor 唤醒 + subscribe_and_join，最多约 90s）===");
-    let joined = tokio::time::timeout(Duration::from_secs(100), node.join(&room, &nick)).await;
+    // 进房最多等 `join_timeout`（默认 8s）—— 超时是**降级为孤立进房**，不是失败。
+    println!("\n=== 进房间「{room}」（等邻居最多约 8s，超时则孤立进房）===");
+    let joined = tokio::time::timeout(Duration::from_secs(30), node.join(&room, &nick)).await;
     match joined {
         Ok(Ok(())) => println!("✅ join() 成功"),
         Ok(Err(e)) => println!("❌ join() 失败: {e:#}"),
-        Err(_) => println!("❌ join() 100s 超时"),
+        Err(_) => println!("❌ join() 30s 超时"),
     }
 
     println!("\n=== 观察 {seconds}s ===");

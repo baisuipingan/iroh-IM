@@ -16,18 +16,30 @@
 # ============================================================================
 
 set -euo pipefail
-
 TAG="${1:-latest}"
 ABI="${ABI:-arm64-v8a}"
 
 REPO="baisuipingan/iroh-IM"
 ASSET="libiroh_web-$ABI.so"
 
+# ⚠️ `latest` 必须按**本产物族的 tag 前缀**解析，**不能**用 GitHub 的 `releases/latest`。
+#
+# 这个仓库有两条产物线（`agent-v*` 与 `android-v*`），而 GitHub 的 Latest **全局只有一个**：
+# 谁最后发布谁就是 Latest，另一条线立刻 404。2026-10-10 就真踩到了 —— 发了
+# `agent-v1.2.0` 之后，这条脚本默认路径开始找不到 `.so`（反过来也一样）。
+# 所以这里查一次 releases 列表，取**最新的 android-* **。
+resolve_latest_tag() {   # $1 = tag 前缀
+  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null \
+    | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"\(.*\)"/\1/' \
+    | grep "^$1" | head -1
+}
+
 if [ "$TAG" = "latest" ]; then
-  BASE="https://github.com/$REPO/releases/latest/download"
-else
-  BASE="https://github.com/$REPO/releases/download/$TAG"
+  TAG="$(resolve_latest_tag android-)"
+  [ -n "$TAG" ] || { echo "❌ 没能从 GitHub 解析出 android 的 Release tag（网络？）—— 也可以显式指定：bash $0 android-v0.2.0" >&2; exit 1; }
+  echo "ℹ️  latest → $TAG"
 fi
+BASE="https://github.com/$REPO/releases/download/$TAG"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST_DIR="$HERE/../mobile/modules/iroh-native/android/src/main/jniLibs/$ABI"

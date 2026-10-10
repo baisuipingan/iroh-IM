@@ -70,6 +70,23 @@ const QUARANTINE_MS = 60_000;
 /** file_id -> ts（被隔离的时间）。见上面说明。 */
 const quarantined = new Map();
 
+/**
+ * 「保存位置」对话框的全局占用标记。
+ *
+ * ⚠️ Chrome 的 `showSaveFilePicker` 是**窗口级**的：上一次调用还没结束
+ *    （对话框开着、被拖到别的窗口后面、或被系统挂起）时再调一次，会直接抛
+ *    `Failed to execute 'showSaveFilePicker' on 'Window': File picker already active.`
+ *    而用户看到的是"点 ✓ → 按钮变灰 → 没反应 → 再点报错"，指不到真正的原因。
+ *
+ * 所以只要有一个对话框在等，就**不再发起第二次调用**，并把等待状态如实画在
+ * 卡片上；被挂死的对话框由这个时限解锁，避免这张卡片永远点不动。
+ *
+ * 30 秒是"用户已经该意识到框没出现"的量级 —— 再长就只是干等。
+ * 到点不取消那个请求（我们取消不了），而是把「直接下载」兜底推给用户。
+ */
+const PICKER_STUCK_MS = 30_000;
+let pickerBusyUntil = 0;
+
 /** 传输中的任务：file_id → 状态（只用于 UI 展示，真数据在 Worker 里） */
 const transfers = new Map();
 const peerNames = new Map();
@@ -306,6 +323,53 @@ async function pickSaveHandle(meta) {
       ? [{ description: ext, accept: { [meta.mime]: [`.${ext}`] } }]
       : undefined,
   });
+}
+
+/**
+ * 把浏览器抛的原始异常翻成**能照做**的提示。
+ *
+ * `File picker already active` 这种原文对用户毫无意义 —— 它既不说明发生了什么，
+ * 也不说明该做什么（实测：用户以为是自己点坏了）。
+ */
+function pickerHint(e) {
+  const raw = String(e?.message ?? e);
+  if (/picker.*already active/i.test(raw)) {
+    return '保存对话框已经打开过了（可能在浏览器其他窗口后面），先处理它，再点一次接收';
+  }
+  if (/user gesture|user activation/i.test(raw)) {
+    return '浏览器要求"点一下才能弹保存框"，请直接点卡片上的 ✓ 重试';
+  }
+  return raw;
+}
+
+/**
+ * 把 Worker 收进 OPFS 的文件，转成一次普通浏览器下载。
+ *
+ * ⚠️ 文件名规则**必须与 Worker 侧一致**（见 iroh-worker.js 的 acceptFile）：
+ *    `meta.name.replace(/[^\w.-]/g, '_')` —— 两边不一致就会找不到文件。
+ */
+async function saveFromOpfs(meta) {
+  const root = await navigator.storage.getDirectory();
+  const safe = meta.name.replace(/[^\w.-]/g, '_');
+  const handle = await root.getFileHandle(safe);
+  const file = await handle.getFile();
+  // 大小不符说明拿到的是别的/没收完的副本 —— 宁可报错也不要给用户一个坏文件
+  if (file.size !== meta.size) {
+    throw new Error(`本地缓存大小不符：${file.size} != ${meta.size}`);
+  }
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = meta.name;
+  a.style.display = 'none';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  // ⚠️ 不能立刻 revoke：浏览器是异步去读这个 blob 的，大文件尤其。
+  //    5 分钟后回收 URL、15 分钟后删掉 OPFS 里那份（避免站点存储无限涨）。
+  setTimeout(() => URL.revokeObjectURL(url), 300_000);
+  setTimeout(() => void root.removeEntry(safe).catch(() => {}), 900_000);
+  return true;
 }
 
 /* ------------------------------------------------------------------
@@ -682,6 +746,10 @@ export const fileTransfer = {
         available: t.available,
         recipients: t.recipients,
         previewUrl: t.previewUrl,
+        // ⚠️ 等待保存对话框的状态也要带回来：不带的话，切走再切回来会重建出
+        //    一个可点的 ✓，一点就撞上还在挂着的那个对话框。
+        picking: t.picking,
+        pickerFailed: t.pickerFailed,
       });
       n++;
     }
@@ -972,13 +1040,59 @@ export const fileTransfer = {
     } else if (opts.reuseHandle && this._handles.has(file_id)) {
       handle = this._handles.get(file_id);
     } else {
+      // ⚠️ 已经有一个保存对话框在等 → **绝不能再调一次**（见 PICKER_STUCK_MS 说明）。
+      //    这里既不报错也不改状态：等那个对话框结束，或超时自动解锁。
+      //
+      //    这是"点 ✓ 变灰、不弹框、再点报 File picker already active"的直接成因：
+      //    首次调用挂住不 settle，而任何一次卡片重绘都会把按钮重建一遍、
+      //    丢掉 disabled，于是第二次点击又发起了调用。
+      if (Date.now() < pickerBusyUntil) {
+        // 别的卡片上那个对话框还没结束 —— 本卡片同样不能再调（Chrome 的 picker
+        // 是**窗口级**的）。但不能让用户卡死在这里：给出「直接下载」这条路，
+        // 它完全不碰系统对话框，所以一个卡住的框不会拖垮整个页面。
+        t.pickerFailed = true;
+        bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, pickerFailed: true });
+        bus.emit(
+          EV.TIP,
+          '有一个保存位置对话框还开着（可能在浏览器其他窗口后面）：可点卡片上的「直接下载」绕开它',
+        );
+        return;
+      }
+      pickerBusyUntil = Date.now() + PICKER_STUCK_MS;
+      // 把"正在等你选保存位置"如实画出来，而不是让 ✓ 无声变灰
+      t.picking = true;
+      bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, picking: true });
+      // 对话框被系统挂起时 Promise 可能一直不 settle —— 到点解锁，
+      // 否则这张卡片就永远点不动了（我们看不到、也取消不了那个对话框）。
+      const stuckTimer = setTimeout(() => {
+        if (!t.picking) return;
+        pickerBusyUntil = 0;
+        t.picking = false;
+        bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, picking: false });
+        bus.emit(
+          EV.TIP,
+          '保存位置对话框好像没出现（也可能在浏览器其他窗口后面）：可点卡片上的「直接下载」绕开它',
+        );
+      }, PICKER_STUCK_MS);
       try {
         handle = await pickSaveHandle(meta);
       } catch (e) {
         if (e?.name === 'AbortError') return this.reject(file_id, '已取消保存');
-        t.error = `无法选择保存位置：${e?.message ?? e}`;
-        bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, error: t.error });
-        bus.emit(EV.TIP, t.error);
+        t.pickerFailed = true;
+        t.error = `无法选择保存位置：${pickerHint(e)}`;
+        bus.emit(EV.TIP, `${t.error}（可点卡片上的「直接下载」）`);
+        return;
+      } finally {
+        clearTimeout(stuckTimer);
+        pickerBusyUntil = 0;
+        t.picking = false;
+        bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: t.state, picking: false, error: t.error });
+      }
+      // ⚠️ 对话框挂着的这段时间里，用户可能已经走了「直接下载」兜底 ——
+      //    那时传输早开始了，这里再发一次会产生第二个接收链路（Rust 侧会
+      //    以"该文件正在接收中"拒绝）。直接让路。
+      if (t.state === 'active' || t.state === 'done') {
+        this._handles.set(file_id, handle);
         return;
       }
       this._handles.set(file_id, handle);
@@ -1004,6 +1118,47 @@ export const fileTransfer = {
       t.state = 'failed';
       t.error = String(e?.message ?? e);
       bus.emit(EV.TIP, `接收失败：${t.error}`);
+      bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'failed', error: t.error });
+    }
+  },
+
+  /**
+   * 兜底：**不弹保存对话框**，直接收进浏览器的 OPFS，再触发一次普通下载。
+   *
+   * 为什么需要它：`showSaveFilePicker` 是系统级对话框，我们既看不到也控制不了。
+   * 实测遇到过"调用被受理、框就是不出现、Promise 永远不 settle"——
+   * 在那台机器上用户**完全没法收文件**。这条路完全不依赖对话框，
+   * 只要求浏览器支持 OPFS（和 File System Access 同一批浏览器）。
+   *
+   * 代价（说清楚）：
+   *   - 文件会先在**站点存储**（OPFS）里落一份，然后由浏览器从它下载到默认目录，
+   *     因此期间会占双份磁盘；下载完我们定时清掉 OPFS 那份。
+   *   - 走的是浏览器默认下载位置 + 默认下载行为（不弹"另存为"）。
+   */
+  async downloadInstead(file_id) {
+    const t = transfers.get(file_id);
+    if (!t || t.direction !== 'recv') return;
+    if (!navigator.storage?.getDirectory) {
+      bus.emit(EV.TIP, '这个浏览器不支持直接下载兜底，请用 Chrome / Edge');
+      return;
+    }
+    const { meta } = t;
+    t.state = 'active';
+    t.error = '';
+    t.fallback = true;
+    bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'active', error: '', fallback: true });
+    bus.emit(EV.TIP, '已改为直接下载：收完后会出现在浏览器的下载内容里');
+    rememberInvite(t.room, meta);
+    try {
+      // useOpfs=true：句柄由 Worker 自己造，主线程不参与（也不需要用户手势）
+      await net.client.call('accept', file_id, meta, null, true, true, t.room);
+      await saveFromOpfs(meta);
+      bus.emit(EV.TIP, `「${meta.name}」已下载，请查看浏览器的下载内容`);
+    } catch (e) {
+      if (t.state === 'paused') return;
+      t.state = 'failed';
+      t.error = String(e?.message ?? e);
+      bus.emit(EV.TIP, `直接下载失败：${t.error}`);
       bus.emit(EV.FILE_CARD_UPDATE, { file_id, state: 'failed', error: t.error });
     }
   },

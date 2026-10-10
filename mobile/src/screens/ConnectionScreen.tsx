@@ -204,7 +204,7 @@ export function ConnectionScreen({
                 <Text style={styles.peerSeen}>
                   {/* 对方多久没出声。这个数字**比"在线"更有信息量** ——
                       能看到心跳是不是还在动 */}
-                  {lastSeenText(now, p.last_seen_ms)}
+                  {lastSeenText(now, p.lastSeenMs)}
                 </Text>
               </View>
             ))

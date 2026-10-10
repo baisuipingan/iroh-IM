@@ -79,7 +79,13 @@ async fn main() -> Result<()> {
         anchor_id: env_opt("FILETEST_ANCHOR_ID"),
         anchor_relay: env_opt("FILETEST_ANCHOR_RELAY"),
         history_dir: None,
+        rendezvous_id: None,
+        rendezvous_relay: None,
+        history_id: None,
+        history_relay: None,
         serve_history: false,
+        serve_rendezvous: false,
+        join_timeout_ms: None,
     })
     .await?;
 

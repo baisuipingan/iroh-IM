@@ -202,6 +202,7 @@ pub const FRAME_DONE: u8 = 3;
 
 /// 文件元信息（邀约里带的全部内容，不含文件本身）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct FileMeta {
     /// 本次传输的随机 id（16 hex）
     pub file_id: String,
@@ -268,7 +269,7 @@ impl FileCtrl {
                 let size = m.size.to_string();
                 let chunk = m.chunk_size.to_string();
                 encode_fields(&[
-                    "f3",
+                    crate::sigfmt::PROTO_V5,
                     // ⚠️ 房间进载荷（v4，缺陷 F6）：否则 A 房间的邀约可以被
                     //    搬进 B 房间，让 B 的人点开一张"来自别的房间"的卡片。
                     "room",
@@ -302,7 +303,7 @@ impl FileCtrl {
                 have,
                 receiver_relay,
             } => encode_fields(&[
-                "f3",
+                crate::sigfmt::PROTO_V5,
                 "room",
                 room,
                 "accept",
@@ -318,7 +319,7 @@ impl FileCtrl {
                 receiver_relay.as_str(),
             ]),
             FileCtrl::Reject { file_id, reason } => encode_fields(&[
-                "f3",
+                crate::sigfmt::PROTO_V5,
                 "room",
                 room,
                 "reject",
@@ -334,7 +335,7 @@ impl FileCtrl {
             FileCtrl::Done { file_id, ok, reason } => {
                 let ok_s = if *ok { "1" } else { "0" };
                 encode_fields(&[
-                    "f3",
+                    crate::sigfmt::PROTO_V5,
                     "room",
                     room,
                     "done",

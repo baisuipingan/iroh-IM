@@ -212,18 +212,38 @@ bash scripts/deploy-web.sh
 
 ## 4. 协议版本变更（破坏性，慎重）
 
-签名载荷带协议版本（`v4` / `p4` / `l4` / `q3` / `f3` …）。**改签名载荷 = bump 版本**，
-这会同时废掉新旧两端，必须做三件事：
+签名载荷带协议版本。**v5 起只有**一个**版本串**（`sigfmt::PROTO_V5`，在
+`client-wasm/src/sigfmt.rs`），不再是"每个消息族一个标签"（v4 及以前是
+`p4` / `l3` / `q3` / `f3` 各一套 —— 那会让混跑时**只有一部分帧**被拒，语义含糊）。
+**改签名载荷 = bump 这个常量**，它会同时废掉新旧两端。
 
-1. roomd 与前端**同时**升级
-2. **清掉旧历史**（旧 `.jsonl` 在新代码下验不过，加载时会被当作无效记录丢弃）：
+要做的事（顺序不能反，2026-10-10 的 v5 切换就是照这个做的，全过程与实测证据见
+`docs/release-2026-10-10-protocol-v5.md`）：
+
+1. **先备份**（SQLite 一致性快照 + 身份）：
    ```bash
-   ssh root@<host> 'mv /opt/iroh/roomd/data/history /opt/iroh/roomd/data/history-v<旧版本>-$(date +%Y%m%d-%H%M%S)'
-   # 轮换而不是删除 —— 万一要回滚还能拿回来
+   ssh root@<host> systemctl start roomd-backup.service
+   ssh root@<host> 'ls -la /opt/iroh/backups/roomd/ | tail -3'   # 确认真的生成了
    ```
-   **`identity.key` 绝对不能动。**
-3. 第 1、2 步之间有一个"混跑窗口"：先升级的那一侧发出的消息会被另一侧静默丢弃。
-   自建小规模场景通常可接受；要完全避免就挑没人用的时候做。
+2. **roomd → 前端 → agent**，**同一窗口内**换完（顺序反了也一样废，见第 4 条）。
+   agent 侧还要一起换 `agent-pi/src/protocol.gen.ts` —— 适配器会拿 `hello` 里的
+   `chatProtocol` 跟自己支持的版本比，不匹配就**拒绝启动**（这是故意的，别绕过）。
+3. **清掉旧历史**（旧签名的行在新代码下验不过，加载时会被当作无效记录逐条丢弃）：
+   ```bash
+   ssh root@<host> 'cd /opt/iroh/roomd && docker stop roomd \
+     && mkdir -p data/history/cleared-$(date +%Y%m%d-%H%M%S) \
+     && mv data/history/history.db* data/history/cleared-*/ && docker start roomd'
+   # ⚠️ db / -wal / -shm 三个要**一起**移走；轮换而不是删除，万一要回滚还能拿回来。
+   # **`identity.key` 绝对不能动**（动了 EndpointId 就变，前端配置全废）。
+   ```
+4. **混跑窗口是真实代价，不是纸面风险**（实测）：
+   - 新 roomd × 旧客户端 ⇒ 旧端发的消息被 `拒绝写入历史：验签失败`，房间里互相看不见；
+   - 旧 roomd × 新客户端 ⇒ 同样是全线丢消息。
+   所以别"今天先升 roomd、明天再上前端"。
+
+⚠️ **前端这次一定要 bump `net.js` 的 `BUILD`**：wasm 是按
+`pkg/iroh_web_bg.wasm?b=<BUILD>` 缓存的，不 bump 的话**已经来过页面的人会继续跑旧 wasm**，
+而旧 wasm 就是旧协议 —— 对着新 roomd 全线丢消息。（v5 那次第一次发版漏了，补发了一次。）
 
 **只在 `canonical()` 里加了字段、没 bump 版本**，是最危险的情况 ——
 两端都认为自己是对的，但签名对不上，表现为大面积"签名无效，丢弃"。

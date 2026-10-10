@@ -34,8 +34,17 @@
 /// - v1：最初版（仅文本）
 /// - v2：加了文件证明的 4 个字段
 /// - v3：改用无歧义长度前缀编码，并把 `id` 纳入签名
-/// - **v4：把「房间标识」纳入全部签名载荷**（ChatMessage / Presence /
-///   LeaveMsg / FileQuery / FileCtrl）。
+/// - v4：把「房间标识」纳入全部签名载荷（ChatMessage / Presence /
+///   LeaveMsg / FileQuery / FileCtrl）
+/// - **v5：把版本串**统一**成这一个**（原来每个消息族各自一个标签：
+///   `l3` / `q3` / `f3` / `p4`，于是"混跑"时只有**一部分**帧会被拒，
+///   语义含糊）。同时配合"服务端把协议版本放进响应"的握手：
+///   新客户端能**明确**发现对端是旧版并提示刷新，而不是静默丢消息。
+///
+/// ## ⚠️ 破坏性变更（必须一起升级）
+///
+/// v4→v5 同样要求 **roomd / 前端 / agent 同时升级，并清掉旧历史**：
+/// 旧标签签出来的消息在新代码下验不过，会被当作"验签失败"丢弃。
 ///
 /// ## v4 为什么必要
 ///
@@ -50,7 +59,7 @@
 /// 载荷变了 ⇒ 旧客户端的消息在新客户端上**验签失败并被丢弃**（只有日志，
 /// 用户侧无提示）。升级必须 **roomd 与前端同时**，并且**清掉旧历史**
 /// （旧 `.jsonl` 里的消息在新代码下验不过，会在加载时被当作"验签失败"丢弃）。
-pub const PROTO_V4: &str = "v4";
+pub const PROTO_V5: &str = "v5";
 
 /// 把若干字段编码成**无歧义**的规范化字符串。
 ///
@@ -58,9 +67,9 @@ pub const PROTO_V4: &str = "v4";
 /// 因此内容里含什么字符都不会影响解析边界。
 ///
 /// ```
-/// use iroh_web::sigfmt::encode_fields;
-/// let a = encode_fields(&["v4", "abc", "hello", "a|b|c"]);
-/// let b = encode_fields(&["v4", "abc", "hello|", "b|c"]);
+/// use iroh_web::sigfmt::{encode_fields, PROTO_V5};
+/// let a = encode_fields(&[PROTO_V5, "abc", "hello", "a|b|c"]);
+/// let b = encode_fields(&[PROTO_V5, "abc", "hello|", "b|c"]);
 /// assert_ne!(a, b);   // 分隔符方案下这两个是相等的
 /// ```
 pub fn encode_fields(fields: &[&str]) -> String {
@@ -94,16 +103,16 @@ mod tests {
 
     #[test]
     fn 分隔符注入不再产生相同编码() {
-        let a = encode_fields(&["v4", "Alice", "A|B"]);
-        let b = encode_fields(&["v4", "Alice|A", "B"]);
+        let a = encode_fields(&[PROTO_V5, "Alice", "A|B"]);
+        let b = encode_fields(&[PROTO_V5, "Alice|A", "B"]);
         assert_ne!(a, b, "分隔符歧义没有被消除");
     }
 
     #[test]
     fn 字段边界由长度决定() {
         // 内容含冒号也无所谓，冒号前的是长度不是内容的一部分
-        let a = encode_fields(&["v4", "x:1", "y"]);
-        let b = encode_fields(&["v4", "x", "1:y"]);
+        let a = encode_fields(&[PROTO_V5, "x:1", "y"]);
+        let b = encode_fields(&[PROTO_V5, "x", "1:y"]);
         assert_ne!(a, b);
     }
 

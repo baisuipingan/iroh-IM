@@ -76,4 +76,12 @@ export const EV = {
   // 为什么不让时间线直接画：只有它才知道"发送方现在还在不在、还愿不愿意提供"
   FILE_PROOF: 'file-proof',         // { room, m }
   FILE_OPEN: 'file-open',           // 点了历史里的文件卡片 → 请发送方重发邀约
+  FILE_FALLBACK: 'file-fallback',   // 保存位置对话框没出来时改走「直接下载」
+  // 暂时联系不上房间里的任何其他人（常驻节点重启中 / 中继不可达）。
+  // ⚠️ 不是"进房失败"：房间已经进了，消息会排队等邻居。
+  ISOLATED: 'isolated',             // { room, isolated: boolean }
+  // v5 握手：本端与房间服务端的协议版本不一致（Rust 侧 `RoomEvent::ProtocolMismatch`）。
+  // ⚠️ 这是**页面级**的条件，不是房间级的 —— 可能在任何进房动作之前就到，
+  //    所以别按"只认当前房间"的方式过滤（那样会把它丢掉）。
+  PROTOCOL_MISMATCH: 'protocol-mismatch',   // { room, ours, theirs }
 };

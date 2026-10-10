@@ -4,6 +4,18 @@
  * ==========================================================================*/
 
 /** HTML 转义（唯一允许拼接 HTML 的地方用它） */
+/**
+ * 窄屏断点 —— **必须与 `frontend/css/layout.css` 里
+ * `@media (max-width: 760px)` 保持一致**（那里侧栏会变成盖住聊天区的抽屉）。
+ * 放在这里是为了别再散落成魔法数字：改宽度时 grep 这一个名字即可。
+ */
+export const NARROW_QUERY = '(max-width: 760px)';
+
+/** 当前是不是抽屉布局（窄屏） */
+export function isNarrow() {
+  return typeof matchMedia === 'function' && matchMedia(NARROW_QUERY).matches;
+}
+
 export function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',

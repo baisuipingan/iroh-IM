@@ -1,0 +1,16 @@
+{
+  "//": "agent-pi 的类型检查。它此前**完全没有**类型检查（Node 的类型剥离只剥不查），于是生成类型在这边等于没有约束。⚠️ 用移动端那份 typescript/@types/node：本仓库不在 agent-pi 里重复装一套（那里只装 pi SDK）。",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "typeRoots": ["../mobile/node_modules/@types"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

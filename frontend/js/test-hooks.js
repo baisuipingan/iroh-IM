@@ -43,10 +43,25 @@ let stateReaders = {};
  * @param {object}   deps.composerInternals { autoGrow, syncSendBtn }
  * @param {object}   deps.readers           { myId(), joinedRoom() } —— main.js 的模块私有变量
  */
+/** 启动流程跑完后由 main.js 调用（见上面 `__iroh_booted` 的说明） */
+export function markBooted() {
+  window.__iroh_booted = true;
+}
+
 export function installTestHooks({ openRoom, composerInternals: ci, readers } = {}) {
   openRoomFn = openRoom || null;
   composerInternals = ci || null;
   stateReaders = readers || {};
+
+  /* ---------- 启动完成标志 ----------
+   *
+   * ⚠️ 为什么需要：`window.__state` 在**钩子装好**时就有了，而启动流程还要继续跑
+   *    （连中继、`sidebar.show('chats')`、autostart…）。测试如果只等 `__state`，
+   *    就会和启动尾巴抢时序 —— 实测：窄屏下启动末尾那句 `show('chats')` 会把侧栏抽屉
+   *    重新打开，正好盖住测试后面要点的元素，表现为**偶发**的 "intercepts pointer events"。
+   *    所以这里给一个明确的"启动跑完了"信号，测试等它而不是猜。
+   */
+  window.__iroh_booted = false;
 
   /* ---------- 应用状态（e2e 断言的主要入口） ---------- */
 

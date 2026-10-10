@@ -28,10 +28,20 @@ BIN=iroh-agent
 DIR="${AGENT_DIR:-/root/.config/iroh-agent}"
 PREFIX="${AGENT_PREFIX:-/usr/local/bin}"
 REPO="${AGENT_REPO:-baisuipingan/iroh-IM}"
-# 可自建镜像地址（把 Release 里的二进制挂上去也行）
-BASE_URL="${AGENT_RELEASE_BASE:-https://github.com/$REPO/releases/latest/download}"
+# 可自建镜像地址（把 Release 里的二进制挂上去也行）；留空则按 `AGENT_VERSION`
+# 或"最新的 agent-* Release"解析（见下面的 latest_tag）
+BASE_URL="${AGENT_RELEASE_BASE:-}"
 VERSION="${AGENT_VERSION:-}"
 CONFIRM="${CONFIRM:-}"
+
+# ⚠️ "latest" 按**本产物族的 tag 前缀**解析，不能用 GitHub 的 `releases/latest`：
+# 这个仓库有两条产物线（`agent-v*` / `android-v*`），而 Latest 全局只有一个，
+# 谁最后发布谁就是它，另一条线立刻 404（2026-10-10 真踩到）。
+latest_tag() {   # $1 = tag 前缀
+  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null \
+    | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"\(.*\)"/\1/' \
+    | grep "^$1" | head -1
+}
 
 # ⚠️ set -u 下**每一个**被读的变量都必须先有默认值。
 # 漏一个就像踩陷阱：`[ -n "$ANCHOR_RELAY" ]` 在调用方没传这个变量时
@@ -115,6 +125,12 @@ install_binary() {
 
   if [ -n "$VERSION" ]; then
     BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
+  elif [ -z "$BASE_URL" ]; then
+    # 没显式给版本、也没给镜像地址 ⇒ 取**最新的 agent-* Release**（不是 GitHub 的 Latest）
+    V="$(latest_tag agent-v)"
+    [ -n "$V" ] || die "没能从 GitHub 解析出 agent 的 Release（网络？）—— 也可以显式指定：AGENT_VERSION=agent-v1.2.0 $0"
+    ok "latest → $V"
+    BASE_URL="https://github.com/$REPO/releases/download/$V"
   fi
   c '0;36' "  下载 $BASE_URL/$tarball"
   if ! curl -fsSL --retry 3 -o "$tmp/$tarball" "$BASE_URL/$tarball"; then

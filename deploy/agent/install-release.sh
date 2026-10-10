@@ -4,10 +4,13 @@
 # 这是"用户实际会走的分发链"：releases/download/<tag>/<asset> + 逐产物 sha256。
 # 等待资产出现是给"刚打完 tag、CI 还在构建"的场景用的。
 #
-# 可覆盖的环境变量：VERSION（默认 agent-v1.1.0）、OSNAME/ARCH、BIN_DIR
+# 可覆盖的环境变量：VERSION（默认 agent-v1.2.0）、OSNAME/ARCH、BIN_DIR
+#
+# ⚠️ 默认值必须**跟着协议走**：v1.1.0 是 v4 协议，对着已切到 v5 的 roomd
+#    收发全是静默丢消息（实测）。协议 bump 时这里要一起改。
 set -euo pipefail
 
-VERSION="${VERSION:-agent-v1.1.0}"
+VERSION="${VERSION:-agent-v1.2.0}"
 OSNAME="${OSNAME:-linux}"
 ARCH="${ARCH:-amd64}"
 EXT=tar.gz

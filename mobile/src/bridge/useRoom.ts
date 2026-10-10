@@ -71,6 +71,21 @@ export interface RoomState {
   files: Record<string, FileInviteState>;
   /** **我发出的**文件：file_id → 状态（等对方接收 / 传输中 / 完成） */
   outFiles: Record<string, OutFileState>;
+  /**
+   * 暂时联系不上房间里的任何其他人（常驻节点重启中 / 那台中继不可达）。
+   *
+   * ⚠️ 与 `error` 是两回事：房间**已经进去了**，消息会排队等邻居。
+   *   UI 该显示"正在重连"，而不是"进房失败"。
+   */
+  isolated: boolean;
+  /**
+   * **协议版本不一致**（v5 握手）：移动端与房间服务端谈的不是同一个版本。
+   *
+   * ⚠️ 这是**应用级**条件，不是房间级：可能在任何一次进房动作之前就到，
+   *   所以先存下来、UI 一直显示 —— 它不会自愈，只能靠升级/刷新。
+   *   `theirs` 为空串 = 对端响应里根本没这个字段（真正的旧版）。
+   */
+  protocolMismatch: { ours: string; theirs: string } | null;
 }
 
 export interface RoomActions {
@@ -144,6 +159,10 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<Record<string, FileInviteState>>({});
   const [outFiles, setOutFiles] = useState<Record<string, OutFileState>>({});
+  const [isolated, setIsolated] = useState(false);
+  const [protocolMismatch, setProtocolMismatch] = useState<{ ours: string; theirs: string } | null>(
+    null,
+  );
 
   /** 已见过的消息 id —— 去重用的（约束 3） */
   const seen = useRef(new Set<string>());
@@ -242,9 +261,20 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           setJoined(true);
           break;
 
-        case 'relay':
-          setRelay(ev.status);
+        // ⚠️ 事件真名是 `relayStatus`（Rust `RoomEvent::RelayStatus{relays}`）。
+        //    改造前这里写的是 `'relay'` + `ev.status` —— 类型不报错（当时是手抄的联合类型），
+        //    但**从来没匹配上过**，于是中继状态只能靠 2 秒轮询兜着。
+        //    现在类型来自 Rust，写错就编译不过；这里按真实形状取第一台。
+        case 'relayStatus': {
+          const first = ev.relays[0];
+          setRelayList(ev.relays);
+          setRelay({
+            url: first?.url ?? null,
+            connected: Boolean(first?.connected),
+            rtt_ms: null, // HTTP 探测的延迟不在协议里，见 native.ts 的说明
+          });
           break;
+        }
 
         case 'history':
           // 历史是**整体替换**（首批）而不是追加
@@ -383,6 +413,24 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
 
         case 'error':
           setError(ev.message);
+          break;
+
+        // 孤立 → 接回来了。
+        //
+        // ⚠️ 刻意**不写进 `error`**：进房是成功的，这是一个会自愈的状态。
+        //   `isolated: false` 时补拉一次历史 —— 孤立期间漏掉的消息
+        //   在常驻节点那边。复用重连那条路径（同一套去重 + 合并逻辑）。
+        case 'isolated':
+          setIsolated(ev.isolated);
+          if (!ev.isolated && roomRef.current) void loadHistoryRef.current(roomRef.current);
+          break;
+
+        // 协议版本不一致（v5 握手）：服务端在响应里带了自己的版本，一比就知道。
+        //
+        // ⚠️ 不写进 `error`：这不是"操作失败"，而是"这一端该升级了"。
+        //   也**不按房间过滤**：它与哪个房间无关，且只提示一次就够（Rust 侧去重）。
+        case 'protocolMismatch':
+          setProtocolMismatch({ ours: ev.ours, theirs: ev.theirs });
           break;
 
         default:
@@ -650,6 +698,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
     roomRef.current = null;
     setRoom(null);
     setJoined(false);
+    setIsolated(false);
     setMessages([]);
     setPeers([]);
     seen.current = new Set();
@@ -674,6 +723,7 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       setPeers([]);
       setJoined(false);
       setError(null);
+      setIsolated(false);
 
       // ② 同步：把房间"钉"进 ref —— 紧随其后的 joined/history 才认得出它
       roomRef.current = roomName;
@@ -874,7 +924,6 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
             name: meta.name,
             size: meta.size,
             mime: meta.mime,
-            root_hash: meta.root_hash,
           },
         };
         setMessages((prev) => [...prev, mine].sort((a, b) => a.ts - b.ts));
@@ -975,6 +1024,8 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       relay,
       relayList,
       joined,
+      isolated,
+      protocolMismatch,
       room,
       nickname,
       error,
@@ -993,7 +1044,10 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
       messages,
       peers,
       relay,
+      relayList,
       joined,
+      isolated,
+      protocolMismatch,
       room,
       nickname,
       error,

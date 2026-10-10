@@ -24,6 +24,8 @@ export function ChatScreen({
   peers,
   relay,
   joined,
+  isolated,
+  protocolMismatch,
   files,
   outFiles,
   onSend,
@@ -43,6 +45,10 @@ export function ChatScreen({
   peers: PeerInfo[];
   relay: RelayStatus;
   joined: boolean;
+  /** 暂时联系不上房间里的其他人（常驻节点重启中 / 中继不可达）——见 useRoom.isolated */
+  isolated: boolean;
+  /** 协议版本不一致（v5 握手）——见 useRoom.protocolMismatch；null = 一致 */
+  protocolMismatch: { ours: string; theirs: string } | null;
   /** 收到的文件邀约：file_id → 状态 */
   files: Record<string, FileInviteState>;
   /** **我发出的**文件：file_id → 状态 */
@@ -173,6 +179,31 @@ export function ChatScreen({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
+        {/* 孤立：进房成功、但暂时看不到别人。
+            ⚠️ 刻意用"提示"而不是错误样式：这不是失败，消息会排队等邻居，
+               后台重连接上后会自动补拉历史。把它画成红色会让人以为发不出去。 */}
+        {isolated ? (
+          <View style={styles.isolated}>
+            <Text style={styles.isolatedText}>
+              暂时联系不上房间里的其他人，正在后台重连。这期间你发的消息会先排队。
+            </Text>
+          </View>
+        ) : null}
+
+        {/* 协议版本不一致：**必须**说出来。
+            旧的表现是两端把对方的消息当"验签失败"悄悄丢掉 —— 用户只会看到
+            "消息丢了"，没有任何线索。这里明确告诉他该升级/刷新了。
+            用错误红：它不会自愈，只能靠升级（与 isolated 那条刻意不同）。 */}
+        {protocolMismatch ? (
+          <View style={styles.protocolMismatch}>
+            <Text style={styles.protocolMismatchText}>
+              当前版本（{protocolMismatch.ours}）与房间服务端（
+              {protocolMismatch.theirs || '旧版'}）不一致：请升级 App，
+              否则双方的消息可能互相收不到。
+            </Text>
+          </View>
+        ) : null}
+
         <FlatList
           ref={listRef}
           style={styles.flex}
@@ -345,4 +376,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#fdecea',
   },
   pickErrText: { fontSize: font.xs, color: '#c62828' },
+  // 孤立提示条：金色系（"稍安勿躁"），不是错误红
+  isolated: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    backgroundColor: '#fff8e1',
+  },
+  isolatedText: { fontSize: font.xs, color: '#8d6e00' },
+  // 协议版本不一致：错误红 —— 这条不会自愈（要升级），别当"稍安勿躁"画成金色
+  protocolMismatch: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    backgroundColor: '#fdecea',
+  },
+  protocolMismatchText: { fontSize: font.xs, color: '#c62828' },
 });

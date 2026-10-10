@@ -17,7 +17,7 @@ use async_channel::{Receiver, Sender};
 use iroh::{
     address_lookup::memory::MemoryLookup,
     endpoint::presets,
-    protocol::{AcceptError, ProtocolHandler, Router},
+    protocol::{AcceptError, DynProtocolHandler, ProtocolHandler, Router, RouterBuilder},
     Endpoint, EndpointAddr, EndpointId, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey,
     Signature, TransportAddr, Watcher,
 };
@@ -44,6 +44,22 @@ use crate::filetransfer::{
 /// 历史消息用的 ALPN（只有常驻节点会响应）。
 pub const HISTORY_ALPN: &[u8] = b"editor.vip/iroh-history/1";
 
+/// **rendezvous** 用的 ALPN：问"这个房间现在有哪些成员"。
+///
+/// ⚠️ 它与 [`HISTORY_ALPN`] 是**两个独立能力**（阶段 B′）：不同的开关、不同的资源闸门、
+///    可以由**不同节点**提供。今天线上是同一个 roomd 同时装着这两个"插件"，
+///    但代码里已经没有"常驻节点"这一个笼统概念了 —— 入口是入口，历史是历史。
+pub const RENDEZVOUS_ALPN: &[u8] = b"editor.vip/iroh-rendezvous/1";
+
+/// **加入声明**用的 ALPN：客户端说"我要用这个房间了"，服务端据此订阅该房间。
+///
+/// ⚠️ 在这条之前，"服务端订阅房间"是**靠拉一次历史的副作用**触发的
+///    （客户端为了触发订阅而发 `fetch_history(room, 1)`，再把结果丢掉）——
+///    把"读数据"当成"我来了"的信号，语义绕、还会白读一次数据库。
+///    阶段 C′ 换成这条明确的声明（这也是阶段 E"多历史提供者"的前置：
+///    每个提供者都能被单独告知）。
+pub const ANNOUNCE_ALPN: &[u8] = b"editor.vip/iroh-announce/1";
+
 /// 房间名 → topic id 的命名空间。
 const TOPIC_NS: &str = "editor.vip/room/1/";
 /// gossip 单条消息上限。
@@ -55,6 +71,16 @@ const TOPIC_NS: &str = "editor.vip/room/1/";
 /// 但如果有第三方客户端，需要约定一致）。消息最终是经中继广播给每个成员的，
 /// 所以这个值不要无脑调太大 —— 真要传大文件，应该走对象存储 + 链接，而不是塞进广播消息。
 pub const MAX_MESSAGE_SIZE: usize = 512 * 1024;   // 512 KB
+
+/// 进房时"等第一个邻居"的默认预算（毫秒）。
+///
+/// ⚠️ 超时**不代表进房失败** —— 见 `RoomNode::join` 的降级逻辑。
+/// 它只决定"用户要等多久才被告知：现在是孤立的"。
+const DEFAULT_JOIN_TIMEOUT_MS: u64 = 8_000;
+
+/// 孤立进房后，后台重连的间隔（起始值 → 上限，指数退避）。
+const RELINK_MIN: Duration = Duration::from_secs(5);
+const RELINK_MAX: Duration = Duration::from_secs(60);
 
 /// presence 广播间隔（成员心跳，决定"静默死亡"的检测粒度）。
 ///
@@ -88,6 +114,7 @@ pub const MAX_FILES_IN_HB: usize = 20;
 /// 完全收不到。把这条证明写进历史后，谁进来都能看到"这里曾经有过一个文件"，
 /// 名字/大小作为上下文；能不能真接收要另外看发送方还在不在（见 `Presence::files`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct FileRef {
     pub file_id: String,
     pub name: String,
@@ -111,6 +138,7 @@ pub struct FileRef {
 ///
 /// v1 = 纯文本；v2 = 加了文件证明的 4 个字段；v3 = 本版。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct ChatMessage {
     pub id: String,
     pub from: String,
@@ -135,7 +163,7 @@ impl ChatMessage {
         let ts = self.ts.to_string();
         let size = f.map(|x| x.size).unwrap_or(0).to_string();
         crate::sigfmt::encode_fields(&[
-            crate::sigfmt::PROTO_V4,
+            crate::sigfmt::PROTO_V5,
             // ⚠️ **房间标识必须进签名载荷**（v4，缺陷 F6）。
             //    否则任何能进目标房间 B 的人，都能把他在房间 A 抓到的
             //    **合法签名消息原样转发进 B** —— 接收方验签通过、id 校验通过，
@@ -264,7 +292,7 @@ impl Presence {
         // 那样 file_id 里含逗号时会和"两个 id"拼出同一串（歧义）。
         // 另外带上清单长度，让"少一项/多一项"也能被发现。
         let mut out = crate::sigfmt::encode_fields(&[
-            "p4",
+            crate::sigfmt::PROTO_V5,
             // 房间进载荷（F6）：否则 A 房间的合法心跳可以被搬进 B 房间，
             // 让某人"在 B 房间里在线、并声称持有某些文件"。
             "room",
@@ -349,7 +377,7 @@ impl LeaveMsg {
         // 房间进载荷（F6）：否则 A 房间的"我走了"可以被重放成"他刚离开 B"，
         // 让 B 房间的人立刻把他摘出成员表、他的文件随之显示过期。
         crate::sigfmt::encode_fields(&[
-            "l3",
+            crate::sigfmt::PROTO_V5,
             "room",
             room,
             "from",
@@ -405,7 +433,7 @@ impl FileQuery {
     pub fn canonical(&self, room: &str) -> String {
         let ts = self.ts.to_string();
         crate::sigfmt::encode_fields(&[
-            "q3",
+            crate::sigfmt::PROTO_V5,
             "room",
             room,
             "from",
@@ -481,6 +509,9 @@ pub enum Wire {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HistoryRequest {
     pub room: String,
+    /// 本端协议版本（服务端据此在日志里发现"还有旧客户端在说话"）
+    #[serde(default)]
+    pub protocol: String,
     #[serde(default = "default_limit")]
     pub limit: usize,
     /// 复合游标 `(ts, id)`：只要 `(msg.ts, msg.id)` 严格小于它的消息。
@@ -495,9 +526,42 @@ fn default_limit() -> usize {
     200
 }
 
+/// rendezvous 请求：`{"room":"..."}`（就一个字段 —— 入口只需要知道"问哪个房间"）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RendezvousRequest {
+    pub room: String,
+    /// 本端协议版本（同上：给服务端留证据）
+    #[serde(default)]
+    pub protocol: String,
+}
+
+/// rendezvous 响应：当前已知的房间成员。
+///
+/// ⚠️ **只回 EndpointId**，不回昵称/文件清单/在线时长 ——
+///    入口的职责是"让你找得到人"，其余信息进房后由 presence 自然获得。
+///    这样响应很小、也不需要额外授权判断（与历史同一条边界：房名即凭据）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RendezvousResponse {
+    /// 服务端协议版本（握手用；缺失 = 对端是旧版）
+    #[serde(default)]
+    pub protocol: String,
+    /// 成员 EndpointId（hex），客户端拿它当 gossip 的候选 bootstrap
+    pub members: Vec<String>,
+    /// 是否因为超过上限被截断（客户端据此知道"还有人，但没全给我"）
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HistoryResponse {
     pub room: String,
+    /// **服务端自己的协议版本**（阶段 v5 的握手，见 [`crate::sigfmt::PROTO_V5`]）。
+    ///
+    /// 客户端拿它和自己比：不一致就**明确提示刷新**，而不是让消息静默验签失败。
+    /// `#[serde(default)]` 是为了让"新客户端 × 旧服务端"这种情况能解析出来 ——
+    /// 字段缺失即"对端是旧版"（这正是我们要能识别的情形）。
+    #[serde(default)]
+    pub protocol: String,
     pub messages: Vec<ChatMessage>,
     /// **房间快照**（常驻节点维护）。让新进房间的人**进房即刻**就有正确视图：
     /// 现在要等最多 10 秒才能从心跳里知道"屋里都有谁"，而文件能不能收
@@ -534,6 +598,7 @@ pub struct MemberSnapshot {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct RelayInfo {
     pub url: String,
@@ -544,6 +609,7 @@ pub struct RelayInfo {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 pub struct PeerInfo {
     pub id: String,
     pub nickname: String,
@@ -558,6 +624,7 @@ pub struct PeerInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum RoomEvent {
     Joined { room: String },
@@ -617,6 +684,35 @@ pub enum RoomEvent {
         total_chunks: u64,
         received_bytes: u64,
         total_bytes: u64,
+    },
+    /// 本端**暂时联系不上房间里的任何其他人**（孤立）。
+    ///
+    /// 典型场景：常驻节点正在重启、或它所在的那台中继不可达。
+    ///
+    /// ⚠️ 这**不是错误**，别当"进房失败"处理：
+    ///   房间进得去、消息也发得出去（gossip 会排队到有邻居为止），
+    ///   只是此刻看不到别人、别人也看不到你。
+    ///
+    /// `isolated: false` 表示**已经重新接上**（后台重连成功），
+    /// 收到它时 UI 应该补拉一次历史 —— 孤立期间漏掉的东西在那边。
+    Isolated { room: String, isolated: bool },
+    /// **协议版本不一致**（v5 的握手）。
+    ///
+    /// ⚠️ 这条是给**新客户端**用的：它发现服务端（或对端）还是旧版时，明确告诉用户
+    ///    "请刷新"，而不是让消息静默验签失败（改造前就是这样，极难排查）。
+    ///    真正的旧客户端没有这段代码 —— 它们只能靠服务端日志发现。
+    ProtocolMismatch { room: String, ours: String, theirs: String },
+    /// **插件自定义事件**（终态 ③ 的扩展点）。
+    ///
+    /// ⚠️ 加这个变体是为了**不再为每个新能力改这张枚举**：核心只负责把插件的消息
+    ///    原样端给 UI，怎么解释由插件那侧决定。既有事件一个都没动（强类型全部保留）。
+    ///
+    /// 边界：**消息格式与签名是协议底座，不是插件** —— 需要签名/验签的东西
+    /// 必须走 `Wire` 那一套，不能从这里绕过去。
+    Plugin {
+        name: String,
+        #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
+        payload: serde_json::Value,
     },
     RelayStatus { relays: Vec<RelayInfo> },
     Error { message: String },
@@ -740,16 +836,40 @@ pub struct RoomOptions {
     /// 中继的共享 token（浏览器走 ?token= 查询参数）
     #[serde(default)]
     pub relay_token: Option<String>,
+    /// **兼容字段**：`rendezvous_*` / `history_*` 没配时，两者都回退到它。
+    ///
+    /// ⚠️ 阶段 B′ 之前"常驻节点"是一个笼统概念（既当房间入口又供历史）。
+    ///    现在拆成两个角色，这个字段只为老配置继续可用。
     #[serde(default)]
     pub anchor_id: Option<String>,
     #[serde(default)]
     pub anchor_relay: Option<String>,
+    /// **rendezvous（房间入口 + 成员目录）**：进房时问它"这房间现在有谁"。
+    #[serde(default)]
+    pub rendezvous_id: Option<String>,
+    #[serde(default)]
+    pub rendezvous_relay: Option<String>,
+    /// **历史提供者**：拉历史走它。可以与 rendezvous 是同一个节点（今天就是）。
+    #[serde(default)]
+    pub history_id: Option<String>,
+    #[serde(default)]
+    pub history_relay: Option<String>,
+    /// 是否注册 **rendezvous** 服务 ALPN（与 `serve_history` 独立开关）
+    #[serde(default)]
+    pub serve_rendezvous: bool,
     /// 常驻节点：历史落盘目录（浏览器不传）
     #[serde(default)]
     pub history_dir: Option<String>,
     /// 常驻节点：是否注册历史服务 ALPN
     #[serde(default)]
     pub serve_history: bool,
+    /// 进房时"等第一个邻居"的预算（毫秒，默认 8000）。
+    ///
+    /// 存在的意义是别让用户在"谁都联系不上"时干等一分半。
+    /// 超时**不再让进房失败** —— 降级为孤立进房 + 后台重连。
+    /// 测试用它把等待压到几百毫秒。
+    #[serde(default)]
+    pub join_timeout_ms: Option<u64>,
 }
 
 /// 房间快照缓存：`room -> 成员表（含各人的文件清单）`。
@@ -862,6 +982,28 @@ const HISTORY_SNAPSHOT_MAX_MEMBERS: usize = 128;
 const HISTORY_SNAPSHOT_MEMBER_MAX_BYTES: usize = 2 * 1024;
 const HISTORY_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 const HISTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+// ---- rendezvous 的闸门（**与历史各管各的**，不共用信号量/超时/上限）----
+/// 同时处理的 rendezvous 连接数上限
+const MAX_RENDEZVOUS_CONCURRENT: usize = 32;
+/// 单个 rendezvous 请求的字节上限（就一个房间名，给足余量即可）
+const MAX_RENDEZVOUS_REQUEST_BYTES: usize = 1024;
+const RENDEZVOUS_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
+const RENDEZVOUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const RENDEZVOUS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const RENDEZVOUS_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+/// 一次最多回多少成员：它是"入口"不是通讯录导出，响应要小
+const MAX_RENDEZVOUS_MEMBERS: usize = 64;
+/// 读 rendezvous **响应**的字节上限（64 个 hex id ≈ 4.4 KB，给足余量）
+const MAX_RENDEZVOUS_RESPONSE_BYTES: usize = 16 * 1024;
+
+// ---- 加入声明的闸门（同样与其它能力各管各的）----
+const MAX_ANNOUNCE_CONCURRENT: usize = 64;
+const MAX_ANNOUNCE_REQUEST_BYTES: usize = 1024;
+const ANNOUNCE_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
+const ANNOUNCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const ANNOUNCE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const ANNOUNCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const HISTORY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const HISTORY_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -908,6 +1050,36 @@ fn valid_history_request(request: &HistoryRequest) -> bool {
                 && id.len() <= MAX_HISTORY_CURSOR_ID_BYTES
                 && !id.chars().any(char::is_control)
         })
+}
+
+/// **服务端侧**的版本握手（v5）：记下对端报来的协议版本，不一致就 `warn!`。
+///
+/// 为什么只记日志、**不拒绝**：v5 的破坏性在于签名载荷里的版本串变了，
+/// 旧客户端发来的消息会在**别的端**验签失败。服务端自己只是转发者 + 存储者，
+/// 拒掉它对谁都没好处，反而会把"有一个旧客户端在说话"这条线索一起吞掉。
+/// 我们要的是**可见**，不是拦截。
+///
+/// 每个 (能力, 版本) 只报一次 —— 旧客户端每次开页面都会敲三下，
+/// 不去的重会把日志刷成噪音，而"是不是还有旧版在跑"这个判断一次就够。
+fn note_client_protocol(theirs: &str, capability: &str) {
+    if theirs == crate::sigfmt::PROTO_V5 {
+        return;
+    }
+    static SEEN: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    if !seen
+        .lock()
+        .unwrap()
+        .insert(format!("{capability}\u{1}{theirs}"))
+    {
+        return;
+    }
+    let label = if theirs.is_empty() { "未上报（旧版）" } else { theirs };
+    warn!(
+        "{capability}: 对端协议版本是 {label}（本端 {}）—— 它发来的消息在别的端会验签失败",
+        crate::sigfmt::PROTO_V5
+    );
 }
 
 /// 历史存储。
@@ -1221,6 +1393,28 @@ pub fn cap_history_by_bytes(mut msgs: Vec<ChatMessage>, max_bytes: usize) -> Vec
     msgs.split_off(keep_from)
 }
 
+/// 加入声明：`{"room":"..."}`。
+///
+/// 它是**声明**不是查询：服务端收到就订阅这个房间（并把它算作"有人在用"），
+/// 返回一个极小的 ack（客户端一般不等它）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnounceRequest {
+    pub room: String,
+    /// 本端协议版本（同上：给服务端留证据）
+    #[serde(default)]
+    pub protocol: String,
+}
+
+/// 加入声明的回执（字段留白给以后扩展；现在是"我收到了"）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AnnounceResponse {
+    /// 服务端协议版本（握手用；缺失 = 对端是旧版）
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub ok: bool,
+}
+
 /// 历史服务（常驻节点侧）：收到请求 → 返回该房间最近 N 条；顺带通知订阅该房间。
 #[derive(Clone, Debug)]
 pub struct HistoryService {
@@ -1292,6 +1486,7 @@ impl ProtocolHandler for HistoryService {
             return Ok(());
         }
         debug!("历史请求 room={} limit={}", req.room, req.limit);
+        note_client_protocol(&req.protocol, "history");
 
         // 第一次见到这个房间 → 让 controller 去订阅（常驻节点自动看住每个被访问的房间）
         let _ = self.join_tx.try_send(req.room.clone());
@@ -1323,6 +1518,7 @@ impl ProtocolHandler for HistoryService {
         };
         let resp = HistoryResponse {
             room: req.room.clone(),
+            protocol: crate::sigfmt::PROTO_V5.to_string(),
             messages,
             // 顺带把房间快照给客户端 —— 他进房就能看到"屋里都有谁、谁能提供哪些文件"
             snapshot,
@@ -1344,6 +1540,324 @@ impl ProtocolHandler for HistoryService {
             connection.close(0u8.into(), b"history close timeout");
         }
         Ok(())
+    }
+}
+
+/// **加入声明服务**：收到 `{room}` → 让 controller 订阅它，并回一个 ack。
+///
+/// 谁装它：**任何房间级服务端能力**（历史 / 入口 …）。今天 roomd 三样都装。
+/// 语义上它属于"服务端能力"这一侧，所以与 `serve_history`/`serve_rendezvous` 一起开关，
+/// 不单独设一个 flag（装了就说明这个节点在乎"谁在用哪个房间"）。
+#[derive(Clone, Debug)]
+pub struct AnnounceService {
+    join_tx: Sender<String>,
+    permits: Arc<Semaphore>,
+}
+
+impl AnnounceService {
+    pub fn new(join_tx: Sender<String>) -> Self {
+        Self {
+            join_tx,
+            permits: Arc::new(Semaphore::new(MAX_ANNOUNCE_CONCURRENT)),
+        }
+    }
+}
+
+impl ProtocolHandler for AnnounceService {
+    async fn accept(
+        &self,
+        connection: iroh::endpoint::Connection,
+    ) -> std::result::Result<(), AcceptError> {
+        let Ok(_permit) = self.permits.clone().try_acquire_owned() else {
+            connection.close(0u8.into(), b"announce busy");
+            return Ok(());
+        };
+        let accepted = n0_future::time::timeout(ANNOUNCE_ACCEPT_TIMEOUT, connection.accept_bi()).await;
+        let (mut send, mut recv) = match accepted {
+            Ok(Ok(streams)) => streams,
+            Ok(Err(error)) => return Err(AcceptError::from_err(error)),
+            Err(_) => {
+                connection.close(0u8.into(), b"announce accept timeout");
+                return Ok(());
+            }
+        };
+        let request = n0_future::time::timeout(
+            ANNOUNCE_REQUEST_TIMEOUT,
+            read_all_bounded(&mut recv, MAX_ANNOUNCE_REQUEST_BYTES),
+        )
+        .await;
+        let req_bytes = match request {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(error)) => {
+                debug!("拒绝加入声明: {error}");
+                connection.close(0u8.into(), b"invalid announce");
+                return Ok(());
+            }
+            Err(_) => {
+                connection.close(0u8.into(), b"announce timeout");
+                return Ok(());
+            }
+        };
+        let req: AnnounceRequest = match serde_json::from_slice(&req_bytes) {
+            Ok(r) => r,
+            Err(e) => {
+                debug!("加入声明解析失败: {e}");
+                connection.close(0u8.into(), b"invalid announce");
+                return Ok(());
+            }
+        };
+        if !valid_history_room(&req.room) {
+            connection.close(0u8.into(), b"invalid announce");
+            return Ok(());
+        }
+        debug!("收到加入声明 room={}", req.room);
+        note_client_protocol(&req.protocol, "announce");
+        // 这就是全部：让 controller 去订阅（其余能力自己会被触发）
+        let _ = self.join_tx.try_send(req.room.clone());
+
+        let body = serde_json::to_vec(&AnnounceResponse {
+            protocol: crate::sigfmt::PROTO_V5.to_string(),
+            ok: true,
+        })
+        .map_err(AcceptError::from_err)?;
+        match n0_future::time::timeout(ANNOUNCE_RESPONSE_TIMEOUT, send.write_all(&body)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(AcceptError::from_err(error)),
+            Err(_) => {
+                connection.close(0u8.into(), b"announce response timeout");
+                return Ok(());
+            }
+        }
+        send.finish()?;
+        if n0_future::time::timeout(ANNOUNCE_CLOSE_TIMEOUT, connection.closed())
+            .await
+            .is_err()
+        {
+            connection.close(0u8.into(), b"announce close timeout");
+        }
+        Ok(())
+    }
+}
+
+/// **rendezvous 服务**（房间入口侧）：收到 `{room}` → 回当前已知成员。
+///
+/// 与 [`HistoryService`] **完全独立**：自己的信号量、自己的超时、自己的字节上限。
+/// 两者今天跑在同一个进程里（roomd 同时装这两个"插件"），但**没有任何共享状态** ——
+/// 要拆成两台机器，只改配置即可（`rendezvous_*` / `history_*` 指向不同节点）。
+impl ProtocolHandler for RendezvousService {
+    async fn accept(
+        &self,
+        connection: iroh::endpoint::Connection,
+    ) -> std::result::Result<(), AcceptError> {
+        // 闸门① 并发：超了直接关，不排队 —— 入口被拖住会连带所有人的进房变慢
+        let Ok(_permit) = self.permits.clone().try_acquire_owned() else {
+            connection.close(0u8.into(), b"rendezvous busy");
+            return Ok(());
+        };
+        // 闸门② accept 超时
+        let accepted =
+            n0_future::time::timeout(RENDEZVOUS_ACCEPT_TIMEOUT, connection.accept_bi()).await;
+        let (mut send, mut recv) = match accepted {
+            Ok(Ok(streams)) => streams,
+            Ok(Err(error)) => return Err(AcceptError::from_err(error)),
+            Err(_) => {
+                connection.close(0u8.into(), b"rendezvous accept timeout");
+                return Ok(());
+            }
+        };
+        // 闸门③ 请求体上限 + 读超时
+        let request = n0_future::time::timeout(
+            RENDEZVOUS_REQUEST_TIMEOUT,
+            read_all_bounded(&mut recv, MAX_RENDEZVOUS_REQUEST_BYTES),
+        )
+        .await;
+        let req_bytes = match request {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(error)) => {
+                debug!("拒绝 rendezvous 请求: {error}");
+                connection.close(0u8.into(), b"invalid rendezvous request");
+                return Ok(());
+            }
+            Err(_) => {
+                connection.close(0u8.into(), b"rendezvous request timeout");
+                return Ok(());
+            }
+        };
+        let req: RendezvousRequest = match serde_json::from_slice(&req_bytes) {
+            Ok(r) => r,
+            Err(e) => {
+                debug!("rendezvous 请求解析失败: {e}");
+                connection.close(0u8.into(), b"invalid rendezvous request");
+                return Ok(());
+            }
+        };
+        // 闸门④ 房间名合法性（与历史用**同一条**规则，不是各写一遍）
+        if !valid_history_room(&req.room) {
+            connection.close(0u8.into(), b"invalid rendezvous request");
+            return Ok(());
+        }
+        debug!("rendezvous 请求 room={}", req.room);
+        note_client_protocol(&req.protocol, "rendezvous");
+
+        // "有人来问这个房间"就是最自然的加入信号：让 controller 去订阅它。
+        // （历史那边是靠"第一次被拉历史"触发订阅；入口被问到时同样该订阅。）
+        let _ = self.join_tx.try_send(req.room.clone());
+
+        let snapshot = snapshot_get(&self.snaps, &req.room);
+        let all: Vec<String> = snapshot
+            .map(|s| s.members.iter().map(|m| m.id.clone()).collect())
+            .unwrap_or_default();
+        // 闸门⑤ 响应规模：只回前 N 个，并如实告知被截断
+        let truncated = all.len() > MAX_RENDEZVOUS_MEMBERS;
+        let members: Vec<String> = all.into_iter().take(MAX_RENDEZVOUS_MEMBERS).collect();
+
+        let body = serde_json::to_vec(&RendezvousResponse {
+            protocol: crate::sigfmt::PROTO_V5.to_string(),
+            members,
+            truncated,
+        })
+            .map_err(AcceptError::from_err)?;
+        match n0_future::time::timeout(RENDEZVOUS_RESPONSE_TIMEOUT, send.write_all(&body)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(AcceptError::from_err(error)),
+            Err(_) => {
+                connection.close(0u8.into(), b"rendezvous response timeout");
+                return Ok(());
+            }
+        }
+        send.finish()?;
+        if n0_future::time::timeout(RENDEZVOUS_CLOSE_TIMEOUT, connection.closed())
+            .await
+            .is_err()
+        {
+            connection.close(0u8.into(), b"rendezvous close timeout");
+        }
+        Ok(())
+    }
+}
+
+/// rendezvous 服务本体（与 `HistoryService` 并列，互不依赖）。
+#[derive(Clone, Debug)]
+pub struct RendezvousService {
+    join_tx: Sender<String>,
+    snaps: Snapshots,
+    permits: Arc<Semaphore>,
+}
+
+impl RendezvousService {
+    pub fn new(join_tx: Sender<String>, snaps: Snapshots) -> Self {
+        Self {
+            join_tx,
+            snaps,
+            permits: Arc::new(Semaphore::new(MAX_RENDEZVOUS_CONCURRENT)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 房间能力（"万物皆插件"的落点）
+// ---------------------------------------------------------------------------
+
+/// 一个**房间级能力**：一个 ALPN + 一组自己的闸门 + 一个处理句柄。
+///
+/// ⚠️ 终态 ③ 就是这一层：**加一个新能力 = 写一个实现 + 注册它**，
+///    既不用改 gossip 消费循环，也不用改 `Router` 的组装代码 ——
+///    核心只认识这个 trait，不认识"历史"或"入口"具体是什么。
+///
+/// 边界（与方案的硬约束一致）：
+///   · 能被插件化的只有**传输之上的能力**（历史 / 入口 / 文件 / 加入声明 …）；
+///     消息格式与签名是协议底座，**不是**插件。
+///   · 每个能力自带资源闸门（并发 / 字节 / 超时），不许绕过。
+pub trait RoomCapability: Send + Sync + std::fmt::Debug + 'static {
+    /// 这个能力用哪个 ALPN 接连接（同一节点内必须唯一）
+    fn alpn(&self) -> &'static [u8];
+    /// 名字（启动日志 / 诊断用）
+    fn name(&self) -> &'static str;
+    /// 装箱成 iroh 的 dyn 句柄（实现通常一行：`Box::new(self.clone())`）
+    fn handler(&self) -> Box<dyn DynProtocolHandler>;
+}
+
+/// 已注册能力的集合 —— **整份代码里唯一**知道"一共有几种能力"的地方。
+#[derive(Debug, Default)]
+pub struct CapabilityRegistry {
+    entries: Vec<(&'static [u8], &'static str, Box<dyn DynProtocolHandler>)>,
+}
+
+impl CapabilityRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register<C: RoomCapability>(&mut self, capability: C) {
+        self.entries.push((capability.alpn(), capability.name(), capability.handler()));
+    }
+
+    /// 并入另一份注册表（`start_with` 的插件入口用）
+    pub fn merge(&mut self, other: CapabilityRegistry) {
+        self.entries.extend(other.entries);
+    }
+
+    /// 已注册能力的名字（启动日志、诊断用）
+    pub fn names(&self) -> Vec<&'static str> {
+        self.entries.iter().map(|(_, name, _)| *name).collect()
+    }
+
+    /// 装进 Router：**只有这里知道"能力"这回事**。
+    /// 核心的其它部分（gossip 消费、事件分发、房间订阅）对具体能力一无所知。
+    pub fn install(self, mut builder: RouterBuilder) -> RouterBuilder {
+        for (alpn, name, handler) in self.entries {
+            debug!("注册房间能力 {name}（alpn={}）", String::from_utf8_lossy(alpn));
+            builder = builder.accept(alpn, handler);
+        }
+        builder
+    }
+}
+
+impl RoomCapability for crate::filetransfer::FileService {
+    fn alpn(&self) -> &'static [u8] {
+        crate::filetransfer::FILE_ALPN
+    }
+    fn name(&self) -> &'static str {
+        "files"
+    }
+    fn handler(&self) -> Box<dyn DynProtocolHandler> {
+        Box::new(self.clone())
+    }
+}
+
+impl RoomCapability for RendezvousService {
+    fn alpn(&self) -> &'static [u8] {
+        RENDEZVOUS_ALPN
+    }
+    fn name(&self) -> &'static str {
+        "rendezvous"
+    }
+    fn handler(&self) -> Box<dyn DynProtocolHandler> {
+        Box::new(self.clone())
+    }
+}
+
+impl RoomCapability for HistoryService {
+    fn alpn(&self) -> &'static [u8] {
+        HISTORY_ALPN
+    }
+    fn name(&self) -> &'static str {
+        "history"
+    }
+    fn handler(&self) -> Box<dyn DynProtocolHandler> {
+        Box::new(self.clone())
+    }
+}
+
+impl RoomCapability for AnnounceService {
+    fn alpn(&self) -> &'static [u8] {
+        ANNOUNCE_ALPN
+    }
+    fn name(&self) -> &'static str {
+        "announce"
+    }
+    fn handler(&self) -> Box<dyn DynProtocolHandler> {
+        Box::new(self.clone())
     }
 }
 
@@ -1382,7 +1896,12 @@ pub struct RoomNode {
     gossip: Gossip,
     secret_key: SecretKey,
     memory: MemoryLookup,
-    anchor: Option<(EndpointId, RelayUrl)>,
+    /// **房间入口**（rendezvous）：进房时问它"这房间现在有谁"，它自己也当候选。
+    rendezvous: Option<(EndpointId, RelayUrl)>,
+    /// **历史提供者**：拉历史连它。与 `rendezvous` 可以是同一个节点，也可以是另一台。
+    history: Option<(EndpointId, RelayUrl)>,
+    /// 本节点是否响应 rendezvous 请求（与 `serve_history` **独立**的开关）
+    serve_rendezvous: bool,
     key_hex: String,
     store: HistoryStore,
     events_tx: Sender<RoomEvent>,
@@ -1395,15 +1914,28 @@ pub struct RoomNode {
     join_rx: Option<Receiver<String>>,
     /// 文件接收服务（数据面）。控制面走 gossip，见 `Wire::File`。
     file_service: FileService,
-    /// 房间快照表。只有本节点充当常驻节点（`serve_history`）时才会被更新 ——
-    /// 普通客户端不维护它（避免白记账）。
+    /// 房间快照表。**只有本节点提供服务端能力**（`serve_history` 或 `serve_rendezvous`）
+    /// 时才维护它 —— 普通客户端不维护（避免白记账；入口靠它回答"这房间有谁"）。
     snaps: Snapshots,
-    /// 本节点是否充当常驻节点（在 `serve_history` 为真时才维护快照）
+    /// 本节点是否响应历史请求
     serve_history: bool,
+    /// 进房时等第一个邻居的预算（见 `RoomOptions::join_timeout_ms`）。
+    join_timeout: Duration,
+    /// 已经报过"协议不一致"的对端版本 —— 同一个版本只提示一次
+    /// （否则每次拉历史都会重复弹）。
+    reported_protocols: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl RoomNode {
     pub async fn start(opts: RoomOptions) -> Result<Self> {
+        Self::start_with(opts, CapabilityRegistry::new()).await
+    }
+
+    /// 同 [`RoomNode::start`]，但允许调用方**追加自定义房间能力**（插件入口）。
+    ///
+    /// 这是"万物皆插件"的接入点：新能力不需要改核心的 dispatch ——
+    /// 注册进来，它的 ALPN 就会被服务，其余部分（gossip 消费、事件、订阅）一无所知。
+    pub async fn start_with(opts: RoomOptions, extra: CapabilityRegistry) -> Result<Self> {
         let store = HistoryStore::new(opts.history_dir.as_ref().map(std::path::PathBuf::from))?;
         if opts.history_dir.is_some() {
             store.load_from_disk();
@@ -1423,20 +1955,34 @@ impl RoomNode {
             anyhow::bail!("中继列表为空");
         }
 
-        let anchor = match (&opts.anchor_id, &opts.anchor_relay) {
-            (Some(id), Some(relay)) => Some((
-                EndpointId::from_str(id).context("anchor id 解析失败")?,
-                RelayUrl::from_str(relay).context("anchor relay 解析失败")?,
-            )),
-            _ => None,
+        // 阶段 B′：把原来笼统的"常驻节点"拆成两个**角色**。
+        //
+        // ⚠️ 老字段 `anchor_*` 仍然生效，作为两者的**共同回退** ——
+        //    部署上今天还是同一个 roomd，所以老配置的行为一模一样；
+        //    但代码里已经没有"一个常驻节点"这个概念了（各有各的开关与闸门）。
+        let parse_role = |id: &Option<String>, relay: &Option<String>, role: &str| -> Result<Option<(EndpointId, RelayUrl)>> {
+            match (id, relay) {
+                (Some(id), Some(relay)) => Ok(Some((
+                    EndpointId::from_str(id).with_context(|| format!("{role} id 解析失败"))?,
+                    RelayUrl::from_str(relay).with_context(|| format!("{role} relay 解析失败"))?,
+                ))),
+                (None, None) => Ok(None),
+                // 半配等于没配，但**不静默**：这类配置错误会让"谁都不在"变得莫名其妙
+                _ => anyhow::bail!("{role} 必须同时提供 id 与 relay"),
+            }
         };
+        let anchor = parse_role(&opts.anchor_id, &opts.anchor_relay, "anchor")?;
+        let rendezvous = parse_role(&opts.rendezvous_id, &opts.rendezvous_relay, "rendezvous")?
+            .or_else(|| anchor.clone());
+        let history = parse_role(&opts.history_id, &opts.history_relay, "history")?
+            .or_else(|| anchor.clone());
 
         // 关掉外部地址发现，靠内存地址表 dial by id
         let memory = MemoryLookup::new();
-        if let Some((id, relay)) = &anchor {
+        for target in [&rendezvous, &history].into_iter().flatten() {
             memory.add_endpoint_info(EndpointAddr {
-                id: *id,
-                addrs: [TransportAddr::Relay(relay.clone())].into_iter().collect(),
+                id: target.0,
+                addrs: [TransportAddr::Relay(target.1.clone())].into_iter().collect(),
             });
         }
 
@@ -1526,17 +2072,32 @@ impl RoomNode {
         // 只影响那一次自动订阅，历史照常返回。
         let (join_tx, join_rx) = async_channel::bounded::<String>(1024);
         let file_service = FileService::new();
-        let mut builder = Router::builder(endpoint.clone())
-            .accept(GOSSIP_ALPN, gossip.clone())
-            .accept(FILE_ALPN, file_service.clone());
+        // ★ 能力注册表：核心只认识"一个能力"，不认识"历史"或"入口"具体是什么。
+        //   gossip 是**底座**（消息怎么传），不是能力（见 `Wire`/`RoomEvent` 的注释）。
+        let mut capabilities = CapabilityRegistry::new();
+        // 所有端都有：文件（数据面 ALPN）
+        capabilities.register(file_service.clone());
+        // 两个服务端能力**各自的开关**：谁开谁装，互不牵连。
+        // （今天 roomd 两个都开；将来想只做入口、不存历史，把 serve_history 关掉即可。）
+        if opts.serve_rendezvous {
+            capabilities.register(RendezvousService::new(join_tx.clone(), snaps.clone()));
+        }
         let join_rx = if opts.serve_history {
-            builder =
-                builder.accept(HISTORY_ALPN, HistoryService::new(store.clone(), join_tx, snaps.clone()));
+            capabilities.register(HistoryService::new(store.clone(), join_tx.clone(), snaps.clone()));
             Some(join_rx)
         } else {
             None
         };
-        let router = builder.spawn();
+        // "在乎谁在用哪个房间"的节点才需要听加入声明（服务端能力 = 两者任一开着）
+        if opts.serve_history || opts.serve_rendezvous {
+            capabilities.register(AnnounceService::new(join_tx.clone()));
+        }
+        // 调用方追加的能力（插件）：核心在这里**原样收下**，不做任何判断
+        capabilities.merge(extra);
+        info!("房间能力：{:?}", capabilities.names());
+        let router = capabilities
+            .install(Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone()))
+            .spawn();
 
         // 中继状态观察
         {
@@ -1569,7 +2130,9 @@ impl RoomNode {
             gossip,
             secret_key,
             memory: memory.clone(),
-            anchor,
+            rendezvous,
+            history,
+            serve_rendezvous: opts.serve_rendezvous,
             key_hex,
             store,
             events_tx,
@@ -1580,6 +2143,10 @@ impl RoomNode {
             file_service,
             snaps,
             serve_history: opts.serve_history,
+            join_timeout: Duration::from_millis(
+                opts.join_timeout_ms.unwrap_or(DEFAULT_JOIN_TIMEOUT_MS),
+            ),
+            reported_protocols: Arc::new(Mutex::new(std::collections::HashSet::new())),
         })
     }
 
@@ -1667,6 +2234,135 @@ impl RoomNode {
         self.inner.lock().unwrap().joined.as_ref().map(|j| j.room.clone())
     }
 
+    /// 本节点**固有的**候选邻居：入口 + 历史提供者（不含"房间里已知的其他人"）。
+    fn bootstrap_ids(&self) -> Vec<EndpointId> {
+        let mut ids = Vec::new();
+        for target in [&self.rendezvous, &self.history].into_iter().flatten() {
+            if !ids.contains(&target.0) {
+                ids.push(target.0);
+            }
+        }
+        ids
+    }
+
+    /// gossip bootstrap 列表 = 入口报的成员 + 固有候选。
+    async fn bootstrap_candidates(&self, room: &str) -> Vec<EndpointId> {
+        let mut ids = self.rendezvous_candidates(room).await;
+        for id in self.bootstrap_ids() {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
+
+    /// 问入口："这个房间现在有谁？"
+    ///
+    /// **尽力而为**：连不上 / 超时 / 解析失败都只记 debug 并返回空 ——
+    /// 入口慢不该把进房拖住，更不该让进房失败（阶段 A 定下的语义）。
+    ///
+    /// 超时预算取进房预算的 1/4（默认约 2 秒，下限 200ms）：它是"锦上添花"的一步，
+    /// 拿不到成员就退化成"只连入口自己"，再不行就是孤立进房。
+    ///
+    /// 向每个服务端角色声明"我要用这个房间了"（阶段 C′ 的显式加入声明）。
+    ///
+    /// **尽力而为**：任何失败（连不上 / 超时）只记 debug 并继续 ——
+    /// 声明丢了最坏结果是"服务端晚一点才知道这个房间"，绝不该让进房失败或明显变慢。
+    ///
+    /// 预算：**每个目标** `join_timeout / 8`（下限 150ms），两个目标合计 ≤ 进房预算的 1/4。
+    /// 同一节点同时扮演两个角色时只发一次（按 EndpointId 去重）。
+    async fn announce_room(&self, room: &str) {
+        let mut targets: Vec<&(EndpointId, RelayUrl)> = Vec::new();
+        for target in [&self.rendezvous, &self.history].into_iter().flatten() {
+            if !targets.iter().any(|t| t.0 == target.0) {
+                targets.push(target);
+            }
+        }
+        let budget = (self.join_timeout / 8).max(Duration::from_millis(150));
+        for (id, relay) in targets {
+            let sent = n0_future::time::timeout(budget, async {
+                let conn = self
+                    .endpoint
+                    .connect(EndpointAddr::new(*id).with_relay_url(relay.clone()), ANNOUNCE_ALPN)
+                    .await
+                    .context("连接服务端能力失败")?;
+                let (mut send, mut recv) = conn.open_bi().await?;
+                let req = AnnounceRequest {
+                    room: room.to_string(),
+                    protocol: crate::sigfmt::PROTO_V5.to_string(),
+                };
+                send.write_all(&serde_json::to_vec(&req)?).await?;
+                send.finish()?;
+                // 读掉 ack（有界），让对端写完、连接干净收尾。
+                // 顺带把版本读出来做握手 —— 这条是最早能发现"服务端是旧版"的时机。
+                // 解析不出来不算错（ack 的字段以后还可能加），按"未上报"处理。
+                let bytes = read_all_bounded(&mut recv, MAX_RENDEZVOUS_RESPONSE_BYTES).await?;
+                let ack: AnnounceResponse = serde_json::from_slice(&bytes).unwrap_or_default();
+                anyhow::Ok(ack)
+            })
+            .await;
+            match sent {
+                Ok(Ok(ack)) => {
+                    self.note_peer_protocol(&ack.protocol, room).await;
+                    debug!("已向服务端声明加入房间 {room}");
+                }
+                Ok(Err(e)) => debug!("加入声明失败（继续进房）: {e:#}"),
+                Err(_) => debug!("加入声明超时（继续进房）"),
+            }
+        }
+    }
+
+    /// 顺带一个副作用：入口收到请求就会去订阅这个房间（同历史那条路），
+    /// 所以这一问本身也是"有人来了"的信号。
+    async fn rendezvous_candidates(&self, room: &str) -> Vec<EndpointId> {
+        let Some((id, relay)) = &self.rendezvous else {
+            return Vec::new();
+        };
+        let budget = (self.join_timeout / 4).max(Duration::from_millis(200));
+        let query = n0_future::time::timeout(budget, async {
+            let conn = self
+                .endpoint
+                .connect(EndpointAddr::new(*id).with_relay_url(relay.clone()), RENDEZVOUS_ALPN)
+                .await
+                .context("连接房间入口失败")?;
+            let (mut send, mut recv) = conn.open_bi().await?;
+            let req = RendezvousRequest {
+                room: room.to_string(),
+                protocol: crate::sigfmt::PROTO_V5.to_string(),
+            };
+            send.write_all(&serde_json::to_vec(&req)?).await?;
+            send.finish()?;
+            let bytes = read_all_bounded(&mut recv, MAX_RENDEZVOUS_RESPONSE_BYTES).await?;
+            let resp: RendezvousResponse = serde_json::from_slice(&bytes)?;
+            anyhow::Ok(resp)
+        })
+        .await;
+        match query {
+            Ok(Ok(resp)) => {
+                // v5 握手：入口是"进房第一个会见到的服务端"，版本对不上在这里就能发现
+                self.note_peer_protocol(&resp.protocol, room).await;
+                let ids: Vec<EndpointId> = resp
+                    .members
+                    .iter()
+                    .filter_map(|m| EndpointId::from_str(m).ok())
+                    .collect();
+                if resp.truncated {
+                    debug!("入口报的成员被截断（只用了前 {MAX_RENDEZVOUS_MEMBERS} 个）");
+                }
+                debug!("入口为房间 {room} 报了 {} 个成员", ids.len());
+                ids
+            }
+            Ok(Err(e)) => {
+                debug!("入口查询失败（继续进房）: {e:#}");
+                Vec::new()
+            }
+            Err(_) => {
+                debug!("入口查询超时（继续进房）");
+                Vec::new()
+            }
+        }
+    }
+
     /// 进入房间。重复进入同一房间只更新昵称。
     pub async fn join(&self, room: &str, nickname: &str) -> Result<()> {
         anyhow::ensure!(valid_history_room(room), "房间名必须为 1–256 UTF-8 字节且不能包含控制字符");
@@ -1684,7 +2380,7 @@ impl RoomNode {
             }
             let sender = self.inner.lock().unwrap().joined.as_ref().map(|j| j.sender.clone());
             if let Some(sender) = sender {
-                sender.lock().await.join_peers(self.anchor.iter().map(|(id, _)| *id).collect()).await?;
+                sender.lock().await.join_peers(self.bootstrap_ids()).await?;
             }
             self.broadcast_presence().await;
             return Ok(());
@@ -1697,66 +2393,61 @@ impl RoomNode {
             g.peers.clear();
         }
 
-        let bootstrap: Vec<EndpointId> = self.anchor.iter().map(|(id, _)| *id).collect();
+        // 阶段 B′ 的关键一步：**候选取自入口，而不是写死的某个节点**。
+        //
+        // 先问 rendezvous "这房间现在有谁"，把那些人也当候选 ——
+        // 入口只是"你总能找到的第一个人"，不是唯一能连的人。
+        // 拿不到候选也照样往下走（阶段 A 的降级：孤立进房 + 后台重连）。
+        let bootstrap: Vec<EndpointId> = self.bootstrap_candidates(room).await;
 
-        // ⚠️ 先"敲一下"常驻节点：它是按需订阅房间的（收到历史请求才订阅）。
-        //    不先敲，就会出现死锁：客户端等 anchor 进房间，anchor 等客户端来要历史。
-        let mut initial_snapshot = None;
-        if !bootstrap.is_empty() {
-            match n0_future::time::timeout(Duration::from_secs(10), self.fetch_history(room, 1)).await {
-                Ok(Ok(response)) => {
-                    initial_snapshot = response.snapshot;
-                    info!("已通知常驻节点订阅房间 {room}");
-                }
-                Ok(Err(e)) => warn!("通知常驻节点失败（继续尝试进房）: {e}"),
-                Err(_) => warn!("通知常驻节点超时（继续尝试进房）"),
-            }
-        }
+        // ★ 显式加入声明（阶段 C′）：告诉每个服务端角色"我要用这个房间了"。
+        //
+        // 以前这件事是**靠拉一次历史的副作用**做的（`fetch_history(room, 1)` 再把结果丢掉）——
+        // 把"读数据"当成"我来了"的信号，语义绕，还会白读一次数据库。
+        // 现在是一条明确的声明，且**尽力而为**：发不出去只记 debug，绝不影响进房。
+        //
+        // ⚠️ 成员/文件快照不再在这里顺手拿：应用层进房后那次**真正的**历史请求会带回它
+        //    （两条路都走 `apply_snapshot`，语义一致），这里省掉一次多余的查询。
+        self.announce_room(room).await;
 
         // ⚠️ 关键：`subscribe()` 不等 bootstrap 连上就返回；若那次拨号失败，本端会永远孤岛
         //    （实测：两个浏览器同时进房，一个收到消息、另一个什么也收不到）。
-        //    有 bootstrap 时用 `subscribe_and_join()`（等至少一个连接建立），并带重试。
-        let gossip_topic = if bootstrap.is_empty() {
-            self.gossip.subscribe(topic, vec![]).await?
+        //    所以有 bootstrap 时用 `subscribe_and_join()`（等至少一个连接建立）。
+        //
+        // ★★ 但它**不再重试到死、也不再失败**。
+        //
+        //    旧写法：4 次 × 20 秒，全失败就 `bail!("进房间失败")`。
+        //    后果是常驻节点成了进房的**硬前置**：它一挂（或它那台中继不可达），
+        //    房间里所有人一起被挡在门外 —— 哪怕彼此都在线、中继也好好的。
+        //
+        //    新写法：给这次等待一个**预算**，超时就降级为「孤立进房」——
+        //      · 房间进得去（`subscribe` 不要求有邻居）
+        //      · 消息发得出去（gossip 会把它们排队，等有邻居时投递）
+        //      · 起一个后台任务继续重连，接上后自动解除孤立（见下面的 t3）
+        //    于是 roomd 从"进房必需"降级成"房间里一个恰好常在线的用户"。
+        let (gossip_topic, isolated) = if bootstrap.is_empty() {
+            (self.gossip.subscribe(topic, vec![]).await?, false)
         } else {
-            let mut last_err: Option<anyhow::Error> = None;
-            let mut topic_opt = None;
-            for attempt in 1..=4 {
-                match n0_future::time::timeout(
-                    Duration::from_secs(20),
-                    self.gossip.subscribe_and_join(topic, bootstrap.clone()),
-                )
-                .await
-                {
-                    Ok(Ok(t)) => {
-                        info!("第 {attempt} 次进入房间 {room} 成功（已连上至少一个成员）");
-                        topic_opt = Some(t);
-                        break;
-                    }
-                    Ok(Err(e)) => {
-                        warn!("第 {attempt} 次 join 失败: {e}");
-                        last_err = Some(e.into());
-                    }
-                    Err(_) => {
-                        warn!("第 {attempt} 次 join 超时（20s 内没连上常驻节点）");
-                        last_err = Some(anyhow::anyhow!("连接常驻节点超时"));
-                    }
+            match n0_future::time::timeout(
+                self.join_timeout,
+                self.gossip.subscribe_and_join(topic, bootstrap.clone()),
+            )
+            .await
+            {
+                Ok(Ok(t)) => {
+                    info!("已进入房间 {room}（至少连上一个成员）");
+                    (t, false)
                 }
-                n0_future::time::sleep(Duration::from_secs(2)).await;
-            }
-            match topic_opt {
-                Some(t) => t,
-                None => {
-                    let msg = last_err
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "未知错误".into());
-                    self.events_tx
-                        .send(RoomEvent::Error {
-                            message: format!("进房间失败（连不上常驻节点）：{msg}"),
-                        })
-                        .await
-                        .ok();
-                    anyhow::bail!("进房间失败：{msg}");
+                Ok(Err(e)) => {
+                    warn!("进房没能连上任何成员（{e}）→ 孤立进房，后台继续重连");
+                    (self.gossip.subscribe(topic, vec![]).await?, true)
+                }
+                Err(_) => {
+                    warn!(
+                        "进房等待邻居超时（{}ms）→ 孤立进房，后台继续重连",
+                        self.join_timeout.as_millis()
+                    );
+                    (self.gossip.subscribe(topic, vec![]).await?, true)
                 }
             }
         };
@@ -1796,7 +2487,7 @@ impl RoomNode {
             // 需要立刻重播一次心跳来"认领" —— 那要用到私钥签名
             // 常驻节点才有值：收到心跳时顺手更新房间快照。
             // （普通客户端不记账 —— 快照对它没用，维护它纯属浪费。）
-            let snaps_t = if self.serve_history {
+            let snaps_t = if self.serve_history || self.serve_rendezvous {
                 Some(self.snaps.clone())
             } else {
                 None
@@ -2092,11 +2783,68 @@ impl RoomNode {
         }
 
         self.events_tx.send(RoomEvent::Joined { room: room.to_string() }).await.ok();
-        if let Some(snapshot) = initial_snapshot {
-            self.apply_snapshot(&snapshot, room).await;
-        }
         self.broadcast_presence().await;
+
+        // 孤立进房：如实告诉 UI，并起后台重连。
+        //
+        // 顺序有讲究 —— `Joined` 必须先发（UI 先认为"进房成功"），
+        // 再发 `Isolated`（再补一句"只是暂时看不到别人"）。
+        if isolated {
+            self.events_tx
+                .send(RoomEvent::Isolated { room: room.to_string(), isolated: true })
+                .await
+                .ok();
+            self.spawn_relink_task(room, bootstrap.clone());
+        }
         Ok(())
+    }
+
+    /// 孤立进房后的后台重连：周期性把种子重新交给 gossip，直到看见人。
+    ///
+    /// 为什么只需要"重新 `join_peers`"就够了：
+    /// `iroh-gossip` 会把没有邻居时发的消息**排队**（见 vendor 里
+    /// `subscribe_with_opts` 的文档），所以一旦这一敲成功，
+    /// 之前发出去的 presence / 消息会自己流过去 —— 不需要我们重放。
+    ///
+    /// 判定"接上了"用的是**收到过任何人的 presence**（`inner.peers` 非空）：
+    /// 这是最诚实的信号 —— 能看见人，就不再是孤岛。
+    fn spawn_relink_task(&self, room: &str, seeds: Vec<EndpointId>) {
+        if seeds.is_empty() {
+            return;
+        }
+        let inner = self.inner.clone();
+        let events = self.events_tx.clone();
+        let room_s = room.to_string();
+        let t = task::spawn(async move {
+            let mut wait = RELINK_MIN;
+            loop {
+                n0_future::time::sleep(wait).await;
+                // 已经离开 / 换了房间 → 收工（旧房间的重连不该拖累新房间）
+                let sender = {
+                    let g = inner.lock().unwrap();
+                    match g.joined.as_ref() {
+                        Some(j) if j.room == room_s => j.sender.clone(),
+                        _ => break,
+                    }
+                };
+                if sender.lock().await.join_peers(seeds.clone()).await.is_err() {
+                    break;   // 通道关了 = 节点已释放
+                }
+                if !inner.lock().unwrap().peers.is_empty() {
+                    info!("孤立结束：已重新接上房间 {room_s} 的成员");
+                    events
+                        .send(RoomEvent::Isolated { room: room_s.clone(), isolated: false })
+                        .await
+                        .ok();
+                    break;
+                }
+                wait = wait.saturating_mul(2).min(RELINK_MAX);
+            }
+        });
+        let mut g = self.inner.lock().unwrap();
+        if let Some(j) = g.joined.as_mut() {
+            j._tasks.push(AbortOnDropHandle::new(t));
+        }
     }
 
     async fn broadcast_presence(&self) {
@@ -2227,6 +2975,42 @@ impl RoomNode {
         self.fetch_history_before(room, limit, None).await
     }
 
+    /// **协议版本握手**（v5）：对端报来的版本和我方不一致就明确告诉 UI。
+    ///
+    /// 为什么非要有这条：v5 之前，版本不匹配的表现是**消息静默验签失败**
+    /// （只有日志，用户侧什么都看不到）—— 用户看到的是"消息丢了"，排查时
+    /// 也拿不到任何线索。现在每个服务端能力的响应都带上自己的版本，
+    /// 客户端一比就知道"有一端是旧的"，于是能直接提示刷新。
+    ///
+    /// ⚠️ 这条只有**新客户端**能报（旧客户端里根本没有这段代码）；它反过来
+    /// 只能靠服务端日志被发现（见 [`HistoryService`] 那侧的 `note_client_protocol`）。
+    ///
+    /// 同一个版本只报一次：拉历史/问入口都是高频动作，重复提示会变成噪音。
+    async fn note_peer_protocol(&self, theirs: &str, room: &str) {
+        let ours = crate::sigfmt::PROTO_V5;
+        if theirs == ours {
+            return;
+        }
+        {
+            let mut seen = self.reported_protocols.lock().unwrap();
+            if !seen.insert(theirs.to_string()) {
+                return;
+            }
+        }
+        // 空串 = 对端响应里**根本没有这个字段**（真正的旧版），如实区分开，
+        // 免得日志里显示成"对方版本是空字符串"这种没法行动的信息。
+        let label = if theirs.is_empty() { "未上报（旧版）" } else { theirs };
+        warn!("协议版本不一致 room={room}：本端 {ours}，对端 {label}");
+        self.events_tx
+            .send(RoomEvent::ProtocolMismatch {
+                room: room.to_string(),
+                ours: ours.to_string(),
+                theirs: theirs.to_string(),
+            })
+            .await
+            .ok();
+    }
+
     /// before = Some(ts) 时返回更早的消息（上拉加载更多用）。
     ///
     /// 返回值里除了消息，还带一份**房间快照**（成员表 + 各人的文件清单）。
@@ -2238,9 +3022,14 @@ impl RoomNode {
         limit: usize,
         before: Option<(u64, String)>,
     ) -> Result<HistoryResponse> {
-        let Some((id, relay)) = &self.anchor else {
+        // ⚠️ 这里连的是**历史提供者**，不是入口。两者今天指向同一个 roomd，
+        //    但语义已经分开：入口管"找谁"，历史管"看过什么"。
+        //    只配了入口（老配置的场景）时回退到入口 —— 行为与 B′ 之前一致。
+        let Some((id, relay)) = self.history.as_ref().or(self.rendezvous.as_ref()) else {
             return Ok(HistoryResponse {
                 room: room.to_string(),
+                // 本端版本（没有对端可比 —— 这条路径是"根本没配置历史提供者"）
+                protocol: crate::sigfmt::PROTO_V5.to_string(),
                 messages: Vec::new(),
                 snapshot: None,
             });
@@ -2253,7 +3042,12 @@ impl RoomNode {
                 .context("连接常驻节点失败")?;
             let result = async {
                 let (mut send, mut recv) = conn.open_bi().await?;
-                let req = HistoryRequest { room: room.to_string(), limit, before };
+                let req = HistoryRequest {
+                    room: room.to_string(),
+                    protocol: crate::sigfmt::PROTO_V5.to_string(),
+                    limit,
+                    before,
+                };
                 send.write_all(&serde_json::to_vec(&req)?).await?;
                 send.finish()?;
                 read_all(&mut recv).await
@@ -2264,6 +3058,8 @@ impl RoomNode {
         let mut resp: HistoryResponse =
             serde_json::from_slice(&body).context("历史响应解析失败")?;
         anyhow::ensure!(resp.room == room, "历史响应房间不匹配");
+        // v5 握手：对端（历史提供者）版本不一致就提示刷新，别让它变成静默丢消息
+        self.note_peer_protocol(&resp.protocol, room).await;
         // ⚠️ 历史消息**必须逐条验签**（缺陷 F8）。
         //
         // 常驻节点是转发者，而签名机制的意义正是"转发者无法伪造作者身份"。
@@ -2277,6 +3073,14 @@ impl RoomNode {
         let dropped = before - resp.messages.len();
         if dropped > 0 {
             warn!("历史响应里有 {dropped} 条验签失败的消息，已丢弃（共 {before} 条）");
+        }
+        // ★ 拿到快照就**并进成员表** —— 不管走的是哪条路。
+        //
+        // 阶段 C′ 把"进房时那一敲"换成了显式加入声明，于是**进房不再顺手拉一次历史**，
+        // 这条就成了"新进房的人立刻看到屋里有哪些人（以及谁还能提供哪些文件）"的唯一来源。
+        // （wasm 那侧本来就在外面手动调过一次；现在统一在这里做，外面那次已删。）
+        if let Some(snapshot) = resp.snapshot.clone() {
+            self.apply_snapshot(&snapshot, room).await;
         }
         Ok(resp)
     }
@@ -3251,6 +4055,7 @@ mod security_tests {
     fn 历史请求字段限制拒绝控制字符与过长游标() {
         let valid = HistoryRequest {
             room: "room".into(),
+            protocol: crate::sigfmt::PROTO_V5.into(),
             limit: usize::MAX,
             before: Some((1, "id".into())),
         };
@@ -3299,6 +4104,7 @@ mod security_tests {
     fn valid_history_request_fixture() -> HistoryRequest {
         HistoryRequest {
             room: "room".into(),
+            protocol: crate::sigfmt::PROTO_V5.into(),
             limit: 50,
             before: None,
         }
@@ -3414,13 +4220,449 @@ mod multi_peer_tests {
             secret_key_hex: None,
             anchor_id: anchor.map(RoomNode::endpoint_id),
             anchor_relay: anchor.map(|_| "https://127.0.0.1:9".into()),
+            rendezvous_id: None,
+            rendezvous_relay: None,
+            history_id: None,
+            history_relay: None,
             history_dir: None,
+            // 测试里的"锚点"节点同时演入口与历史：这正是线上 roomd 的形态
             serve_history: anchor.is_none(),
+            serve_rendezvous: anchor.is_none(),
+            join_timeout_ms: None,
         }).await?;
         if let Some(anchor) = anchor {
             node.memory.add_endpoint_info(anchor.endpoint.addr());
         }
         Ok(node)
+    }
+
+    /// ★ 常驻节点联系不上时，**不该**把用户挡在房外。
+    ///
+    /// 回归的是旧行为：`join` 重试 4×20 秒后 `bail!`
+    /// （"进房间失败：连接常驻节点超时"）。于是 roomd 一挂，
+    /// 整个房间的人都进不去 —— 哪怕彼此都在线、中继也好好的。
+    ///
+    /// 现在应当降级为「孤立进房」：进得去、发得出，并如实报告状态。
+    #[tokio::test]
+    async fn unreachable_anchor_degrades_to_isolated_instead_of_failing() -> Result<()> {
+        let node = RoomNode::start(RoomOptions {
+            relays: vec!["https://127.0.0.1:9".into()],
+            relay_token: None,
+            secret_key_hex: None,
+            // 一个**不存在**的常驻节点：id 随机、中继也不可达
+            anchor_id: Some(SecretKey::generate().public().to_string()),
+            anchor_relay: Some("https://127.0.0.1:9".into()),
+            rendezvous_id: None,
+            rendezvous_relay: None,
+            history_id: None,
+            history_relay: None,
+            history_dir: None,
+            serve_history: false,
+            serve_rendezvous: false,
+            join_timeout_ms: Some(300),   // 别让测试等默认的 8 秒
+        })
+        .await?;
+        let events = node.subscribe();
+
+        // ① 进房必须**成功** —— 旧行为在这里返回 Err
+        node.join("isolated-room", "甲").await?;
+        assert_eq!(node.current_room().as_deref(), Some("isolated-room"));
+
+        // ② 必须如实报告"联系不上别人"，而不是让 UI 以为房间里本来就没人
+        let mut saw_joined = false;
+        let mut saw_isolated = false;
+        while !saw_isolated {
+            match n0_future::time::timeout(Duration::from_secs(5), events.recv()).await {
+                Ok(Ok(RoomEvent::Joined { room })) => {
+                    assert_eq!(room, "isolated-room");
+                    saw_joined = true;
+                }
+                Ok(Ok(RoomEvent::Isolated { isolated, .. })) => {
+                    assert!(isolated, "孤立状态必须是 true");
+                    saw_isolated = true;
+                }
+                Ok(Ok(_)) => {}   // relayStatus 之类，不关心
+                Ok(Err(_)) => panic!("事件通道提前关闭"),
+                Err(_) => panic!("等 Isolated 事件超时"),
+            }
+        }
+        assert!(saw_joined, "应该先收到 Joined 再收到 Isolated");
+        node.shutdown();
+        Ok(())
+    }
+
+    /// 测试用的基础配置：只给一个中继占位，其余全默认
+    /// （新增 RoomOptions 字段时只改这一处，不必每条测试都改）
+    fn base_options() -> RoomOptions {
+        RoomOptions {
+            relays: vec!["https://127.0.0.1:9".into()],
+            relay_token: None,
+            secret_key_hex: None,
+            anchor_id: None,
+            anchor_relay: None,
+            rendezvous_id: None,
+            rendezvous_relay: None,
+            history_id: None,
+            history_relay: None,
+            history_dir: None,
+            serve_history: false,
+            serve_rendezvous: false,
+            join_timeout_ms: None,
+        }
+    }
+
+    /// 等入口的成员表里出现足够多的人（presence 是异步到的）
+    async fn wait_members(snaps: &Snapshots, room: &str, want: usize) -> Result<()> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if snapshot_get(snaps, room).map(|s| s.members.len()).unwrap_or(0) >= want {
+                return Ok(());
+            }
+            if std::time::Instant::now() > deadline {
+                anyhow::bail!("等成员表超时（想要 {want} 个）");
+            }
+            n0_future::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    /// ★ 阶段 B′：**入口与历史是两个独立能力**。
+    ///
+    /// 只开入口的节点能回答"这房间里现在有谁"，但**装不了**历史 ——
+    /// 客户端拉历史必须**明确失败**（而不是悄悄返回空页，让人以为"这房间没聊过"）。
+    /// 这条测的就是"拆分"本身：一个开关不该牵连另一个。
+    #[tokio::test]
+    async fn rendezvous_and_history_are_independent_capabilities() -> Result<()> {
+        // 只做入口、不存历史
+        let entry = RoomNode::start(RoomOptions {
+            relays: vec!["https://127.0.0.1:9".into()],
+            relay_token: None,
+            secret_key_hex: None,
+            anchor_id: None,
+            anchor_relay: None,
+            rendezvous_id: None,
+            rendezvous_relay: None,
+            history_id: None,
+            history_relay: None,
+            history_dir: None,
+            serve_history: false,
+            serve_rendezvous: true,
+            join_timeout_ms: Some(1_000),
+        })
+        .await?;
+        entry.join("caps-room", "入口").await?;
+
+        // 客户端：两个角色都回退到这个入口（老配置的形态）
+        let client = node(Some(&entry)).await?;
+        client.join("caps-room", "甲").await?;
+        // ⚠️ 快照只记**别人**（自己不需要记在成员表里）：入口这一侧应当出现 1 个成员
+        wait_members(&entry.snaps, "caps-room", 1).await?;
+
+        // ① 入口能回答"这房间里有谁"：报出刚进来的成员
+        let members = client.rendezvous_candidates("caps-room").await;
+        assert!(
+            members.contains(&client.endpoint.id()),
+            "入口应当报出刚进房的成员，实际拿到 {members:?}"
+        );
+
+        // ② 组合出的候选里，**入口自己**也必须在 —— 否则会出现"问到了别人，却连不上入口"
+        let candidates = client.bootstrap_candidates("caps-room").await;
+        assert!(
+            candidates.contains(&entry.endpoint.id()),
+            "固有候选必须包含入口自己（它是你总能找到的第一个人）"
+        );
+        assert!(
+            candidates.contains(&client.endpoint.id()),
+            "候选里应当带上入口报的成员"
+        );
+
+        // ② 但历史能力没装 → 拉历史**必须报错**
+        let history = client.fetch_history("caps-room", 10).await;
+        assert!(history.is_err(), "没装历史能力时拉历史应当明确失败，而不是返回空页");
+
+        client.shutdown();
+        entry.shutdown();
+        Ok(())
+    }
+
+    /// ★ 阶段 C′（终态 ③）：**新能力 = 新增一个实现，不改核心 dispatch**。
+    ///
+    /// 这里注册一个核心完全不认识的能力，验证两件事：
+    ///   ① 它的 ALPN 真的被服务（除了"注册"这一步，核心一行没改）；
+    ///   ② 它能通过 `RoomEvent::Plugin` 把消息端给 UI（核心不理解内容，只负责转）。
+    #[tokio::test]
+    async fn a_custom_capability_is_served_and_can_emit_plugin_events() -> Result<()> {
+        /// 一个第三方能力：收到什么就把什么回显，并且顺手推一条插件事件
+        #[derive(Debug, Clone)]
+        struct EchoCapability {
+            events: Sender<RoomEvent>,
+        }
+        impl ProtocolHandler for EchoCapability {
+            async fn accept(
+                &self,
+                connection: iroh::endpoint::Connection,
+            ) -> std::result::Result<(), AcceptError> {
+                let (mut send, mut recv) = connection.accept_bi().await.map_err(AcceptError::from_err)?;
+                // ⚠️ `AcceptError::from_err` 只认 `std::error::Error`，而 `read_all_bounded`
+                //    返回的是 `anyhow::Error`（没实现它）—— 转成字符串即可。
+                let bytes = read_all_bounded(&mut recv, 1024)
+                    .await
+                    .map_err(|e| AcceptError::from_err(std::io::Error::other(e.to_string())))?;
+                let got = String::from_utf8_lossy(&bytes).to_string();
+                // ★ 插件自定义事件：核心不知道 "echo" 是什么，只负责原样转发
+                let _ = self
+                    .events
+                    .send(RoomEvent::Plugin {
+                        name: "echo".into(),
+                        payload: serde_json::json!({ "got": got, "len": bytes.len() }),
+                    })
+                    .await;
+                send.write_all(b"ok").await.map_err(AcceptError::from_err)?;
+                send.finish()?;
+                // ⚠️ 与内置能力同款：写完**等对端读完再放掉连接**。
+                //    直接 return 会把连接立刻关掉，对端读到的可能是 "closed by peer"
+                //    而不是我们刚写的内容（这个坑在测试里第一次就踩到了）。
+                let _ = n0_future::time::timeout(Duration::from_secs(5), connection.closed()).await;
+                Ok(())
+            }
+        }
+        impl RoomCapability for EchoCapability {
+            fn alpn(&self) -> &'static [u8] {
+                ECHO_ALPN
+            }
+            fn name(&self) -> &'static str {
+                "echo"
+            }
+            fn handler(&self) -> Box<dyn DynProtocolHandler> {
+                Box::new(self.clone())
+            }
+        }
+        const ECHO_ALPN: &[u8] = b"test/echo/1";
+
+        let (tx, rx) = async_channel::bounded::<RoomEvent>(4);
+        let mut extra = CapabilityRegistry::new();
+        extra.register(EchoCapability { events: tx });
+        // 服务端：装着那个自定义能力
+        let server = RoomNode::start_with(base_options(), extra).await?;
+        // 客户端：另一个节点（iroh 不允许连自己）
+        let client = node(Some(&server)).await?;
+
+        // 客户端按这个能力的 ALPN 连上去（核心的 Router 已经把它服务起来了）
+        let conn = client
+            .endpoint
+            .connect(server.endpoint.addr(), ECHO_ALPN)
+            .await
+            .context("连接自定义能力失败")?;
+        {
+            let (mut send, mut recv) = conn.open_bi().await?;
+            send.write_all(b"hello-capability").await?;
+            send.finish()?;
+            let ack = read_all_bounded(&mut recv, 64).await?;
+            assert_eq!(&ack, b"ok", "能力自己写的响应应当被读回来");
+        }
+
+        // 插件事件原样到达 UI 那侧
+        let event = n0_future::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .context("等插件事件超时")?
+            .context("插件事件通道关闭")?;
+        match event {
+            RoomEvent::Plugin { name, payload } => {
+                assert_eq!(name, "echo");
+                assert_eq!(payload["got"], "hello-capability");
+            }
+            other => panic!("应当是 Plugin 事件，实际 {other:?}"),
+        }
+
+        // ★ 反向对照：**没注册的能力，ALPN 就不该被服务**。
+        //
+        // 少了这一半，"注册表"就有可能是个摆设 —— 只要核心（或某个兜底 handler）
+        // 对着任意 ALPN 都应答，上面那条正向断言照样绿，而"新能力必须显式注册"
+        // 这个约束其实没被证明。验收条件里那句"只有装了它的 peer 响应其 ALPN"
+        // 要的正是这一条。
+        let unregistered = client
+            .endpoint
+            .connect(server.endpoint.addr(), b"test/never-registered/1")
+            .await;
+        match unregistered {
+            // 握手阶段就被拒 —— 预期
+            Err(_) => {}
+            // 少数实现会先建连、随后关掉：那样也必须是**不可用**的
+            Ok(conn) => assert!(
+                conn.open_bi().await.is_err(),
+                "没注册的 ALPN 不该能开出流来（核心里有兜底 handler？）"
+            ),
+        }
+        client.shutdown();
+        server.shutdown();
+        Ok(())
+    }
+
+    /// ★ v5 握手：对端还是**旧版**时，新客户端必须**明确知道**，而不是让消息静默丢掉。
+    ///
+    /// 复刻的是切换期最容易踩的状态："新前端 × 旧 roomd"。改造前这种情况唯一的
+    /// 表现是**消息验签失败**（只有一行日志），用户看到的是"消息没了" —— 极难排查。
+    /// 现在每次拉历史都会比对服务端报的版本，不一致就发一条事件给 UI。
+    ///
+    /// 这里用**假的历史提供者**而不是改真服务的常量：要测的是"对端报了个我不认识的
+    /// 版本时客户端怎么办"，而不是"我把常量改对了没有"—— 后者改错一次就白测了。
+    #[tokio::test]
+    async fn stale_history_provider_is_reported_as_protocol_mismatch_exactly_once() -> Result<()> {
+        /// 一个旧版历史服务：响应里**根本没有** `protocol` 字段（正是旧二进制的形态）
+        #[derive(Debug, Clone)]
+        struct StaleHistoryProvider;
+        impl ProtocolHandler for StaleHistoryProvider {
+            async fn accept(
+                &self,
+                connection: iroh::endpoint::Connection,
+            ) -> std::result::Result<(), AcceptError> {
+                let (mut send, mut recv) =
+                    connection.accept_bi().await.map_err(AcceptError::from_err)?;
+                let bytes = read_all_bounded(&mut recv, MAX_HISTORY_REQUEST_BYTES)
+                    .await
+                    .map_err(|e| AcceptError::from_err(std::io::Error::other(e.to_string())))?;
+                // 原样回房间名，免得测试替身自己引入"房间不匹配"的失败
+                let room: String = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .ok()
+                    .and_then(|v| v["room"].as_str().map(str::to_string))
+                    .unwrap_or_default();
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "room": room,
+                    "messages": [],
+                }))
+                .map_err(AcceptError::from_err)?;
+                send.write_all(&body).await.map_err(AcceptError::from_err)?;
+                send.finish()?;
+                // 与内置能力同款：写完等对端读完，别把连接提前掐掉
+                let _ = n0_future::time::timeout(Duration::from_secs(5), connection.closed()).await;
+                Ok(())
+            }
+        }
+        impl RoomCapability for StaleHistoryProvider {
+            fn alpn(&self) -> &'static [u8] {
+                HISTORY_ALPN
+            }
+            fn name(&self) -> &'static str {
+                "stale-history-fake"
+            }
+            fn handler(&self) -> Box<dyn DynProtocolHandler> {
+                Box::new(self.clone())
+            }
+        }
+
+        // 只装这个假能力（`base_options` 里 serve_* 全关，真历史服务不会来抢 ALPN）
+        let mut extra = CapabilityRegistry::new();
+        extra.register(StaleHistoryProvider);
+        let server = RoomNode::start_with(base_options(), extra).await?;
+        let client = node(Some(&server)).await?;
+        let events = client.subscribe();
+
+        // ① 旧版对端 → 必须报出来，且如实区分"没上报"与"报了个别的版本"
+        let resp = client.fetch_history("mismatch-room", 10).await?;
+        assert!(resp.messages.is_empty());
+        let mismatch = n0_future::time::timeout(Duration::from_secs(10), async {
+            while let Ok(ev) = events.recv().await {
+                if let RoomEvent::ProtocolMismatch { ours, theirs, room } = ev {
+                    return (ours, theirs, room);
+                }
+            }
+            panic!("事件通道提前关闭");
+        })
+        .await
+        .context("等「协议不一致」事件超时")?;
+        assert_eq!(mismatch.0, crate::sigfmt::PROTO_V5, "本端版本应当是当前协议");
+        assert_eq!(mismatch.1, "", "旧版对端根本没上报版本，不要凭空造一个");
+        assert_eq!(mismatch.2, "mismatch-room");
+
+        // ② 同一个对端版本只提示一次 —— 拉历史是高频动作，重复弹会变成噪音
+        client.fetch_history("mismatch-room", 10).await?;
+        let again = n0_future::time::timeout(Duration::from_millis(600), async {
+            while let Ok(ev) = events.recv().await {
+                if matches!(ev, RoomEvent::ProtocolMismatch { .. }) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        assert!(!again, "同一个旧版本不应反复提示");
+
+        client.shutdown();
+        server.shutdown();
+        Ok(())
+    }
+
+    /// ★ 阶段 C′：**显式加入声明**取代了"靠拉一次历史的副作用触发订阅"。
+    ///
+    /// 复刻 roomd 的形态：一个**只按需订阅**的服务端（controller 从 `join_rx` 收房间名），
+    /// 客户端进房发一条声明 → 服务端订阅该房间 → 消息进历史；
+    /// 后进房的人因此看得到。**全程没有"为了触发订阅而拉历史"的调用。**
+    #[tokio::test]
+    async fn join_announcement_subscribes_the_provider() -> Result<()> {
+        let mut provider = node(None).await?; // 同时提供入口与历史（roomd 的形态）
+        let join_rx = provider.take_join_receiver().context("服务端应当带订阅请求通道")?;
+        let provider = Arc::new(provider);
+        let store = provider.history();
+
+        // roomd 的 controller：谁被声明过就订阅谁
+        let controller = {
+            let provider = provider.clone();
+            tokio::spawn(async move {
+                while let Ok(room) = join_rx.recv().await {
+                    let _ = provider.join(&room, "常驻节点").await;
+                }
+            })
+        };
+        // roomd 的消费循环：收到的消息写进历史
+        let sink = {
+            let provider = provider.clone();
+            let store = store.clone();
+            tokio::spawn(async move {
+                let events = provider.subscribe();
+                while let Ok(event) = events.recv().await {
+                    if let RoomEvent::Message { room, message, mine: false } = event {
+                        store.append_async(room, message).await;
+                    }
+                }
+            })
+        };
+
+        let client = node(Some(provider.as_ref())).await?;
+        let room = "announce-room";
+        // ⚠️ 这一步只发**加入声明**（阶段 C′）：没有任何"读一次历史来触发订阅"
+        client.join(room, "甲").await?;
+
+        // 服务端应当因为那条声明而订阅了这个房间
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while provider.current_room().as_deref() != Some(room) {
+            if std::time::Instant::now() > deadline {
+                anyhow::bail!("服务端没有因为加入声明而订阅房间");
+            }
+            n0_future::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        client.send("hello-from-announce").await?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while store.count(room).unwrap_or(0) < 1 {
+            if std::time::Instant::now() > deadline {
+                anyhow::bail!("声明的房间里的消息没有进历史");
+            }
+            n0_future::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 后进房的人拉历史能看到它 —— 这就是"声明"存在的意义
+        let late = node(Some(provider.as_ref())).await?;
+        let history = late.fetch_history(room, 10).await?;
+        assert!(
+            history.messages.iter().any(|m| m.text == "hello-from-announce"),
+            "后进房的人应当能看到声明期间的消息"
+        );
+
+        controller.abort();
+        sink.abort();
+        late.shutdown();
+        client.shutdown();
+        Ok(())
     }
 
     #[tokio::test]
@@ -3432,8 +4674,14 @@ mod multi_peer_tests {
             secret_key_hex: None,
             anchor_id: None,
             anchor_relay: None,
+            rendezvous_id: None,
+            rendezvous_relay: None,
+            history_id: None,
+            history_relay: None,
             history_dir: Some(directory.to_string_lossy().into_owned()),
             serve_history: true,
+            serve_rendezvous: false,
+            join_timeout_ms: None,
         }).await?;
         let client = node(Some(&anchor)).await?;
         let room = "history-service-errors";

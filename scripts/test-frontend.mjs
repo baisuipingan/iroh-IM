@@ -30,9 +30,37 @@ test('relay configuration rejects invalid shape, endpoints and coercion', () => 
     { relays: [relay, { ...relay, url: `${relay.url}/` }] },
     { relays: [relay, { ...relay, url: 'https://other.example' }] },
     { ...config, anchor: { id: 'invalid' } },
+    // 阶段 B′：入口与历史是**各自校验**的 —— 坏值不能被"回退到 anchor"悄悄盖过去
+    { ...config, rendezvous: { id: 'invalid' } },
+    { ...config, rendezvous: { ...config.anchor, relay: 'http://insecure.example' } },
+    { ...config, history: { id: 'ff'.repeat(31) }, rendezvous: null },
     { ...config, relay_token: 1 },
   ])
     assert.throws(() => validateRelayConfig(invalid));
+});
+
+test('rendezvous / history 可以各自独立配置（阶段 B′ 的角色拆分）', () => {
+  // 都配：两个角色指向不同节点也要能校验通过
+  const both = validateRelayConfig({
+    ...config,
+    rendezvous: { ...config.anchor, relay: 'https://rendezvous.example:15443' },
+    history: { ...config.anchor, relay: 'https://history.example:15443' },
+  });
+  assert.equal(both.rendezvous.relay, 'https://rendezvous.example:15443');
+  assert.equal(both.history.relay, 'https://history.example:15443');
+
+  // 只配一个也合法（另一个由 Rust 侧回退到 anchor）
+  const onlyRendezvous = validateRelayConfig({ ...config, rendezvous: config.anchor });
+  assert.equal(onlyRendezvous.history, undefined);
+  assert.deepEqual(onlyRendezvous.rendezvous, config.anchor);
+
+  // 一个都不配：完全回退到 anchor（老配置的形态）
+  const legacy = validateRelayConfig({ ...config });
+  assert.equal(legacy.rendezvous, undefined);
+  assert.equal(legacy.history, undefined);
+
+  // 显式 null 与"没配"等价（不能因此报错）
+  validateRelayConfig({ ...config, rendezvous: null, history: null });
 });
 
 test('relay model merges URL variants and retains runtime-only nodes without duplicates', () => {

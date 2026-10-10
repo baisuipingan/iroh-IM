@@ -66,6 +66,15 @@ export interface AdapterOptions {
   filesSaveDir?: string;
   /** 并发接收上限（默认 2）；满了自动拒绝并让对端稍后重发 */
   filesMaxConcurrent?: number;
+  /**
+   * **累计**接收上限（字节，默认 512 MiB）。
+   *
+   * ⚠️ 单文件上限（`filesMaxBytes`）和并发上限**都挡不住**"同一个人（或一群人）
+   *    反复发文件" —— 那种情况每个文件都合规、每次并发都只有一路，磁盘却会一直涨。
+   *    常驻 agent 通常以服务账号长期运行，这条闸门是它最后一道防线。
+   *    只增不减：进程重启后重新计数（真要长期限额得靠磁盘配额，见 deploy/agent/README）。
+   */
+  filesMaxTotalBytes?: number;
   /** 自定义策略钩子：完全接管文件决策（可 async）；抛异常 = 本次忽略 */
   onFileInvite?: (invite: FileInviteInfo) => FileDecision | Promise<FileDecision>;
   log?: (...args: unknown[]) => void;
@@ -77,6 +86,18 @@ export class ChatAdapter {
   #dedupeOrder: string[] = [];
   #lastReplyAt = 0;
   #started = false;
+  /**
+   * 有一轮正在处理（brain 还没返回）。
+   *
+   * ⚠️ 只靠 `#lastReplyAt` 的冷却检查**挡不住同一瞬间到达的多个触发**：
+   *    冷却原本是在"回复发出去之后"才更新的，而 `#handle` 在 `await brain` 处
+   *    就让出了执行权 —— 于是同一批消息里的每一条都能通过检查、各自打一次模型。
+   *    实测复现：两个触发相隔 0ms，**两条回复间隔也是 0ms**。
+   *    聊天室场景宁可丢，也不排队（过期回复比不回更糟）。
+   */
+  #busy = false;
+  /** 本次进程生命周期内**累计接收**的字节数（见 `filesMaxTotalBytes`） */
+  #acceptedBytes = 0;
   /** 已处理过的文件邀约（fileId LRU）；接收失败会移除以允许重发重试 */
   #fileSeen = new Set<string>();
   #fileSeenOrder: string[] = [];
@@ -168,12 +189,32 @@ export class ChatAdapter {
       this.#log(`[adapter] 并发已满（${maxConcurrent}），拒绝 ${info.name}`);
       return;
     }
+
+    // ⚠️ **累计**上限：单文件上限 + 并发上限都挡不住"反复发合规的小文件"，
+    //    而常驻 agent 是长期运行的 —— 没有这一条，磁盘只会一直涨。
+    //    超限就拒绝，且**不让对端反复重发**（fileId 仍留在已处理集合里）。
+    const maxTotal = this.#opts.filesMaxTotalBytes ?? 512 * 1024 * 1024;
+    if (this.#acceptedBytes + info.size > maxTotal) {
+      try {
+        await this.#opts.client.rejectFile(
+          info.fileId,
+          `本端累计接收已达上限（${fmtSize(maxTotal)}），请先清理`,
+        );
+      } catch {
+        // 对端可能已经走了
+      }
+      this.#log(
+        `[adapter] 累计接收已达上限（${fmtSize(this.#acceptedBytes)} + ${fmtSize(info.size)} > ${fmtSize(maxTotal)}），拒绝 ${info.name}`,
+      );
+      return;
+    }
     this.#accepting.add(info.fileId);
     try {
       const savePath = this.#opts.filesSaveDir
         ? join(this.#opts.filesSaveDir, sanitizeName(info.name))
         : undefined;
       const result = await this.#opts.client.acceptFile(info.fileId, savePath);
+      this.#acceptedBytes += result.bytes;
       this.#log(`[adapter] 已接收 ${info.name} → ${result.path}（${result.bytes} 字节）`);
     } catch (error) {
       // 失败允许重发重试：把 fileId 从"已处理"里摘掉
@@ -242,6 +283,25 @@ export class ChatAdapter {
       );
       return;
     }
+    if (this.#busy) {
+      this.#log(`[adapter] 上一轮还没处理完，忽略来自 ${message.nickname} 的触发`);
+      return;
+    }
+    // ⚠️ 在 `await` **之前**就把冷却窗口占住。
+    //    原来 `#lastReplyAt` 是回复发出去之后才更新的，于是并发触发全都能挤进来。
+    //    现在它表示"上一次**开始处理**的时刻"：最多每 cooldownMs 起一轮，
+    //    且同时最多一轮在飞。两个闸门合起来，"连发消息打爆 token" 才真的被挡住。
+    this.#lastReplyAt = now;
+    this.#busy = true;
+    try {
+      await this.#runTurn(room, message, triggered);
+    } finally {
+      this.#busy = false;
+    }
+  }
+
+  /** 真正的一轮：组装 ctx → 调 brain → 截断 → 发送。异常不外抛（只记日志）。 */
+  async #runTurn(room: string, message: ChatMessage, triggered: string): Promise<void> {
 
     const incoming: IncomingMessage = {
       room,
@@ -274,7 +334,6 @@ export class ChatAdapter {
     const clipped = truncateUtf8(text, this.#opts.maxReplyBytes ?? 30_000);
     if (clipped !== text)
       this.#log(`[adapter] 回复超过上限，已截断到 ${this.#opts.maxReplyBytes ?? 30_000} 字节`);
-    this.#lastReplyAt = Date.now();
     try {
       const sent = await this.#opts.client.say(clipped);
       this.#log(`[adapter] 已回复 ${incoming.nickname}：id=${sent.id}`);

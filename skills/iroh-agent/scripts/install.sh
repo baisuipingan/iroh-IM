@@ -69,9 +69,25 @@ case "$P" in windows-*)
 esac
 ok "平台 $P"
 
+# ⚠️ "latest" 必须按**本产物族的 tag 前缀**解析，不能用 GitHub 的 `releases/latest`。
+# 这个仓库有两条产物线（`agent-v*` / `android-v*`），而 GitHub 的 Latest 全局只有一个：
+# 谁最后发布谁就是 Latest，另一条线立刻 404（2026-10-10 真踩到：发了 `agent-v1.2.0`
+# 之后 `fetch-android-so.sh` 的默认路径就找不到 `.so` 了，反过来同理）。
+latest_tag() {   # $1 = tag 前缀
+  curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null \
+    | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"\(.*\)"/\1/' \
+    | grep "^$1" | head -1
+}
+
 [ -n "$BASE_URL" ] || {
-  if [ -n "$VERSION" ]; then BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
-  else BASE_URL="https://github.com/$REPO/releases/latest/download"; fi
+  if [ -n "$VERSION" ]; then
+    BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
+  else
+    V="$(latest_tag agent-v)"
+    [ -n "$V" ] || die "没能从 GitHub 解析出 agent 的 Release（网络？）—— 也可以显式指定：AGENT_VERSION=agent-v1.2.0 $0"
+    c '0;36' "  latest → $V"
+    BASE_URL="https://github.com/$REPO/releases/download/$V"
+  fi
 }
 ASSET="$BIN-$P.tar.gz"
 URL="$BASE_URL/$ASSET"

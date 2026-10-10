@@ -1,4 +1,4 @@
-{"agent":"<agent>","chatProtocol":"v4","endpointId":"<id>","nickname":"录音机","relay":"<relay>","type":"hello","v":1}
+{"agent":"<agent>","chatProtocol":"v5","endpointId":"<id>","nickname":"录音机","relay":"<relay>","type":"hello","v":1}
 {"error":{"code":"badRequest","message":"before 游标格式应为 \"<ts>:<id>\""},"id":"11","ok":false,"type":"reply","v":1}
 {"error":{"code":"badRequest","message":"不是合法 JSON：expected value at line 1 column 1"},"id":null,"ok":false,"type":"reply","v":1}
 {"error":{"code":"badRequest","message":"命令行超过 1 MiB 上限"},"id":null,"ok":false,"type":"reply","v":1}
@@ -19,7 +19,7 @@
 {"event":{"peers":[],"room":"golden-room","type":"presence"},"seq":0,"type":"event","v":1}
 {"event":{"reason":"golden","type":"bye"},"seq":0,"type":"event","v":1}
 {"event":{"room":"golden-room","type":"joined"},"seq":0,"type":"event","v":1}
-{"id":"10","ok":true,"type":"reply","v":1,"value":{"messages":[],"room":"golden-room","snapshot":null}}
+{"id":"10","ok":true,"type":"reply","v":1,"value":{"messages":[],"protocol":"v5","room":"golden-room","snapshot":null}}
 {"id":"12","ok":true,"type":"reply","v":1,"value":{}}
 {"id":"13","ok":true,"type":"reply","v":1,"value":{"files":[]}}
 {"id":"15","ok":true,"type":"reply","v":1,"value":{}}

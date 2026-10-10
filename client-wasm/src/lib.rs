@@ -19,6 +19,9 @@ pub mod room;
 #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
 pub mod sqlite_history;
 pub mod sigfmt;
+/// 协议类型的 TS 导出（阶段 D：三端类型的唯一来源）。只在导出时编译。
+#[cfg(feature = "ts-export")]
+pub mod ts_export;
 
 #[cfg(feature = "wasm")]
 mod wasm_api;

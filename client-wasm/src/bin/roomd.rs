@@ -37,7 +37,8 @@ use iroh_gossip::{
 };
 use iroh_web::room::{
     decode_wire, encode_presence, new_snapshots, snapshot_drop, snapshot_upsert,
-    topic_id, HistoryService, HistoryStore, MemberSnapshot, Wire, HISTORY_ALPN,
+    topic_id, AnnounceService, CapabilityRegistry, HistoryService, HistoryStore, MemberSnapshot,
+    RendezvousService, Wire, HISTORY_ALPN, RENDEZVOUS_ALPN,
 };
 use n0_future::{task, time::Duration, StreamExt};
 use tokio::sync::Mutex as AsyncMutex;
@@ -173,7 +174,11 @@ async fn main() -> Result<()> {
     let endpoint = Endpoint::builder(presets::Minimal)
         .secret_key(key.clone())
         .relay_mode(RelayMode::Custom(relay_map))
-        .alpns(vec![GOSSIP_ALPN.to_vec(), HISTORY_ALPN.to_vec()])
+        .alpns(vec![
+            GOSSIP_ALPN.to_vec(),
+            HISTORY_ALPN.to_vec(),
+            RENDEZVOUS_ALPN.to_vec(),
+        ])
         .bind()
         .await?;
     // 与客户端保持一致（否则常驻节点收不下较大的消息）
@@ -196,12 +201,17 @@ async fn main() -> Result<()> {
     // 通道**有界**：历史请求来自任意 peer，`unbounded` 意味着请求速率就是内存增速。
     // 满了就丢（`try_send` 已经在用），只影响"这一次自动订阅"，历史照常返回。
     let (join_tx, join_rx) = async_channel::bounded::<String>(1024);
-    let _router = Router::builder(endpoint.clone())
-        .accept(GOSSIP_ALPN, gossip.clone())
-        .accept(
-            HISTORY_ALPN,
-            HistoryService::new(store.clone(), join_tx, snaps.clone()),
-        )
+    // ★ 能力注册表（阶段 C′）：roomd 不认识"历史"或"入口"具体是什么，
+    //   只是把几个能力注册进来 —— 加一个新能力不必改这段之外的任何组装逻辑。
+    //   gossip 是**底座**（消息怎么传），不是能力。
+    let mut capabilities = CapabilityRegistry::new();
+    capabilities.register(HistoryService::new(store.clone(), join_tx.clone(), snaps.clone()));
+    capabilities.register(RendezvousService::new(join_tx.clone(), snaps.clone()));
+    // 服务端能力都要听"谁在用哪个房间"（阶段 C′ 的显式加入声明）
+    capabilities.register(AnnounceService::new(join_tx.clone()));
+    info!("roomd 房间能力：{:?}", capabilities.names());
+    let _router = capabilities
+        .install(Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone()))
         .spawn();
 
     // ---- 多房间订阅管理

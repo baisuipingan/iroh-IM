@@ -69,7 +69,9 @@ journalctl -u iroh-agent-pi -n 30 --no-pager   # 应看到 hello + 已进入房�
 |---|---|
 | 看状态/日志 | `systemctl status iroh-agent-pi` / `journalctl -u iroh-agent-pi -f` |
 | 换房间 / 昵称 / 文件策略 | 改 unit 的 `ExecStart` → `systemctl daemon-reload && systemctl restart iroh-agent-pi`。⚠️ `--room` 必须与实际使用的房间**完全一致**——房间名就是命名空间，进错房间等于谁都看不见谁（实测踩过：部署在 lobby、人在 patrick） |
-| 收到的文件 | `/opt/iroh-agent/received/`（`--files accept` 时） |
+| 收到的文件 | `/opt/iroh-agent/received/`（`--files accept` 时）；**累计**超过 512 MiB 会自动拒收（`--files-max-total-mb`），先清理再恢复 |
+| 运行账号 | 专用系统账号 `iroh-agent`（unit 里 `User=`/`Group=`）。部署时：`useradd --system --home-dir /opt/iroh-agent --shell /usr/sbin/nologin iroh-agent && chown -R iroh-agent:iroh-agent /opt/iroh-agent` |
+| 沙箱 | unit 里 `ProtectSystem=strict` + `ReadWritePaths=/opt/iroh-agent`：除该目录外整机对进程只读（这是"房间里任何人能发文件"的兜底） |
 | 给 agent 加工具 | `ExecStart` 里加 `--tools weather,fetch_url`（两个安全自定义工具）。pi 内置工具（`--pi-tools read-only/all`）能读写文件/执行命令——房间内容不可信，慎开 |
 | 身份 | `/opt/iroh-agent/home/identity.key`（删掉=换人；备份它可保持"还是同一个人"） |
 | 停用 | `systemctl disable --now iroh-agent-pi` |
