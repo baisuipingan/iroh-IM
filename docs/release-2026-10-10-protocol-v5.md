@@ -178,8 +178,39 @@
 **任何人照着文档装 agent 都会 404**；就算他手动锁到 `agent-v1.1.0`，装到的也是
 **v4 客户端，对着已经切到 v5 的 roomd 一个字都发不出去**。
 把 `agent-v1.2.0` 推成 Latest 顺带把这条链路修好了。
+后来发现"推成 Latest"本身就是**错的解法** —— 见下面第二个 bug。
 `deploy/agent/install-release.sh` 的默认 `VERSION` 也从 `agent-v1.1.0` 改成了
 `agent-v1.2.0`（默认值必须跟着协议走，注释里写了原因）。
+
+### ★★ 第二个真 bug：`releases/latest` 是**全局**的，而这个仓库有两条产物线
+
+发完 `agent-v1.2.0` 我立刻发现：`scripts/fetch-android-so.sh`（默认取 `latest`）
+**开始 404** —— 因为 GitHub 的 `releases/latest` 是**整个仓库**的 Latest，
+而它已经被 agent 那次发布顶掉了；`libiroh_web-arm64-v8a.so` 当然不在 agent 的 Release 里。
+反过来说，等我把 `android-v0.2.0` 发出去，Latest 又变回 android，
+**agent 的安装脚本会立刻坏掉**。所以"靠 Latest"这条路本身就是错的：
+
+> 两条产物线 + 一个全局 Latest = 谁最后发布谁就砸掉对方的安装路径。
+
+改法（`bc9dfcf`）：`latest` 一律**按本产物族的 tag 前缀**去 releases 列表里取最新那个。
+`scripts/fetch-android-so.sh` → 最新 `android-*`；
+`deploy/install/agent-install.{sh,ps1}` 与 `skills/iroh-agent/scripts/install.{sh,ps1}`
+→ 最新 `agent-v*`（`AGENT_RELEASE_BASE` / `$BaseUrl` 镜像地址仍优先）。
+实测解析结果：`agent-v → agent-v1.2.0`、`android- → android-v0.2.0`，
+**与 Latest 现在指向谁无关**。
+
+### 第三个 Release：`android-v0.2.0`（v5 的 `.so`）
+
+`android-v0.1.0` 里那份 `.so` 是 **v4 签名**，装到手机上表现为
+"能进房、但消息一条看不到"（静默丢消息）—— 正是 v5 要消灭的那类故障。
+所以打 tag `android-v0.2.0`（指向 `bc9dfcf`）重编：
+
+| 项 | 值 |
+|---|---|
+| 资产 | `libiroh_web-arm64-v8a.so` 8,773,328 B + `.sha256` |
+| 完整性 | 从服务器下载后 `sha256sum` = `dbbe0b7546b3ec8f…` **与 Release 里的 `.sha256` 逐字节相符** |
+| 源码一致性 | `git show "android-v0.2.0:client-wasm/src/sigfmt.rs"` = `pub const PROTO_V5: &str = "v5";` |
+| 取法 | `bash scripts/fetch-android-so.sh`（不带参数 = 最新 `android-*`） |
 
 ## 仍未做
 
@@ -187,9 +218,11 @@
 2. 顺带观察到一条**非本轮引入**的噪音：roomd 在客户端"连上就断"时会打
    `router.accept{… alpn="editor.vip/iroh-announce/1"}: … timed out`（WARN）。
    agent 重启那一下能看到一条。语义无害（对端自己走了），但噪音级别可以再压。
-3. **PR #1 还没合**。合之前 `main` 仍是 v4 时代的代码；tag `agent-v1.2.0` 指向分支上的
-   `6f44026`，与线上跑的源码一致。另外手机上的 Android 包是 v4 签名，
-   要重新构建安装才会重新收发消息。
+3. **PR #1 还没合**。合之前 `main` 仍是 v4 时代的代码；tag `agent-v1.2.0` → `6f44026`、
+   `android-v0.2.0` → `bc9dfcf`，都在这个分支上，与线上跑/发布的源码一致。
+4. **手机上装着的那个 App 还是 v4**：`.so` 已经出了 v5 的（`android-v0.2.0`），
+   但要**重新构建并安装** App 才会真正生效（`scripts/fetch-android-so.sh` 换 .so →
+   Expo/原生构建 → 装到手机）。在那之前它会表现为"能进房、消息看不到"。
 
 ## 反漂移自检（方案 §8 逐条）
 

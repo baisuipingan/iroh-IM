@@ -200,4 +200,5 @@ trait RoomCapability: Send + Sync {
 | 阶段 C′ | ✅ 已完成 | `docs/release-2026-10-10-capability-registry.md`；roomd `77280f12…`、前端 `7eb4fa8a-…`；`verify.sh all` 退出码 0（浏览器 618 项）；线上"入口拆分"6/6 |
 | v5 切换 | ✅ 已完成 | `docs/release-2026-10-10-protocol-v5.md`；roomd `7280433a…`、前端 `e152e816-…`（`BUILD=v15`）；Rust 71；`verify.sh all` 退出码 0（23 组浏览器套件全 0 失败）；线上哈希逐一相等 |
 | 补齐交付链（同窗口） | ✅ 已完成 | 六期改动入库：分支 `codex/protocol-v5` / `6f44026` / [PR #1](https://github.com/baisuipingan/iroh-IM/pull/1)；Release `agent-v1.2.0`（6 平台 14 资产、当前 Latest），服务器上的 agent 用它装的（`c18a09277c025a0a…`）；顺带修掉 `install-release.sh` 的默认版本与 "Latest 指向 Android 发布" 导致的安装 404 |
+| 交付链修链（同窗口） | ✅ 已完成 | Release `android-v0.2.0`（v5 的 `.so`，`dbbe0b75…`）；`latest` 改为**按产物族 tag 前缀**解析（`bc9dfcf`）—— `releases/latest` 是全局的，两条产物线互相砸对方的安装路径，两个方向都实测复现过 |
 | 阶段 E（多历史提供者） | ⏳ 暂缓 | 需先确认隐私边界 |
