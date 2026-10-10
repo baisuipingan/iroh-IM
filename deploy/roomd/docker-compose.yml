@@ -14,6 +14,50 @@ services:
     image: roomd:local
     container_name: roomd
     restart: unless-stopped
+
+    # ========================================================================
+    # ★ 健康检查 —— **没有它，roomd 会"假活"**
+    #
+    # ## 为什么要这个（2026-10-10 真事）
+    #
+    # 服务器重启（内核升级）后，roomd 容器跟着起来了，
+    # 但**它到中继的 TCP 一直卡在 SYN_SENT** —— 进程活着、日志一行不写、
+    # CPU 0.04%，整整 **8.7 小时**什么都没做。
+    #
+    # `restart: unless-stopped` 只管「进程死了拉起来」，
+    # **对"进程活着但网络废了"完全无感**。于是所有客户端都连不上锚点，
+    # 而服务端看起来一切正常（容器 Up、中继 Up、端口在听）。
+    #
+    # ## 判据：到中继的 TCP 是否 ESTABLISHED
+    #
+    # roomd 是**纯客户端**（它连中继，不监听任何端口），
+    # 所以"有没有一条对外建的连接"就是它活着的直接证据。
+    # 卡住时那条连接会停在 SYN_SENT（st=02），不是 01。
+    #
+    # ⚠️ 为什么读 `/proc/net/tcp` 而不是 `nc`/`curl`：
+    #    这个镜像是 `debian:bookworm-slim` + 只装了 ca-certificates，
+    #    **没有 nc / curl / wget**（实测）。`cat` 和 `grep` 一定有
+    #    （busybox/coreutils 都有），而且读 /proc **不需要装任何东西**。
+    #
+    # ⚠️ `3C53` = 15443 的十六进制（/proc/net/tcp 用大写十六进制端口）。
+    #    `01` = TCP_ESTABLISHED。两者都要匹配，避免把 SYN_SENT 也算通过。
+    #
+    # 时间参数：每 30s 一次、连续 3 次失败才判不健康（约 90s 容忍），
+    # 启动给 60s 宽限（它要先连中继、订阅房间）。
+    # 判不健康后 Docker **不会自动重启**（restart 策略只管进程退出），
+    # 所以配了看门狗：roomd-watchdog.sh + .service + .timer（同目录）。
+    # ========================================================================
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          grep -qE '^[[:space:]]*[0-9]+:[[:space:]]+[0-9A-F]{8}:[0-9A-F]{4}[[:space:]]+[0-9A-F]{8}:3C53[[:space:]]+01'
+          /proc/net/tcp
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
     logging:
       driver: json-file
       options:

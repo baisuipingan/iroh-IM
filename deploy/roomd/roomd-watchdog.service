@@ -1,0 +1,21 @@
+[Unit]
+Description=roomd 看门狗（健康检查失败则重启容器）
+Documentation=https://github.com/baisuipingan/iroh-IM/blob/main/deploy/roomd/roomd-watchdog.sh
+# 需要 docker 与网络都在
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/roomd-watchdog
+
+# 只读它需要的东西 —— 不给更多权限
+# （脚本只做 docker inspect / docker restart，不需要额外 capability）
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+# 失败不要一直重试（timer 会按自己的节奏再来一次）
+Restart=no

@@ -1,0 +1,15 @@
+[Unit]
+Description=周期性运行 roomd 看门狗
+
+[Timer]
+# 每 2 分钟看一眼就够 —— 健康检查本身是 30s 一次、连续 3 次才判不健康
+# （约 90s 容忍），所以最坏情况下 90s + 120s ≈ 3.5 分钟被发现。
+# 再密意义不大（只是多几次 docker inspect），反而刷日志。
+OnBootSec=3min
+OnUnitActiveSec=2min
+# 补跑一次：机器休眠/挂起错过了就补上
+Persistent=true
+Unit=roomd-watchdog.service
+
+[Install]
+WantedBy=timers.target
