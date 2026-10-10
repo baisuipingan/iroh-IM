@@ -362,7 +362,7 @@ export const timeline = {
    * 重建视图时（`rebuildCardsForRoom`）要把当前算出来的可用性一起带回来，
    * 否则重建出来的卡片会退回"未知"文案。
    */
-  pushFileCard({ room = '', meta, direction, state = 'invited', done = 0, total = 0, error = '', avail, available = true, recipients = [], previewUrl, ts = meta.ts || Date.now() }) {
+  pushFileCard({ room = '', meta, direction, state = 'invited', done = 0, total = 0, error = '', avail, available = true, recipients = [], previewUrl, picking = false, pickerFailed = false, ts = meta.ts || Date.now() }) {
     if (store.isHidden(room || this.room, `file:${meta.file_id}`)) return;
     const key = `file:${room}:${meta.file_id}`;
     if (this.seen.has(key)) {
@@ -392,6 +392,10 @@ export const timeline = {
     // 记下方向：按钮要按方向给（接收卡片不能出现"重新发送"）
     el.dataset.dir = direction || '';
     el.dataset.available = String(available);
+    // 正在等系统的「保存位置」对话框 —— 按钮要一直是禁用的（见 _fileActions）
+    el.dataset.picking = String(!!picking);
+    // 上次弹框失败过 → 卡片上给「直接下载」兜底入口
+    el.dataset.pickerFailed = String(!!pickerFailed);
     el._recipients = recipients;
     // ⚠️ 重建视图时（rebuildCardsForRoom）要把 avail 落到 dataset 上，
     //    后续的 updateFileCard 才会沿用同一个值而不是退回"检查中…"。
@@ -417,7 +421,7 @@ export const timeline = {
         </div>
         <div class="imgcard__bar"><i style="width:${pct}%"></i></div>
         <div class="imgcard__foot">
-          <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '', available, recipients }))}</span>
+          <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '', available, recipients, picking }))}</span>
           <span class="filecard__size">${U.humanSize(meta.size)}</span>
           <span class="imgcard__actions"></span>
         </div>
@@ -429,7 +433,7 @@ export const timeline = {
           <div class="filecard__name">${U.esc(meta.name)}</div>
           <div class="filecard__meta">${U.humanSize(meta.size)} · ${
             direction === 'send' ? '我发送' : '对方发送'
-          } · <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '', available, recipients }))}</span></div>
+          } · <span class="filecard__state">${U.esc(this._fileStateText(state, error, { dir: direction || '', avail: avail || '', available, recipients, picking }))}</span></div>
           <div class="filecard__bar"><i style="width:${pct}%"></i></div>
           ${error ? `<div class="filecard__err">${U.esc(error)}</div>` : ''}
         </div>
@@ -452,7 +456,7 @@ export const timeline = {
   },
 
   /** 更新卡片状态/进度 */
-  updateFileCard({ room, file_id, state, done, total, bytes, error, avail, available, recipients, previewUrl }) {
+  updateFileCard({ room, file_id, state, done, total, bytes, error, avail, available, recipients, previewUrl, picking, pickerFailed }) {
     // ⚠️ `file_id` 是**对端自选**的字符串（只过签名、不看格式）。
     //    直接拼进选择器的话，一个 `a"]` 就能让 querySelector 抛 SyntaxError，
     //    而 bus 对监听器有 try/catch 包着 → **异常被吞、进度从此不再更新**（P3-15）。
@@ -466,6 +470,11 @@ export const timeline = {
       if (avail) el.dataset.avail = avail;
       else delete el.dataset.avail;
     }
+    // ⚠️ `picking` 必须落到 dataset 上：任何一次卡片重绘都会重建按钮，
+    //    而重建出来的按钮**不带 disabled** —— 这正是"变灰 → 再点报
+    //    File picker already active"的成因。状态放在 dataset 上才扛得住重绘。
+    if (picking !== undefined) el.dataset.picking = String(!!picking);
+    if (pickerFailed !== undefined) el.dataset.pickerFailed = String(!!pickerFailed);
     const st = el.querySelector('.filecard__state');
     if (st)
       st.textContent = this._fileStateText(state, error, {
@@ -473,6 +482,7 @@ export const timeline = {
         available: el.dataset.available !== 'false',
         dir: el.dataset.dir,
         avail: avail || el.dataset.avail || '',
+        picking: el.dataset.picking === 'true',
       });
     const bar = el.querySelector('.filecard__bar i, .imgcard__bar i');
     if (bar) {
@@ -576,7 +586,7 @@ export const timeline = {
    * 一份文件发给多个人时，"已完成"到底指谁完成，必须让用户看得明白。
    */
   _fileStateText(state, error, info = {}) {
-    const { dir = '', avail = '', available = true, recipients = [] } = info;
+    const { dir = '', avail = '', available = true, recipients = [], picking = false } = info;
     if (dir === 'send') {
       const labels = [available ? '已分享' : '已停止分享'];
       for (const [recipientState, label] of [
@@ -598,6 +608,8 @@ export const timeline = {
       return '已过期（发送方已离开）';
     }
     if (state === 'asking') return '正在联系发送方…';
+    // 系统保存对话框已经弹出、还没选完 —— 让用户知道"在等的是你"，而不是卡死
+    if (state === 'invited' && picking) return '等待你选择保存位置…';
     const base = {
       invited: '等待你确认',
       // 刷新页面后恢复出来的"没收完"的接收
@@ -729,6 +741,7 @@ export const timeline = {
     if (state === 'asking') return;   // 正在等对方响应，先不给按钮
 
     if (state === 'invited') {
+      const picking = el.dataset.picking === 'true';
       const yes = document.createElement('button');
       yes.className = compact ? 'btn-primary' : 'filecard__btn is-yes';
       yes.title = '接收（会弹出保存位置）';
@@ -737,15 +750,37 @@ export const timeline = {
       no.className = compact ? 'btn-ghost' : 'filecard__btn is-no';
       no.title = '拒绝';
       no.textContent = compact ? '拒绝' : '✗';
-      yes.onclick = () => {
-        yes.disabled = no.disabled = true;
-        bus.emit(EV.FILE_ACCEPT, { file_id: fileId });
-      };
+      if (picking) {
+        // ⚠️ 按钮的禁用必须**从状态派生**，不能只靠 onclick 里那一句
+        //    `yes.disabled = true`：卡片重绘会重建按钮，把 disabled 丢掉，
+        //    用户于是能在"对话框已经开着"的情况下再点一次，撞出
+        //    `File picker already active`（实测到的就是这个现象）。
+        yes.disabled = true;
+        yes.title = '等待选择保存位置…（对话框可能在浏览器其他窗口后面）';
+      } else {
+        yes.onclick = () => {
+          yes.disabled = no.disabled = true;
+          bus.emit(EV.FILE_ACCEPT, { file_id: fileId });
+        };
+      }
+      // ✗ 始终可用：对话框挂住时也要能退出，不能把用户困在"只能干等"
       no.onclick = () => {
         yes.disabled = no.disabled = true;
         bus.emit(EV.FILE_REJECT, { file_id: fileId });
       };
       box.append(yes, no);
+      // 兜底入口：对话框挂着、或上次弹框失败过 → 给一条不依赖系统对话框的路
+      if (picking || el.dataset.pickerFailed === 'true') {
+        const alt = document.createElement('button');
+        alt.className = 'btn-ghost';
+        alt.title = '不用系统「保存位置」对话框：收完后走浏览器普通下载';
+        alt.textContent = '直接下载';
+        alt.onclick = () => {
+          alt.disabled = true;
+          bus.emit(EV.FILE_FALLBACK, { file_id: fileId });
+        };
+        box.append(alt);
+      }
       return;
     }
 

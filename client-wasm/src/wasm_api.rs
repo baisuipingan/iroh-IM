@@ -328,9 +328,8 @@ impl RoomNode {
             .fetch_history_before(&room, limit, before_opt)
             .await
             .map_err(to_js_err)?;
-        if let Some(snap) = resp.snapshot.as_ref() {
-            self.inner.apply_snapshot(snap, &room).await;
-        }
+        // ⚠️ 快照的合并现在统一在 `RoomNode::fetch_history` 里做（阶段 C′）——
+        //    这里是薄包装，不再重复一遍（重复虽然无害，但会让"谁负责"变得含糊）。
         serde_json::to_string(&resp).map_err(|e| JsError::new(&e.to_string()))
     }
 

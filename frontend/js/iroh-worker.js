@@ -83,6 +83,10 @@ async function boot(cfg) {
       secret_key_hex: cfg.secretKeyHex,
       anchor_id: cfg.anchorId ?? null,
       anchor_relay: cfg.anchorRelay ?? null,
+      rendezvous_id: cfg.rendezvousId ?? null,
+      rendezvous_relay: cfg.rendezvousRelay ?? null,
+      history_id: cfg.historyId ?? null,
+      history_relay: cfg.historyRelay ?? null,
     }),
   );
 

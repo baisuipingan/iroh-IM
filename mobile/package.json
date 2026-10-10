@@ -8,7 +8,7 @@
     "start:go": "expo start",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --import ./scripts/register-ts.mjs src/bridge/mock.test.ts",
+    "test": "node --experimental-strip-types --import ./scripts/register-ts.mjs src/bridge/mock.test.ts && node --experimental-strip-types --import ./scripts/register-ts.mjs src/config/relay-config.test.ts",
     "ios": "expo run:ios"
   },
   "dependencies": {

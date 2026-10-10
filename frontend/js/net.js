@@ -36,7 +36,7 @@ import { withTimeout, roomNameError } from './util.js';
  * wasm 构建号：**每次重新构建 wasm 都必须 +1**。
  * 浏览器按 `iroh_web_bg.wasm?b=<BUILD>` 缓存，不 bump 会加载到旧 wasm。
  */
-const BUILD = 'v14';
+const BUILD = 'v15';
 const BOOT_TIMEOUT = 45000;
 const ONLINE_TIMEOUT = 15000;
 /** 重连退避：1s → 2s → 4s … 封顶 30s */
@@ -238,6 +238,12 @@ export const net = {
         secretKeyHex,
         anchorId: this.config.anchor?.id ?? null,
         anchorRelay: this.config.anchor?.relay ?? null,
+        // 阶段 B′：入口与历史是两个角色，各自可指向不同节点。
+        // 没配的一方由 Rust 侧回退到 anchor（老配置的行为不变）。
+        rendezvousId: this.config.rendezvous?.id ?? null,
+        rendezvousRelay: this.config.rendezvous?.relay ?? null,
+        historyId: this.config.history?.id ?? null,
+        historyRelay: this.config.history?.relay ?? null,
       },
     });
 
@@ -415,6 +421,19 @@ export const net = {
         break;
       case 'peerDown':
         bus.emit(EV.PEER_DOWN, { id: ev.id });
+        break;
+      // 孤立：此刻联系不上房间里的任何其他人（Rust 侧 `RoomEvent::Isolated`）。
+      // ⚠️ 别当"进房失败"——`joined` 已经来过了，房间是进成功的：
+      //    消息发得出去（gossip 排队等邻居），只是暂时看不见别人。
+      //    `isolated: false` = 后台重连接上了，UI 该补拉一次历史。
+      case 'isolated':
+        bus.emit(EV.ISOLATED, { room: ev.room, isolated: !!ev.isolated });
+        break;
+      // 协议版本不一致（v5 握手）：服务端在响应里带了它自己的版本，一比就知道
+      // "是不是有一端是旧的"。**必须让用户看见** —— 改造前这种情况的表现是
+      // 消息静默验签失败（只有日志），用户只会觉得"消息丢了"。
+      case 'protocolMismatch':
+        bus.emit(EV.PROTOCOL_MISMATCH, { room: ev.room, ours: ev.ours, theirs: ev.theirs });
         break;
       // ⚠️ Worker 的 wasm 事件流断了（复检 P3-10）：**入站通道整体失效** ——
       //    再也收不到消息/心跳/邀约，但发送仍然可用、状态还显示"在线"。

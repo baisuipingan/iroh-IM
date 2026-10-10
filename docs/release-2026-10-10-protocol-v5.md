@@ -1,0 +1,187 @@
+# 2026-10-10 协议 v5：统一版本串 + 版本握手 + 清历史
+
+> 这是方案里的**第 4 步、唯一一次破坏性发布**（决策 ④）。前三期（D / B′ / C′）
+> 都是增量的；这一步之后，改造只剩阶段 E（多历史提供者，暂缓）。
+
+## 一句话
+
+协议版本串从"每个消息族一个标签"（`p4`/`l3`/`q3`/`f3`）**统一成一个 `v5`**，
+并给三个服务端能力（history / rendezvous / announce）加上**版本握手** ——
+于是"版本不一致"从"消息静默验签失败"变成一条能看见的提示。
+
+## 改了什么
+
+### 1. 版本串统一（`sigfmt.rs`）
+- `PROTO_V4` → **`PROTO_V5 = "v5"`**；`room.rs` 4 处（ChatMessage / Presence /
+  LeaveMsg / FileQuery）+ `filetransfer.rs` 4 处（FileCtrl 家族）全部改用这一个常量。
+- **为什么这是破坏性的**：签名载荷里的标签变了 ⇒ 旧代码验不过新消息，
+  新代码也验不过旧消息。混跑时表现为**消息被丢弃**（双方都是）。
+
+### 2. 版本握手（这是 v5 真正的价值）
+- `HistoryRequest/Response`、`RendezvousRequest/Response`、`AnnounceRequest/Response`
+  各加一个 `#[serde(default)] pub protocol: String`：
+  - 服务端填自己的版本；
+  - **`#[serde(default)]` 是关键**：旧服务端根本没有这个字段 ⇒ 客户端读到空串 =
+    "对端是旧版"。这正是我们要能识别的情形。
+- **客户端**（`RoomNode::note_peer_protocol`）：三个入口（拉历史 / 问入口 / 发加入声明）
+  拿到响应就比对，不一致 ⇒ `warn!` + 新事件 `RoomEvent::ProtocolMismatch{room,ours,theirs}`。
+  同一个版本只报一次（拉历史是高频动作，重复提示会变成噪音）。
+- **服务端**（`note_client_protocol`）：请求里报的版本不一致就 `warn!`
+  （每个「能力 × 版本」只报一次）。**只记日志、不拒绝** —— 拒掉旧客户端对谁都没好处，
+  反而会把"还有旧版在跑"这条线索一起吞掉。
+- **UI 三端都接**：web `main.js` 底部 sticky 提示（页面级、不按房间过滤）；
+  移动端 `useRoom.protocolMismatch` + `ChatScreen` 红色横幅。
+
+### 3. 清历史（决策 ④ 的另一半）
+- 清之前**先做一致性备份**（SQLite + 身份打包，`roomd-backup.service`）：
+  `/opt/iroh/backups/roomd/roomd-20261010T120121287111Z.tar.gz`（541 KB，含 `history.db` + `identity.key`）。
+- 清掉时先停容器，`history.db` / `-wal` / `-shm` 三个文件**整体移到**
+  `data/history/cleared-20261010-200154/`（当天可原地回滚），再启动。
+- 旧库 **3570 条**（`111` 225、`长历史3186` 90、`长历史3231` 90、`贴底测试房` 72…）。
+  不清的话这些旧签名的行会在新客户端加载时被**逐条丢弃**（每次拉历史都白验一遍）。
+
+## ⚠️ 切换窗口：这一步的代价是**真实存在**的，不是纸面风险
+
+必须记住的事实（这次实测确认，不是推测）：
+
+| 组合 | 结果 |
+|---|---|
+| 新 roomd × **旧**客户端 | 旧客户端发的消息被 roomd **拒绝写入历史**（`拒绝写入历史：验签失败`），房间里的人互相看不到 |
+| **旧** roomd × 新客户端 | 同上，只是方向反过来 |
+
+所以顺序是 **roomd → 前端 → agent，同一窗口内完成**，不能各放各的。
+本次实测到这件事本身就是一个证据：我在本地（新 wasm）跑浏览器回归、而线上 roomd 还是旧二进制时，
+`file-history` / `multi-peer` / `room-isolation` 立刻大面积变红，roomd 日志里刷的是
+`拒绝写入历史：验签失败 room=…`。**部署完 roomd 后同一批用例立刻全绿。**
+
+（这也解释了为什么这条发布必须在"项目还没正式上线"的窗口里做。）
+
+## 验证
+
+| 项 | 结果 |
+|---|---|
+| **`bash scripts/verify.sh all`** | **退出码 0**（整轮一次过，无 CRASH、无 ❌） |
+| Rust 单元/集成 | **71 通过 / 0 失败**（含新增的 `stale_history_provider_is_reported_as_protocol_mismatch_exactly_once`），另有集成/示例 4+1+1+1+8+1 全绿 |
+| 安全攻击回归 | 17 + 1 通过 |
+| 浏览器回归 | 23 组套件逐项绿：file-history 17、multi-peer 19、file-recipients 34、review-frontend 19、dm-removed 15、stale 4、offline-room 4、refresh 4、leave-cancel 1、room-isolation 4、card-revive 4、sidebar-pages 7、redesign 127、relay-enabled 6、polish 22、isolated-room 7、rendezvous-split 6、history-scroll 20、theme-sync 16、image-layout 94、fix-review 52、message-ownership 38、roomd-storage 12（**全部 0 失败**） |
+| 线上 `im.pinkstar.cc` | 四个关键产物哈希与本地逐一相等（**见下面的"怎么验的"**） |
+| roomd | `running` / `healthy` / `restarts=0`；启动日志 `房间能力：["history","rendezvous","announce"]`；**EndpointId 未变** |
+| 常驻 agent | `iroh-agent-pi.service` active；日志 `hello：… chatProtocol=v5`、`已进入房间 patrick`；roomd 侧 `[patrick] 服务器助手 在线`，且**不再出现** `拒绝写入历史` |
+
+### 线上哈希"怎么验的"（这一步踩了坑，别用本机直连）
+
+本机（这次的开发机）出网**严重降级**：拉 `pkg/iroh_web_bg.wasm` 会被**静默截断**
+（拿到 2,035,328 / 168,106 字节的不完整副本，`curl` 还报 200），
+`page.goto https://im.pinkstar.cc/...` 会超时、`js/test-hooks.js` 直接被
+`ERR_CONNECTION_RESET`。所以：
+
+- **改从服务器验**：把本地 `dist/site` 里那四个文件 scp 到服务器，
+  在服务器上 `curl` 线上的同一路径再比 sha256 —— 四条全等（结果见上）。
+- 另外直接拉线上 `js/net.js` 确认 `const BUILD = 'v15'`，防止"页面缓存了旧 wasm"
+  这类只在真实浏览器里才暴露的问题。
+- ⚠️ 因此**这一轮没能做"线上页面的浏览器端到端探测"**（本机到 `im.pinkstar.cc`
+  的连接会被重置）。等价的证明链是：线上 wasm 的**字节**= 本地字节（哈希相等）→
+  这些字节在 `verify.sh all` 的浏览器回归里**对着生产 roomd / 生产中继**跑过 →
+  切换后 roomd 库里多出的 **335 行**（`storage-*` / `fix-review-*` / `贴底测试房`）
+  正是那些用例用 v5 签名写进去的。等出网恢复后补一次线上浏览器探测更稳妥。
+
+新增的那条测试证明的是**行为**，不是常量：它拿一个**假的历史提供者**
+（注册在 `HISTORY_ALPN` 上、响应里故意不带 `protocol` 字段）当对端，验证
+①客户端收到 `ProtocolMismatch`（`theirs == ""`，不凭空造版本）、
+②同一版本**只报一次**。把三处调用点注释掉后该测试**确实变红**（已验证）。
+
+浏览器回归逐项（本轮全部复跑过）：
+
+| 套件 | 结果 | 套件 | 结果 |
+|---|---|---|---|
+| file-history | 17/0 | room-isolation | 4/0 |
+| multi-peer | 19/0 | card-revive | 4/0 |
+| file-recipients | 34/0 | sidebar-pages | 7/0 |
+| review-frontend | 19/0 | redesign | 127/0 |
+| dm-removed | 15/0 | relay-enabled | 6/0 |
+| stale | 4/0 | polish | 22/0 |
+| offline-room | 4/0 | isolated-room | 7/0 |
+| refresh | 4/0 | rendezvous-split | 6/0 |
+| leave-cancel | 1/0 | history-scroll | 20/0 |
+| theme-sync | 16/0 | image-layout | 94/0 |
+| fix-review | 52/0 | message-ownership | 38/0 |
+| roomd-storage | 12/0 | | |
+
+> ⚠️ 关于"整轮跑"的**已知环境抖动**（不是本轮改动）：这台 16G 机器在连续开十几个
+> 标签页的套件里偶发两处时序抖动 —— ① `file-recipients` 的"详情显示接收者昵称"
+> 慢一拍（presence 还没到）、② `leave-cancel` 的取消快路径超过 8 秒阈值。
+> 本轮**第一次** `verify.sh all` 就各撞上一次（其余全绿），单独复跑分别 34/0、1/0；
+> 上面表里那次**整轮复跑是干净的退出码 0**。C′ 那轮记录的是同一类现象
+> （内存压力下 CDP 直接断开）。
+
+## 发布与回滚
+
+- 顺序：**先 roomd、再前端、再 agent**（同一窗口）。
+- 后端 roomd：`7280433a1baacab94882849c206b20da70400fa70e03dd85e7f83733284691f0`
+  （`docker exec roomd sha256sum /usr/local/bin/roomd` 实测相等）。
+- 前端：Cloudflare Worker `iroh-chatroom`，最终版本 **`e152e816-4b39-4361-898b-ddd3d3af3ba4`**
+  （中间那次 `1483915c-…` 漏了下面这件事，紧接着补发了一次）。
+  ⚠️ **重新编 wasm 必须 bump `net.js` 的 `BUILD`**（这次 v14→**v15**）：wasm 是按
+  `pkg/iroh_web_bg.wasm?b=<BUILD>` 缓存的，不 bump 的话**已经来过页面的人会继续用旧 wasm**，
+  而旧 wasm 正是 v4 签名 —— 对着新 roomd 就是全线丢消息。第一次发版漏了，补上了。
+  线上产物哈希（与本地 `dist/site` 逐一相等）：
+  `main.js` `c3c6ea9200568748`、`js/net.js` `7d8870b37d1908a3`、
+  `js/iroh-worker.js` `474a90b97a288b24`、`pkg/iroh_web_bg.wasm` `265b33b5ebf17166`（3,835,336 B）。
+  ⚠️ 校验方式：**把这几个文件 scp 到服务器再 curl 比对**。本机直连下 3.8 MB 的 wasm
+  会**被截断**（实测拿到 2,035,328 / 168,106 字节的不完整副本，且 curl 不报错）——
+  本机比出来的哈希不可信。
+- agent：`/opt/iroh-agent/bin/agent` `fd90673229b29a58…`（**见下节的重要说明**），
+  同时把 `agent-pi/src/protocol.gen.ts` 更新到 v5（`1190b257…`）。
+  适配器自带的那道闸门当场拦住了错误组合：
+  `启动失败：protocolMismatch: agent 报告 chatProtocol=v5，适配器只支持 v4；请同步升级` ——
+  先升二进制不升适配器**不会**静默跑起来，这正是想要的行为。
+- 回滚点：
+  - 数据：`/opt/iroh/backups/roomd/roomd-20261010T120121287111Z.tar.gz`；
+    被清掉的那份旧库原样留在 `data/history/cleared-20261010-200154/`。
+  - roomd 二进制：`/opt/iroh/roomd/roomd.bak-20261010-200154`（= C′ 的 `77280f12…`）。
+  - 前端：上一个 CF 版本 `1483915c-a1cf-40de-b151-b5810a956e63`（v15 之前那次）；
+    再往前是 C′ 的 `7eb4fa8a-f7f5-4a58-8b5a-10f9126c6051`。
+  - agent：`/opt/iroh-agent/bin/agent.bak-20261010-121937`（= Release `agent-v1.1.0`）；
+    `agent-pi/src/protocol.gen.ts.bak-v4-20261010-201955`。
+  - **回滚要三件一起回**：任何一侧单独回退都会回到"新×旧"的组合 ⇒ 全线丢消息。
+
+## 未完成 / 偏离（必须有人接手）
+
+1. **`agent-v1.2.0` 这个 Release 还没出出来。**
+   服务器上现在跑的 agent 是**从工作区源码本地构建**的（同一次 `build-wasm.sh native`，
+   与 roomd 是同一份源码），**不来自任何 GitHub Release** —— 这违反了方案第 6 节的
+   "不许让服务器上跑的二进制处在不属于任何 Release 的状态"。
+   要补上需要：`git commit` + `git push` + `git tag agent-v1.2.0` + 推 tag，
+   让 `release-agent.yml` 编出多平台产物，再用
+   `VERSION=agent-v1.2.0 deploy/agent/install-release.sh` 覆盖安装。
+   **在那之前，这个二进制怎么复现**（免得它真的变成孤儿）：它和 roomd 出自
+   **同一次** `bash scripts/build-wasm.sh native`（构建机上就是
+   `/opt/iroh-build/client-wasm/target/release/agent`，sha256 `fd90673229b29a58…`），
+   安装方式与 `deploy/agent/install-release.sh` 的最后一步等价：
+   `install -m 755 -o iroh-agent -g iroh-agent <agent> /opt/iroh-agent/bin/agent`。
+   ⚠️ 提交前要先处理：`docs/architecture-refactor-plan.md` §9 与
+   `docs/release-2026-10-10-roomd-decouple.md` 里**写了服务器 IP 与私钥路径**，
+   而本仓库是**公开**的（`build-wasm.sh` 头部就写着"本仓库是公开的，所以不写主机名与密钥路径"）。
+2. 阶段 E（多历史提供者）仍暂缓 —— 需要先确认隐私边界。
+3. 顺带观察到一条**非本轮引入**的噪音：roomd 在客户端"连上就断"时会打
+   `router.accept{… alpn="editor.vip/iroh-announce/1"}: … timed out`（WARN）。
+   agent 重启那一下能看到一条。语义无害（对端自己走了），但噪音级别可以再压。
+
+## 反漂移自检（方案 §8 逐条）
+
+1. **有没有让"任何 peer 掉线不影响别人"变差？** 没有。v5 只动了版本串与握手字段；
+   进房降级（阶段 A）、入口/历史双能力（B′）的语义一行没改，`isolated-room` 7/7、
+   `rendezvous-split` 6/6 复跑仍绿。
+2. **核心的能力分发表是变小了还是又多了一个 if？** 没变。v5 都在能力**内部**：
+   版本比对写在各自的 accept/调用点，`CapabilityRegistry` 与 dispatch 一行未动
+   （新增的只是一条事件变体，UI 消费）。
+3. **协议类型仍然只有一份来源？** 是。`protocol.gen.ts` 由 Rust 生成，
+   `check-protocol-types.sh` 进 `verify.sh`；这次 `CHAT_PROTOCOL` 从 v4→v5 是**只改 Rust
+   再重跑生成脚本**得到的，三端（web/mobile/agent-pi）没有一处手抄。
+   `daemon-protocol` 的黄金转录也改成引用 `iroh_web::sigfmt::PROTO_V5` 而不是字面量。
+4. **能不能单独回滚？回滚步骤写了吗？** 能，写在上面（但要三件一起回）。
+5. **有没有哪条已拍板决策与现实冲突？** 有**一条与本次实现无关但影响交付**的：
+   决策 ⑤"每期一发"要求"服务器上的二进制都属于某个 Release"，而本地工作区
+   **四期改动（D/B′/C′/v5）全都还没提交**（`git status` 里全是未提交文件）。
+   要做 Release 就必须先提交+推送，而提交会把服务器 IP 带进公开仓库。
+   **已按"停下来报告"处理**，没有擅自提交。

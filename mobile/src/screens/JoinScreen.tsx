@@ -21,11 +21,17 @@ export function JoinScreen({
   relay,
   connecting,
   error,
+  note,
 }: {
   onJoin: (p: JoinParams) => void;
   relay: RelayStatus;
   connecting: boolean;
   error: string | null;
+  /**
+   * 非致命说明（当前只有一条：中继配置用了内置兜底）。
+   * ⚠️ 与 `error` 分开：兜底**能连上**，不是错误；但排查"连不上"时它是第一个要看的信息。
+   */
+  note?: string;
 }) {
   const [room, setRoom] = useState('');
   const [nick, setNick] = useState('');
@@ -85,6 +91,7 @@ export function JoinScreen({
             />
           </View>
 
+          {note ? <Text style={styles.note}>{note}</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <TouchableOpacity
@@ -129,6 +136,8 @@ const styles = StyleSheet.create({
   },
   hint: { fontSize: font.xs, color: colors.textFaint, marginTop: spacing.xs },
   error: { fontSize: font.sm, color: colors.coral, marginTop: spacing.lg },
+  // 兜底说明用中性色：它是"提示"，不是"故障"
+  note: { fontSize: font.xs, color: colors.textMuted, marginTop: spacing.lg },
   btn: {
     height: 52,
     borderRadius: sizes.radiusCard,

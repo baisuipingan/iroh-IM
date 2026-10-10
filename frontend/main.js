@@ -27,7 +27,7 @@ import { notify } from './js/ui/notify.js';
 import { fileTransfer, canTransferFiles } from './js/ui/filetransfer.js';
 //自动化钩子（`window.__state` / `__iroh_*`）全部收在 test-hooks.js，
 // 由下面的 installTestHooks() 显式装一次。见文件末尾的说明。
-import { installTestHooks } from './js/test-hooks.js';
+import { installTestHooks, markBooted } from './js/test-hooks.js';
 // 注意：**不要在主线程 import wasm**。iroh 已经整体搬进 Worker
 // （`js/iroh-worker.js`），主线程再 import 一次会白加载 3.4MB 的 wasm
 // 而且那份实例和应用用的是两套状态（踩过：`set_stop_after_chunks` 报 undefined）。
@@ -52,6 +52,17 @@ let opening = null;
 let pendingRoom = '';
 /** 进房期间用户又点了的房间（等当前这次结束后接着开） */
 let queuedRoom = '';
+/**
+ * 当前**处于孤立状态**的房间（进房成功、但联系不上任何其他人）。
+ *
+ * ⚠️ 必须记成模块级的**状态**，不能只在事件回调里写一条提示：
+ *   `timeline.note` 是**单例槽位**（任何一次 note 都会覆盖上一条），
+ *   而 `Isolated` 事件在 `await net.joinRoom()` **期间**到达，
+ *   紧接着进房成功那句「已进入「x」」就会把它冲掉 ——
+ *   结果用户只看到"已进入"，完全不知道现在是孤立的。
+ *   所以进房成功的文案要按这个标志选。
+ */
+let isolatedRoom = '';
 
 function syncMyIdentity() {
   const id = net.endpoint_id();
@@ -81,11 +92,19 @@ async function openRoom(room) {
 
   opening = (async () => {
     sidebar.setRoom(room);
+    // ⚠️ 窄屏（≤760px）时侧栏是**抽屉**：程序化进房（autostart / 深链 / 测试钩子）
+    //    不走"点列表里的房间"那条路径，于是抽屉一直盖着聊天区 ——
+    //    实测 `elementFromPoint` 落在 `panel-body` 上，用户**点不到输入框**。
+    //    与 chats.js 里点选房间时的处理保持一致（断点常量见 util.js）。
+    if (U.isNarrow()) sidebar.closePanel();
     store.upsertRoom(room, { last: Date.now() });
     store.setLastRoom(room);
     timeline.open(room, myId);
     composer.setRoom(room);
     joinedRoom = null;
+    // 换房要清掉上一个房间的孤立状态 —— 否则切走再切回来、
+    // 而这次其实连得上时，会错误地显示"暂时联系不上"（状态是**本次进房**的事实）
+    isolatedRoom = '';
 
     if (!net.canSend) {
       // 没连上也要把界面切过去，但**明确告诉用户现在发不出去**，
@@ -117,9 +136,18 @@ async function openRoom(room) {
       await net.joinRoom(room, store.nick());
       joinedRoom = room;
       pendingRoom = '';
-      // 成功提示不该常驻：它是"进行中"的说明，几秒后自动消失即可，
-      // 留着会让人以为时间线上多了一条系统消息。
-      timeline.note(`已进入「${label}」`, { replace: true });
+      if (isolatedRoom === room) {
+        // 孤立进房：**如实说**。这不是失败（房间进了、消息会排队），
+        // 所以不禁用输入，但也不能只显示"已进入"让人以为一切正常。
+        timeline.note(
+          '已进入房间，但暂时联系不上其他人，正在后台重连。这期间你发的消息会先排队。',
+          { sticky: true, kind: 'warn' },
+        );
+      } else {
+        // 成功提示不该常驻：它是"进行中"的说明，几秒后自动消失即可，
+        // 留着会让人以为时间线上多了一条系统消息。
+        timeline.note(`已进入「${label}」`, { replace: true });
+      }
       composer.setEnabled(true);
       composer.focus();
       // 顶栏成员药丸（"N 人"）只有真的 join 成功才显示
@@ -290,6 +318,50 @@ function wire() {
     motion.paintMembers();
   });
 
+  // 孤立：进房成功，但暂时联系不上房间里的其他人
+  //（典型成因：常驻节点正在重启，或它那台中继不可达）。
+  //
+  // ⚠️ 刻意**不报错、也不禁用输入**：房间已经进了，消息会排队等邻居，
+  //    写一句"失败"会把一个自愈过程说成故障（这个项目踩过同类误导）。
+  bus.on(EV.ISOLATED, ({ room, isolated }) => {
+    // 事件可能来自用户没在看的房间（切房瞬间）—— 只认当前时间线那间
+    // （但状态标志仍要按房间维护，切回来后文案才对得上）
+    if (isolated) isolatedRoom = room;
+    else if (isolatedRoom === room) isolatedRoom = '';
+    if (!timeline.room || timeline.room !== room) return;
+    if (isolated) {
+      timeline.note('暂时联系不上房间里的其他人，正在后台重连。这期间你发的消息会先排队。', {
+        sticky: true,
+        kind: 'warn',
+      });
+      motion.paintConnection();
+      return;
+    }
+    // 接上了 → 补拉一次历史：孤立期间漏掉的消息在常驻节点那边
+    timeline.note('已重新接上房间里的其他人', { replace: true });
+    timeline.loadLatest({ silent: true }).catch(() => {});
+    motion.paintMembers();
+    motion.paintConnection();
+  });
+
+  // 协议版本不一致（v5 握手）：服务端在每个能力的响应里都带上了自己的版本，
+  // 一比就知道"有一端是旧的"。
+  //
+  // ⚠️ 刻意**不静默**：旧的失败方式是两边把对方的消息当"验签失败"丢掉
+  //    （只有一行日志），用户只会看到消息凭空消失 —— 那是最难查的一类问题。
+  //
+  // ⚠️ 也刻意**不按房间过滤**：这是页面级的条件，`theirs` 是空串说明对端
+  //    连这个字段都没有（真旧版）。提示用 sticky：它不会自己好，只能靠刷新/升级。
+  bus.on(EV.PROTOCOL_MISMATCH, ({ room, ours, theirs }) => {
+    const label = theirs || '旧版';
+    console.warn(`[协议] 本端 ${ours}，对端 ${label}（room=${room ?? '-'}）`);
+    composer.tip(
+      `当前页面的协议版本（${ours}）与房间服务端（${label}）不一致：请刷新页面，` +
+        '否则双方的消息可能互相收不到。',
+      { bad: true, sticky: true },
+    );
+  });
+
   // 提示默认 5 秒后自动消失；文案里带"失败/出错/超时"这类词的按错误样式显示。
   // 不去逐个调用点标 `bad` —— 十几个 emit 容易漏，漏一处就少一次视觉提示。
   bus.on(EV.TIP, (text, opts) =>
@@ -347,6 +419,10 @@ function wire() {
   // 点了历史文件卡片上的 ✓：请发送方重发一次邀约（我们手上没有完整元信息，开不了传输）
   bus.on(EV.FILE_OPEN, ({ file_id }) =>
     fileTransfer.openArchived(file_id).catch((e) => bus.emit(EV.TIP, String(e?.message ?? e))),
+  );
+  // 保存位置对话框没出来时的兜底：收进 OPFS 再走浏览器普通下载
+  bus.on(EV.FILE_FALLBACK, ({ file_id }) =>
+    fileTransfer.downloadInstead(file_id).catch((e) => bus.emit(EV.TIP, String(e?.message ?? e))),
   );
   // 接收方把一条已失效的接收记录清掉（只删本端）
   bus.on(EV.FILE_DISMISS, ({ file_id }) => fileTransfer.dismiss(file_id));
@@ -429,6 +505,8 @@ async function main() {
     }
     sidebar.show('chats');
     sidebar.paintBadge();
+    // 启动尾巴跑完了 —— 测试可以开始操作（见 test-hooks.js 的说明）
+    markBooted();
     const storageWarning = () => dialog.info('临时存储模式', '浏览器存储不可用或已满。本次操作仅保存在当前页面，刷新后新身份、草稿和设置可能丢失。请释放浏览器空间或允许网站存储后重新打开。');
     document.addEventListener('storageunavailable', storageWarning);
     if (!store.persistent) storageWarning();

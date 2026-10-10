@@ -485,8 +485,14 @@ tt.check("链路图有「本机」节点和备选链路", tp["hasLocalNode"] and
          f"local={tp['hasLocalNode']} chips={tp['chips']}")
 # ★ 与状态页同一条防线：设计稿「声呐拓扑」里的数字全是编的，一旦照抄进来
 #   这一页会变成"看起来最专业、其实全假"的页面 —— 而它正是排障时最先打开的。
+# ⚠️ 判据必须按**词**：早先这里写的是裸 `"256"`，于是**真实探测延迟**
+#    （比如 "256 ms"）会被误判成"照抄了设计稿里的 256 Bit"—— 这条断言因此
+#    偶发飘红，而它本该是"防编造"的防线，成了噪音（实测踩到）。
+#    同时把**命中了什么**打出来：只报"发现编造量"根本没法排查。
+_FABRICATED = ("GEO", "负载", "0.42", "256 Bit", "3000m", "kHz")
+_fabricated_hits = [t for t in _FABRICATED if t in tp["text"]]
 tt.check("拓扑不含设计稿编造的量（GEO / 负载 / gossip 周期 / 256 Bit / 3000m）",
-         not any(t in tp["text"] for t in ("GEO", "负载", "0.42", "256", "3000m", "kHz")), "发现编造量")
+         not _fabricated_hits, f"命中 {_fabricated_hits}；实际文本：{tp['text'][:400]!r}")
 tt.check("拓扑说清「打不了洞」这个前提", "relay-only" in tp["text"], tp["text"][:120])
 
 # 拓扑里的「重新探测」必须真的接线（它不在 #panel-body 里，绑定要自己做）

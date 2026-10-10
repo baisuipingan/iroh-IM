@@ -109,8 +109,15 @@ fn env_opt(name: &str) -> Option<String> {
 struct Config {
     relays: Vec<String>,
     relay_token: Option<String>,
+    /// 兼容字段：下面两个角色都没配时回退到它
     anchor_id: Option<String>,
     anchor_relay: Option<String>,
+    /// **房间入口**（rendezvous）：进房时问它"这房间现在有谁"
+    rendezvous_id: Option<String>,
+    rendezvous_relay: Option<String>,
+    /// **历史提供者**
+    history_id: Option<String>,
+    history_relay: Option<String>,
     nickname: String,
 }
 
@@ -142,6 +149,26 @@ fn load_config() -> Config {
                 .and_then(|a| a.get("relay"))
                 .and_then(|x| x.as_str())
                 .map(str::to_string),
+            rendezvous_id: v
+                .get("rendezvous")
+                .and_then(|a| a.get("id"))
+                .and_then(|x| x.as_str())
+                .map(str::to_string),
+            rendezvous_relay: v
+                .get("rendezvous")
+                .and_then(|a| a.get("relay"))
+                .and_then(|x| x.as_str())
+                .map(str::to_string),
+            history_id: v
+                .get("history")
+                .and_then(|a| a.get("id"))
+                .and_then(|x| x.as_str())
+                .map(str::to_string),
+            history_relay: v
+                .get("history")
+                .and_then(|a| a.get("relay"))
+                .and_then(|x| x.as_str())
+                .map(str::to_string),
             nickname: v
                 .get("nickname")
                 .and_then(|x| x.as_str())
@@ -160,6 +187,11 @@ fn load_config() -> Config {
     cfg.relay_token = env_opt("IROH_AGENT_TOKEN").or(cfg.relay_token);
     cfg.anchor_id = env_opt("IROH_AGENT_ANCHOR_ID").or(cfg.anchor_id);
     cfg.anchor_relay = env_opt("IROH_AGENT_ANCHOR_RELAY").or(cfg.anchor_relay);
+    // 两个角色也可以各自用环境变量覆盖（部署时想指向不同节点就走这里）
+    cfg.rendezvous_id = env_opt("IROH_AGENT_RENDEZVOUS_ID").or(cfg.rendezvous_id);
+    cfg.rendezvous_relay = env_opt("IROH_AGENT_RENDEZVOUS_RELAY").or(cfg.rendezvous_relay);
+    cfg.history_id = env_opt("IROH_AGENT_HISTORY_ID").or(cfg.history_id);
+    cfg.history_relay = env_opt("IROH_AGENT_HISTORY_RELAY").or(cfg.history_relay);
     if let Some(v) = env_opt("IROH_AGENT_NICK") {
         cfg.nickname = v;
     }
@@ -397,8 +429,14 @@ async fn start_node(cfg: &Config, key: &SecretKey) -> Result<Arc<RoomNode>> {
         secret_key_hex: Some(hex_encode(key.to_bytes())),
         anchor_id: cfg.anchor_id.clone(),
         anchor_relay: cfg.anchor_relay.clone(),
+        rendezvous_id: cfg.rendezvous_id.clone(),
+        rendezvous_relay: cfg.rendezvous_relay.clone(),
+        history_id: cfg.history_id.clone(),
+        history_relay: cfg.history_relay.clone(),
         history_dir: None,
         serve_history: false,
+        serve_rendezvous: false,
+        join_timeout_ms: None,
     })
     .await
     .context("启动节点失败")?;
@@ -1584,7 +1622,7 @@ async fn cmd_serve(cfg: &Config, key: &SecretKey, auto_room: &str) -> Result<()>
         "type": "hello",
         "agent": format!("iroh-agent/{}", env!("CARGO_PKG_VERSION")),
         "endpointId": node.endpoint_id(),
-        "chatProtocol": iroh_web::sigfmt::PROTO_V4,
+        "chatProtocol": iroh_web::sigfmt::PROTO_V5,
         "nickname": cfg.nickname,
         "relay": relay,
     }));

@@ -95,11 +95,9 @@ export class NativeTransport implements Transport {
       } catch (e) {
         // 节点被释放（nativeFree 之后再 poll 会抛异常）—— 正常退出，不当错误
         if (this.stopped) break;
-        this.emitLocal({
-          type: 'error',
-          room: '',
-          message: e instanceof Error ? e.message : String(e),
-        });
+        // ⚠️ 不能带 `room`：Rust 的 `RoomEvent::Error` 只有 `message`
+        //    （本地合成事件也要与线协议同形，否则消费方按房间过滤时会错判）。
+        this.emitLocal({ type: 'error', message: e instanceof Error ? e.message : String(e) });
         break;
       }
       if (raw == null) continue; // 超时，无事件

@@ -37,6 +37,8 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
   --files-allow ID,ID        只接收这些发送方（EndpointId；不设 = 不限）
   --files-dir DIR            落盘目录（不设 = daemon 默认 <IROH_AGENT_HOME>/received/）
   --files-max-concurrent 2   并发接收上限（满了自动拒绝，让对端稍后重发）
+  --files-max-total-mb 512   **累计**接收上限（单文件与并发都挡不住"反复发小文件"，
+                             常驻 agent 长期跑必须靠它兜底；重启后重新计数）
 
 rule brain：
   --rules PATH          规则文件（JSON，见 examples/rules.json；默认 ping→pong）
@@ -103,6 +105,7 @@ const VALUE_FLAGS = new Set([
   'files-allow',
   'files-dir',
   'files-max-concurrent',
+  'files-max-total-mb',
 ]);
 const BOOL_FLAGS = new Set(['no-prefix', 'no-mention', 'respond-to-all', 'help']);
 
@@ -139,6 +142,7 @@ interface Flags {
   filesAllow?: string;
   filesDir?: string;
   filesMaxConcurrent?: string;
+  filesMaxTotalMb?: string;
   help?: boolean;
 }
 
@@ -239,7 +243,9 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
       );
       return await createPiSdkBrain({
         agentNick: flags.nick,
-        room: flags.room,
+        // ⚠️ 这里**不要**传 `room`：`PiSdkBrainOptions` 没有这个字段
+        //    （房间名来自每条消息，见 renderTemplate 的 {room}）。
+        //    以前传了一个不存在的键 —— JS 不报错、TS 那时也没检查，纯属噪音。
         systemPrompt: flags.piSystemPrompt,
         appendSystemPrompt: flags.piAppendPrompt ? [flags.piAppendPrompt] : undefined,
         promptTemplate: flags.piPromptTemplate,
@@ -387,9 +393,17 @@ async function main(): Promise<void> {
       : undefined,
     filesSaveDir: flags.filesDir,
     filesMaxConcurrent: num(flags.filesMaxConcurrent, 2),
+    filesMaxTotalBytes: num(flags.filesMaxTotalMb, 512) * 1024 * 1024,
     log: (...args) => log(args.map(String).join(' ')),
   });
   adapter.start();
+  if (filesMode === 'accept' && !flags.filesAllow) {
+    // 不阻止启动（很多人就是这么用的），但必须说出来：房间里**任何人**都能发文件过来。
+    log(
+      '[cli] ⚠️ --files accept 未配 --files-allow：房间里任何人都能给你发文件' +
+        '（受单文件 / 并发 / 累计三道闸门约束，但请确认落盘目录所在分区够用、账号权限够低）',
+    );
+  }
   log(
     `[cli] 已就绪：prefix=${flags.noPrefix ? '关' : (flags.prefix ?? '!')} mention=${mention ?? '关'} ` +
       `files=${filesMode}${filesMode === 'accept' ? `（上限 ${num(flags.filesMaxMb, 64)} MiB）` : ''}`,

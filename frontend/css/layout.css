@@ -257,7 +257,10 @@ html[data-wallpaper='jelly'] .chat {
   .panel {
     position: absolute;
     top: 0; bottom: 0; left: var(--rail-w);
-    width: min(var(--panel-w), calc(100vw - var(--rail-w)));
+    /* ⚠️ 末尾那 28px 是**刻意留的**：抽屉与遮罩同占一层，遮罩 z-index 更低，
+       抽屉一旦盖满剩余宽度，遮罩就完全点不到 —— 在 320px 宽的设备上
+       表现为"抽屉打不开也关不掉"（点遮罩会命中面板本身）。实测踩过。 */
+    width: min(var(--panel-w), calc(100vw - var(--rail-w) - 28px));
     z-index: var(--z-pop);
     transform: translateX(-100%);
     transition: transform .18s var(--ease);

@@ -102,18 +102,27 @@ echo "==> 3/3 部署到 Cloudflare"
 # 本机出网代理不放行 api.cloudflare.com（DNS 被污染，解析到黑洞），
 # 但实测「强制指到真实 IP」是通的。所以先起一个本地 DNS 修正代理，
 # 把 wrangler 的 HTTPS_PROXY 指过去。代理只改写 3 个 CF 主机，其余照常。
-PROXY_PORT="${CF_DNS_PROXY_PORT:-8899}"
-python3 "$ROOT/scripts/cf-dns-fix-proxy.py" "$PROXY_PORT" >/tmp/cf-dns-proxy.log 2>&1 &
-PROXY_PID=$!
-cleanup() { kill "$PROXY_PID" 2>/dev/null || true; }
-trap cleanup EXIT
-sleep 1
-
-# 清掉环境里原有的代理设置（否则 wrangler 还是会走那个拦截代理）
+#
+# ⚠️ 先**探一下直连**再决定要不要起它 —— 这个代理是环境补丁，不是必需品，
+#    而它现在会**帮倒忙**：OAuth 续期要连 `sparrow.cloudflare.com`（不在代理的
+#    绕过名单里），一旦令牌过期就变成"auth server could not be reached"，
+#    报错指向网络，实际是自家代理把它掐了（2026-10-10 真事，卡了一次发版）。
+#    直连可达就直连：要么都不通（那时才需要绕过 DNS）。
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy || true
-export HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT"
-export HTTP_PROXY="http://127.0.0.1:$PROXY_PORT"
-export NO_PROXY="127.0.0.1,localhost"
+if curl -s -m 8 -o /dev/null https://api.cloudflare.com/client/v4/; then
+  echo "    api.cloudflare.com 可直连，跳过 DNS 修正代理"
+else
+  echo "    直连不通，起 DNS 修正代理（绕过被污染的解析）"
+  PROXY_PORT="${CF_DNS_PROXY_PORT:-8899}"
+  python3 "$ROOT/scripts/cf-dns-fix-proxy.py" "$PROXY_PORT" >/tmp/cf-dns-proxy.log 2>&1 &
+  PROXY_PID=$!
+  cleanup() { kill "$PROXY_PID" 2>/dev/null || true; }
+  trap cleanup EXIT
+  sleep 1
+  export HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT"
+  export HTTP_PROXY="http://127.0.0.1:$PROXY_PORT"
+  export NO_PROXY="127.0.0.1,localhost"
+fi
 
 # ⚠️ 不用 `npx --yes wrangler@4 deploy`（复检 P2-22）：
 #    1) 每次部署都去 npm 拉"当前最新的 4.x"—— 工具链没固定，行为可能随版本变；

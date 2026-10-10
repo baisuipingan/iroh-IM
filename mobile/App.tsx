@@ -41,6 +41,7 @@ import { colors, font, sizes, spacing } from './src/theme/tokens';
 import { nativeStatus } from './modules/iroh-native/src';
 import { loadSettings, updateSettings } from './src/settings';
 import { haptic } from './src/haptics';
+import { loadRelayConfig } from './src/config/relay-config';
 
 /** 聊天页顶栏能进的两个子页 */
 type SubScreen = 'status' | 'settings' | null;
@@ -85,27 +86,19 @@ function parseAutoSendUrl(url: string): string | null {
 }
 
 /* ---------------------------------------------------------------------------
- * 中继配置 —— 与 `frontend/relay-config.json` 保持一致。
+ * 中继配置：**启动时从线上拉**（`src/config/relay-config.ts`），失败才用内置兜底。
  *
- * ⚠️ 这里是**手抄的副本**。改线上中继配置时这里要一起改，否则移动端会连到
- *    已经下线/改名的那台。正式做法是把这份 JSON 也打进 App（或进 EAS secret），
- *    但 v1 先手工同步 —— 只有三台、且很少动。
+ * ⚠️ 改造前这里是**手抄的副本**，与 `frontend/relay-config.json` 是两份 ——
+ *    换中继 / 轮换 token 必须重新发版 App，否则移动端还在连已经下线的地址。
+ *    现在改配置**不需要**发版；内置兜底只在拉取失败时生效（离线/被墙也要能连）。
  * -------------------------------------------------------------------------*/
-
-const RELAY_URLS = [
-  'https://iroh1.editor.vip:15443',
-  'https://iroh2.editor.vip:15443',
-  'https://iroh3.editor.vip:15443',
-];
-const RELAY_TOKEN = '44d51ffb6ddab961c6c8cdfe802e0752e0dee3b5cb486916';
-/** 常驻节点（提供历史 + 在线状态） */
-const ANCHOR_ID = '5bcc4ea3bb56f17041390a9f171bb03a16f107f95ecb93097f80a985845aaab6';
-const ANCHOR_RELAY = 'https://iroh1.editor.vip:15443';
 
 export default function App() {
   const [transport, setTransport] = useState<Transport | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
+  /** 中继配置来源说明（只在用了内置兜底时非空）—— 排查"连不上"先看它 */
+  const [configNote, setConfigNote] = useState('');
   /** 启动尝试的代数 —— 每次"重试"加一，用来重启下面那个 effect */
   const [bootAttempt, setBootAttempt] = useState(0);
   /** 当前打开的子页（null = 在看聊天） */
@@ -139,11 +132,18 @@ export default function App() {
           return;
         }
 
+        const loaded = await loadRelayConfig();
+        // 用内置兜底也要能连上，所以**不阻塞启动** —— 但必须让用户看见
+        setConfigNote(
+          loaded.source === 'builtin'
+            ? `中继配置用的是内置兜底（线上拉取失败：${loaded.error}）`
+            : '',
+        );
         const t = await NativeTransport.create({
-          relays: RELAY_URLS,
-          relayToken: RELAY_TOKEN,
-          anchorId: ANCHOR_ID,
-          anchorRelay: ANCHOR_RELAY,
+          relays: loaded.config.relays.filter((r) => r.enabled !== false).map((r) => r.url),
+          relayToken: loaded.config.relay_token ?? null,
+          anchorId: loaded.config.anchor?.id ?? null,
+          anchorRelay: loaded.config.anchor?.relay ?? null,
         });
         await t.online();
         if (!alive) {
@@ -332,6 +332,8 @@ export default function App() {
             peers={st.peers}
             relay={st.relay}
             joined={st.joined}
+            isolated={st.isolated}
+            protocolMismatch={st.protocolMismatch}
             files={st.files}
             outFiles={st.outFiles}
             onSend={st.send}
@@ -348,6 +350,7 @@ export default function App() {
             relay={st.relay}
             connecting={connecting}
             error={bootError ?? st.error}
+            note={configNote || undefined}
           />
         )}
       </View>

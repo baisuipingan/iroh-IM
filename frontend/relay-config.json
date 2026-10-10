@@ -1,7 +1,7 @@
 {
   "version": 1,
   "updated_at": "2026-09-29T09:20:00Z",
-  "note": "中继名单 + 常驻节点地址。relay_token 会随页面下发，所以它只能挡住「扫端口/直连 relay URL 的陌生人」，不能当作强凭证；要更强控制请换 HTTP callout。",
+  "note": "中继名单 + 两个常驻角色（房间入口 rendezvous / 历史提供者 history）。relay_token 会随页面下发，所以它只能挡住「扫端口/直连 relay URL 的陌生人」，不能当作强凭证；要更强控制请换 HTTP callout。",
   "relays": [
     {
       "id": "hk-1",
@@ -31,7 +31,17 @@
   "anchor": {
     "id": "5bcc4ea3bb56f17041390a9f171bb03a16f107f95ecb93097f80a985845aaab6",
     "relay": "https://iroh1.editor.vip:15443",
-    "note": "常驻节点：提供历史消息与在线状态。id 由 roomd 启动时打印，部署后填这里。"
+    "note": "兼容字段：新客户端优先用 rendezvous / history；两者都没配时才回退到它。"
+  },
+  "rendezvous": {
+    "id": "5bcc4ea3bb56f17041390a9f171bb03a16f107f95ecb93097f80a985845aaab6",
+    "relay": "https://iroh1.editor.vip:15443",
+    "note": "房间入口（rendezvous）：进房时问它\"这个房间现在有谁\"。与 history 可以是不同节点。"
+  },
+  "history": {
+    "id": "5bcc4ea3bb56f17041390a9f171bb03a16f107f95ecb93097f80a985845aaab6",
+    "relay": "https://iroh1.editor.vip:15443",
+    "note": "历史提供者：拉历史走它。与 rendezvous 可以是不同节点。"
   },
   "relay_token": "44d51ffb6ddab961c6c8cdfe802e0752e0dee3b5cb486916"
 }

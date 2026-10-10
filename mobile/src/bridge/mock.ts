@@ -64,7 +64,6 @@ function seedHistory(room: string, me: string): ChatMessage[] {
         name: '实验数据-2026Q4.xlsx',
         size: 2_458_112,
         mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        root_hash: 'b3'.repeat(32),
       },
     ),
     msg(me, '收到，我看一下', -5 * H),
@@ -177,7 +176,7 @@ export class MockTransport implements Transport {
       peers: [...this.peers.values()].map((p) => ({
         id: p.id,
         nickname: p.nickname,
-        last_seen_ms: now,
+        lastSeenMs: now,
         files: [],
         epoch: 1,
       })),

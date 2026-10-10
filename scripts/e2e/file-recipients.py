@@ -253,6 +253,90 @@ try:
       return before === JSON.stringify(window.__iroh_transfers());
     }})()''')
     tt.check('其他房间的汇总不能覆盖接收详情', isolated)
+
+    # ------------------------------------------------- 保存对话框重入（真实故障）
+    #
+    # 现象：接收端点 ✓ → 按钮变灰 → 保存对话框没出现（被拖到别的窗口后面、
+    #       或被系统挂起）→ 再点一下报
+    #       `Failed to execute 'showSaveFilePicker' on 'Window': File picker already active.`
+    #
+    # 根因两条，缺一不可：
+    #   ① `accept()` 没有重入保护，第二次点击会真的再调一次系统 picker；
+    #   ② 按钮的 disabled 只在 onclick 里设一次 —— 任何一次卡片重绘
+    #      （进度/presence/切房重建）都会把按钮重建，disabled 被丢掉。
+    #
+    # 这里用"永不 settle"的假 picker 复现"对话框挂着"，然后故意触发一次
+    # **不带 picking 字段**的重绘，断言按钮仍然是禁用的、且 picker 只被调了一次。
+    stuck = send(sender, receivers, 'picker-stuck.bin', 1024)
+    first.ev('window.__pickerCalls = 0')
+    first.ev(
+        'window.__iroh_mockFilePicker = () => { window.__pickerCalls += 1; return new Promise(() => {}); }'
+    )
+    # ⚠️ 不能用 __iroh_acceptFile（它走 OPFS 测试捷径，不碰系统 picker）
+    first.fire(f'import("./js/ui/filetransfer.js").then(({{fileTransfer}}) => fileTransfer.accept({json.dumps(stuck)}))')
+    wait_until(first, f'''(() => {{
+      const card = [...document.querySelectorAll('.msg--file')].find(e => e.dataset.fileId === {json.dumps(stuck)});
+      return card?.dataset.picking === 'true';
+    }})()''')
+    picking_view = first.ev(f'''(() => {{
+      const card = [...document.querySelectorAll('.msg--file')].find(e => e.dataset.fileId === {json.dumps(stuck)});
+      const yes = [...card.querySelectorAll('button')].find(b => b.classList.contains('is-yes'));
+      return {{ disabled: !!yes?.disabled, state: card.querySelector('.filecard__state').textContent.trim() }};
+    }})()''')
+    tt.check('等待保存位置时 ✓ 禁用且文案如实', picking_view['disabled'] and '保存位置' in picking_view['state'], str(picking_view))
+
+    first.fire(f'import("./js/ui/filetransfer.js").then(({{fileTransfer}}) => fileTransfer.accept({json.dumps(stuck)}))')
+    time.sleep(0.5)
+    retry = first.ev(f'''(() => {{
+      const card = [...document.querySelectorAll('.msg--file')].find(e => e.dataset.fileId === {json.dumps(stuck)});
+      return {{ calls: window.__pickerCalls, err: card.querySelector('.filecard__err')?.textContent || '' }};
+    }})()''')
+    tt.check('对话框挂着时再点不会重复发起 picker', retry['calls'] == 1, str(retry))
+    tt.check('也不会留下 already active 报错', 'already active' not in retry['err'], str(retry))
+
+    rerender = first.ev(f'''(async () => {{
+      const {{ timeline }} = await import('./js/ui/timeline.js');
+      // 故意不带 picking 字段：进度/presence 更新就是这么发的
+      timeline.updateFileCard({{ file_id: {json.dumps(stuck)}, state: 'invited' }});
+      const card = [...document.querySelectorAll('.msg--file')].find(e => e.dataset.fileId === {json.dumps(stuck)});
+      const yes = [...card.querySelectorAll('button')].find(b => b.classList.contains('is-yes'));
+      return {{ picking: card.dataset.picking, disabled: !!yes?.disabled }};
+    }})()''')
+    tt.check('重绘后 ✓ 仍禁用（原来的失效点）', rerender['picking'] == 'true' and rerender['disabled'], str(rerender))
+
+    # ------------------------------------------------- 兜底：直接下载（不弹框）
+    #
+    # 系统「保存位置」对话框是黑盒：实测会遇到"调用被受理、框就是不出现、
+    # Promise 永不 settle" —— 那台机器上用户**完全收不到文件**。
+    # 兜底路径完全不碰这个 API：收进 OPFS，再触发一次普通浏览器下载。
+    fallback_id = send(sender, receivers, 'picker-fallback.bin', 1024 * 1024)
+    first.ev('window.__pickerCalls = 0')
+    first.ev(
+        'window.__iroh_mockFilePicker = () => { window.__pickerCalls += 1; return new Promise(() => {}); }'
+    )
+    first.fire(f'import("./js/ui/filetransfer.js").then(({{fileTransfer}}) => fileTransfer.accept({json.dumps(fallback_id)}))')
+    # ⚠️ 上一张卡的对话框还挂着（那个 Promise 永不 settle），所以这张卡走 picker
+    #    会被守卫挡下 —— 关键是**它仍然必须给出「直接下载」**，
+    #    否则一个卡住的对话框会让整个页面再也收不了文件。
+    wait_until(first, f'''(() => {{
+      const card = [...document.querySelectorAll('.msg--file')].find(e => e.dataset.fileId === {json.dumps(fallback_id)});
+      return [...card.querySelectorAll('button')].some(b => b.textContent.trim() === '直接下载');
+    }})()''', 20)
+    tt.check('已有对话框挂着时，另一张卡仍给出「直接下载」入口', True)
+    first.fire(f'import("./js/ui/filetransfer.js").then(({{fileTransfer}}) => fileTransfer.downloadInstead({json.dumps(fallback_id)}))')
+    wait_until(first, f'{transfer_expression(fallback_id)}?.state === "done"', 60)
+    verified = first.ev('window.__iroh_verifyOpfs("picker-fallback.bin", 1048576, 16384)')
+    tt.check('兜底路径收到文件且逐字节正确', verified['ok'], str(verified))
+    tt.check('兜底全程不调用保存对话框', first.ev('window.__pickerCalls') == 0)
+    tt.check(
+        '兜底完成后卡片不再停在等待态',
+        first.ev(f'''(() => {{
+          const card = [...document.querySelectorAll('.msg--file')].find(e => e.dataset.fileId === {json.dumps(fallback_id)});
+          return card.querySelector('.filecard__state').textContent.trim();
+        }})()''') == '已完成',
+    )
+
+    first.ev('delete window.__iroh_mockFilePicker')
 except Exception:
     for label in ['sender', 'first', 'second']:
         page = locals().get(label)

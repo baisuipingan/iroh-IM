@@ -24,6 +24,11 @@ path = "src/bin/roomtest.rs"
 required-features = ["cli"]
 
 [[bin]]
+name = "export-protocol"
+path = "src/bin/export-protocol.rs"
+required-features = ["cli", "ts-export"]
+
+[[bin]]
 name = "roomd"
 path = "src/bin/roomd.rs"
 required-features = ["cli"]
@@ -64,6 +69,7 @@ cli = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "tokio/signal", "d
 #    加上这个 feature 就能在 macOS/Linux 上 `cargo check --features jni-bridge`
 #    做**纯类型检查**（不链接、不需要 NDK），把语法/类型错误就地抓出来。
 jni-bridge = ["dep:jni", "dep:ndk-context"]
+ts-export = ["dep:ts-rs"]
 
 [dependencies]
 anyhow = "1"
@@ -122,6 +128,9 @@ jni = { version = "0.22", optional = true }
 #
 # 版本无需新增包：0.1.1 早就在依赖树里（n0-dns-resolver / netdev 带入）。
 ndk-context = { version = "0.1", optional = true }
+# 协议类型的 TS 导出（阶段 D：三端类型的**唯一来源**）。
+# ⚠️ 只在导出时编译：不加这个 feature 时，wasm/native/android 构建完全看不到它。
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"], optional = true }
 
 # wasm-opt 需要显式打开这些 wasm 特性，否则会失败（官方示例同款配置）
 [package.metadata.wasm-pack.profile.release]

@@ -8,7 +8,9 @@
  *
  * @typedef {object} RelayConfig
  * @property {Relay[]} relays
- * @property {{id: string, relay?: string}} [anchor]
+ * @property {{id: string, relay?: string}} [anchor] 兼容字段：两个角色都没配时回退到它
+ * @property {{id: string, relay?: string}} [rendezvous] 房间入口（问"这房间现在有谁"）
+ * @property {{id: string, relay?: string}} [history] 历史提供者（拉历史走它）
  * @property {string} [relay_token]
  *
  * @typedef {{url: string, connected: boolean}} RelayStatus
@@ -70,12 +72,18 @@ export function validateRelayConfig(config) {
     )
       throw new Error('中继配置中的 quic_port 必须为有效端口');
   }
-  if (config.anchor !== undefined && config.anchor !== null) {
-    if (!/^[0-9a-f]{64}$/i.test(config.anchor.id || ''))
-      throw new Error('常驻节点配置中的 id 必须为 64 位十六进制身份');
-    if (config.anchor.relay !== undefined && !validRelayUrl(config.anchor.relay))
-      throw new Error('常驻节点的 relay 必须为有效 HTTPS 地址');
-  }
+  // 阶段 B′：线上有**两个角色**（入口 / 历史）。老字段 `anchor` 仍然生效，
+  // 作为两者都没配时的共同回退 —— 所以这里三段的校验规则完全一样。
+  const checkNode = (section, label) => {
+    if (section === undefined || section === null) return;
+    if (!/^[0-9a-f]{64}$/i.test(section.id || ''))
+      throw new Error(`${label}配置中的 id 必须为 64 位十六进制身份`);
+    if (section.relay !== undefined && !validRelayUrl(section.relay))
+      throw new Error(`${label}的 relay 必须为有效 HTTPS 地址`);
+  };
+  checkNode(config.anchor, '常驻节点');
+  checkNode(config.rendezvous, '房间入口');
+  checkNode(config.history, '历史提供者');
   if (
     config.relay_token !== undefined &&
     config.relay_token !== null &&

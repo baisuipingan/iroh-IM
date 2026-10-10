@@ -77,7 +77,7 @@ export function renderChats(host, q) {
         const room = el.dataset.room;
         el.onclick = () => {
           // 移动端：面板是覆盖层，不收起来就永远看不到聊天区
-          if (matchMedia('(max-width: 760px)').matches) host.closePanel();
+          if (U.isNarrow()) host.closePanel();
           bus.emit(EV.ROOM_OPEN, room);
         };
         el.oncontextmenu = (e) => {

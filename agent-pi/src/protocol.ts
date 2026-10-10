@@ -1,24 +1,44 @@
 /* ============================================================================
- * protocol.ts · iroh-agent serve 行协议的类型与常量
+ * protocol.ts · iroh-agent serve 行协议
  *
- * 与 docs/agent-daemon-protocol.md 对齐（v1）。**改字段前先改文档**，两边同步。
+ * 这一层有两种东西，来源不同：
  *
- * ⚠️ 本目录用 Node 原生类型剥离直接跑 TS（无需构建）。两个硬约束：
- *   1. 类型导入必须 `import type`（否则运行时去 import 一个只有类型的模块会炸）
+ *   1. **房间/文件协议**（ChatMessage / FileMeta / RoomEvent …）——
+ *      **定义在 Rust 里**，由 `bash scripts/gen-protocol-types.sh` 生成到
+ *      `./protocol.gen.ts`。本文件只做转出，不再手抄（改造前手抄过，且已经漂移）。
+ *
+ *   2. **行协议信封**（hello / reply / event / fatal / bye …）——
+ *      目前仍是手写：它在 `client-wasm/src/bin/agent.rs` 里是用 `json!` 拼的，
+ *      Rust 侧没有对应的强类型可导出。⚠️ 改字段前先改 `docs/agent-daemon-protocol.md`，
+ *      两边同步。（把它也变成生成物是后续工作，见架构方案文档。）
+ *
+ * ⚠️ 本目录用 Node 原生类型剥离直接跑 TS（不做编译）：
+ *   1. 类型导入必须 `import type`
  *   2. 相对导入必须带 `.ts` 扩展名
  * ==========================================================================*/
 
+/* ---- 房间/文件协议：Rust 生成，不手抄 ---- */
+export type {
+  ChatMessage,
+  FileMeta,
+  FileRef,
+  PeerInfo,
+  RelayInfo,
+} from './protocol.gen.ts';
+/** 聊天协议版本（生成自 Rust 的 `sigfmt::PROTO_V5`）—— 下次 bump 时只改 Rust */
+export { CHAT_PROTOCOL } from './protocol.gen.ts';
+
+import type { RoomEvent as WireRoomEvent } from './protocol.gen.ts';
+
+/**
+ * 行协议版本（hello 里的 `v`）。
+ *
+ * ⚠️ 手写的：真源是 `client-wasm/src/bin/agent.rs` 的 `IPC_VERSION`。
+ *    AgentClient 启动时会比对，不一致直接抛 protocolMismatch（不做兼容猜测）。
+ */
 export const IPC_VERSION = 1;
 
-/** 聊天协议版本：必须与 roomd / 前端一致（v4）。不匹配宁可拒绝也不静默丢消息。 */
-export const CHAT_PROTOCOL = 'v4';
-
-export interface RelayInfo {
-  url: string;
-  connected: boolean;
-  lastError?: string | null;
-  authDenied?: string | null;
-}
+/* ---------------------------------------------------------------- 行协议信封 */
 
 /** daemon 启动后的第一行（握手） */
 export interface HelloFrame {
@@ -28,7 +48,7 @@ export interface HelloFrame {
   endpointId: string;
   chatProtocol: string;
   nickname: string;
-  relay: RelayInfo | null;
+  relay: RelayInfoWire | null;
 }
 
 export interface ErrorBody {
@@ -56,66 +76,23 @@ export interface EventFrame {
 
 export type Frame = HelloFrame | ReplyFrame | EventFrame;
 
-export interface FileRef {
-  file_id: string;
-  name: string;
-  size: number;
-  mime?: string;
-}
+/* ------------------------------------------------------------------ 事件 */
 
-export interface ChatMessage {
-  id: string;
-  from: string;
-  nickname: string;
-  text: string;
-  ts: number;
-  sig?: string;
-  file?: FileRef | null;
-}
-
-export interface FileMeta {
-  file_id: string;
-  name: string;
-  size: number;
-  mime: string;
-  chunk_size: number;
-  root_hash: string;
-  sender: string;
-  sender_relay: string;
-  ts: number;
-}
-
-export interface PeerInfo {
-  id: string;
-  nickname: string;
-  lastSeenMs: number;
-  files: string[];
-  epoch: number;
-}
+import type { RelayInfo as RelayInfoWire } from './protocol.gen.ts';
 
 /**
- * 房间事件。前半段是 RoomEvent 直通（字段名以 Rust serde 输出为准，注意
- * snake_case/camelCase 混用是**故意的**，不要"顺手统一"）；后半段是 daemon 自产。
- * 末尾的 `{ type: string }` 兜底是为了**向前兼容**：未来加的新事件不会让适配器崩。
+ * **daemon 自产**的事件（不属于房间协议，wire 上不存在）。
+ *
+ * ⚠️ 这一组字段是 **camelCase**，与 wire 事件（snake_case）**故意不同** ——
+ *    因为它们由 `agent.rs` 手写 `json!` 产生，不是 serde 序列化出来的。
+ *    别"顺手统一"，那会让真实数据对不上。
+ *
+ * ⚠️ 名字撞车：wire 也有 `fileProgress`，但那个是 snake_case
+ *    （`{file_id, direction, done_chunks, total_chunks, received_bytes, total_bytes}`），
+ *    与这里 daemon 自产的 `{fileId, peer, direction, doneChunks, …}` **不是同一个东西**。
  */
-export type RoomEvent =
+export type DaemonRoomEvent =
   | { type: 'joined'; room: string; clearedFiles?: string[] }
-  | { type: 'message'; room: string; mine: boolean; message: ChatMessage }
-  | { type: 'presence'; room: string; peers: PeerInfo[] }
-  | { type: 'peerUp'; id: string }
-  | { type: 'peerDown'; id: string }
-  | { type: 'fileInvite'; room: string; meta: FileMeta }
-  | {
-      type: 'fileAccepted';
-      room: string;
-      file_id: string;
-      have: string;
-      receiver_relay: string;
-      by: string;
-    }
-  | { type: 'fileRejected'; room: string; file_id: string; reason: string; by: string }
-  | { type: 'fileDone'; room: string; file_id: string; ok: boolean; reason: string }
-  | { type: 'fileQueryAsked'; room: string; file_id: string; by: string }
   | { type: 'fileSendStarted'; fileId: string; peer: string; needChunks: number }
   | {
       type: 'fileProgress';
@@ -138,11 +115,21 @@ export type RoomEvent =
     }
   | { type: 'fileRecvFinished'; fileId: string; peer: string; path: string; bytes: number }
   | { type: 'fileRecvFailed'; fileId: string; peer: string; reason: string }
-  | { type: 'relayStatus'; relays: RelayInfo[] }
-  | { type: 'error'; message: string }
   | { type: 'fatal'; reason: string }
-  | { type: 'bye'; reason: string }
-  | { type: string };
+  | { type: 'bye'; reason: string };
+
+/**
+ * 适配器看到的事件 = **房间协议事件**（生成）+ **daemon 自产事件**（手写）。
+ *
+ * ⚠️ 这里**刻意不加** `{ type: string }` 兜底。加了的后果实测很明确：
+ *    联合类型里一旦有"任何 type 都匹配"的成员，`switch (ev.type)` 就**收窄失效**，
+ *    于是 `ev.mine` / `ev.meta` / `ev.reason` 全部变成编译错误（因为可能命中兜底成员）。
+ *
+ *    向前兼容由**运行时**保证：JSON 里出现没见过的事件类型时，
+ *    它自然落进 switch 的 `default` 分支被安静忽略。
+ *    "没见过的事件"本来也不该有类型——它还没被定义。
+ */
+export type RoomEvent = WireRoomEvent | DaemonRoomEvent;
 
 /** 协议错误：`code` 给程序判断（未知 code 一律按 internal 处理），`message` 给人看。 */
 export class AgentError extends Error {

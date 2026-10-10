@@ -106,7 +106,11 @@ assert.ok(history && history.type === 'history', '必须收到 history');
 const withFile = history.messages.find((m) => m.file);
 assert.ok(withFile, '预置历史里必须有一条带 file 的消息（用于测文件卡片渲染）');
 assert.equal(typeof withFile.file?.file_id, 'string', 'file_id 必须是 snake_case');
-assert.equal(typeof withFile.file?.root_hash, 'string', 'root_hash 必须是 snake_case');
+assert.deepEqual(
+  Object.keys(withFile.file ?? {}).sort(),
+  ['file_id', 'mime', 'name', 'size'],
+  'FileRef 的字段必须与 Rust 的 FileRef 完全一致（没有 root_hash —— 那是 FileMeta 才有的）',
+);
 assert.equal(
   Object.prototype.hasOwnProperty.call(withFile.file ?? {}, 'fileId'),
   false,

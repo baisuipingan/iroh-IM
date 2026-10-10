@@ -7,8 +7,28 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/iroh-agent/agent-pi
 
+# ⚠️ **不要用 root 跑**：这个进程会把"房间里任何人发来的文件"写进磁盘。
+#    给它一个专用系统账号，并让 systemd 把其余文件系统设成只读 ——
+#    这样即使 agent 侧出了漏洞，影响面也只落在 /opt/iroh-agent 里。
+User=iroh-agent
+Group=iroh-agent
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+# 只有这里可写（身份、pi 配置、收到的文件都在这下面）
+ReadWritePaths=/opt/iroh-agent
+
 # ⚠️ npm/node 的 PATH 必须显式给（node 装在独立目录时系统 PATH 里没有）
 Environment=PATH=/opt/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# 低权限账号没有真实 home；node/pi 会读 HOME，显式指到可写目录
+Environment=HOME=/opt/iroh-agent/home
 # iroh 侧身份与配置目录（独立于其他 agent/roomd）
 Environment=IROH_AGENT_HOME=/opt/iroh-agent/home
 # pi 侧 provider 配置目录（models.json；独立于用户的 ~/.pi）
@@ -26,6 +46,7 @@ ExecStart=/opt/node22/bin/node src/cli.ts \
   --tools weather,fetch_url \
   --files accept \
   --files-max-mb 64 \
+  --files-max-total-mb 512 \
   --files-dir /opt/iroh-agent/received
 
 Restart=always
