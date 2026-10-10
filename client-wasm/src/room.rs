@@ -4472,6 +4472,26 @@ mod multi_peer_tests {
             }
             other => panic!("应当是 Plugin 事件，实际 {other:?}"),
         }
+
+        // ★ 反向对照：**没注册的能力，ALPN 就不该被服务**。
+        //
+        // 少了这一半，"注册表"就有可能是个摆设 —— 只要核心（或某个兜底 handler）
+        // 对着任意 ALPN 都应答，上面那条正向断言照样绿，而"新能力必须显式注册"
+        // 这个约束其实没被证明。验收条件里那句"只有装了它的 peer 响应其 ALPN"
+        // 要的正是这一条。
+        let unregistered = client
+            .endpoint
+            .connect(server.endpoint.addr(), b"test/never-registered/1")
+            .await;
+        match unregistered {
+            // 握手阶段就被拒 —— 预期
+            Err(_) => {}
+            // 少数实现会先建连、随后关掉：那样也必须是**不可用**的
+            Ok(conn) => assert!(
+                conn.open_bi().await.is_err(),
+                "没注册的 ALPN 不该能开出流来（核心里有兜底 handler？）"
+            ),
+        }
         client.shutdown();
         server.shutdown();
         Ok(())
