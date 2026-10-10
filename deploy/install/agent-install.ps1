@@ -86,7 +86,7 @@ if (-not $BaseUrl) {
     # ⚠️ "latest" 按**本产物族的 tag 前缀**解析，不能用 GitHub 的 releases/latest：
     # 这个仓库有两条产物线（agent-v* / android-v*），而 Latest 全局只有一个，
     # 谁最后发布谁就是它，另一条线立刻 404（2026-10-10 真踩到）。
-    $rel = Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases?per_page=30"
+    $rel = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=30"
     $tag = ($rel | Where-Object { $_.tag_name -like 'agent-v*' } | Select-Object -First 1).tag_name
     if (-not $tag) { Die "没能从 GitHub 解析出 agent 的 Release（网络？）—— 也可以显式指定：-Version agent-v1.2.0" }
     Ok "latest → $tag"
