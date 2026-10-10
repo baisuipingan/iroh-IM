@@ -212,6 +212,19 @@
 | 源码一致性 | `git show "android-v0.2.0:client-wasm/src/sigfmt.rs"` = `pub const PROTO_V5: &str = "v5";` |
 | 取法 | `bash scripts/fetch-android-so.sh`（不带参数 = 最新 `android-*`） |
 
+### roomd 的"出身"也写清楚（免得留下含混）
+
+第 6 节那条硬约束是"**服务器上跑的二进制不许处在不属于任何 Release 的状态**"。
+这台服务器上跑着两个本项目二进制，各自的规矩不同：
+
+| 二进制 | 分发方式 | 这次的出处 |
+|---|---|---|
+| `/opt/iroh-agent/bin/agent` | **GitHub Release**（`skills`/安装脚本都从那儿取） | ✅ Release `agent-v1.2.0`（CI 从 `6f44026` 编） |
+| `/opt/iroh/roomd/roomd` | `deploy/roomd/README.md` 定的就是**本地交叉构建 + scp 进镜像**，本仓库**没有** roomd 的 Release | 由 `bash scripts/build-wasm.sh native` 从 `6f44026`（= tag `agent-v1.2.0` / `android-v0.2.0` 那个提交）编出，可复现；容器内哈希已核对 |
+
+也就是说：agent 走 Release（不再有孤儿本地构建），roomd 走它自己文档规定的构建流程，
+而且**两者的源码都在已发布的 tag 上**，不再有"改了源码但产物对不上任何提交"的状态。
+
 ## 仍未做
 
 1. 阶段 E（多历史提供者）仍暂缓 —— 需要先确认隐私边界。
