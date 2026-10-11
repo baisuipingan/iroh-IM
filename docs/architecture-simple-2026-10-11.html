@@ -1,0 +1,82 @@
+<!-- iroh 聊天室 · 简洁架构图（源文件）。渲染：Chrome 打开本文件，按内容高度截图（1320px 宽 / dsf=2 / fullPage）。 -->
+<!-- iroh 聊天室 · 简洁架构图（源文件）。渲染：Chrome 打开，按内容高度截图 -->
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  :root{--ink:#0e2439;--dim:#5f7f90;--line:#d5e3ea;--gold:#f0b429;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:30px 34px 26px;background:#f4f8fa;color:var(--ink);
+       font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif}
+  h1{margin:0 0 3px;font-size:24px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+  .lbl{font-size:12.5px;color:var(--dim);letter-spacing:.4px;margin:0 0 7px 2px}
+  .lbl b{color:var(--ink);font-size:13px}
+  .row4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .chip{background:#fff;border:1px solid var(--line);border-radius:14px;padding:13px 14px}
+  .chip h3{margin:0 0 5px;font-size:16px}
+  .chip p{margin:0;font-size:12px;color:var(--dim);line-height:1.5}
+  .tag{display:inline-block;font-size:10.5px;border-radius:99px;padding:1.5px 8px;margin-left:6px;vertical-align:2px}
+  .t-blue{background:#e5efff;color:#14538f}.t-teal{background:#e2f6f6;color:#0b6b6b}
+  .t-gold{background:#fff3d1;color:#8a6100}.t-coral{background:#fdeceb;color:#a33220}
+  .busmargin{margin:20px 0 20px}
+  .bus{background:linear-gradient(90deg,#fff7e0,#fffdf6);border:1.5px solid var(--gold);border-radius:14px;
+       padding:14px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .bus b{font-size:16px}
+  .frames{display:flex;gap:7px;flex-wrap:wrap}
+  .frame{font-size:12px;background:#fff;border:1px solid #f0d79a;border-radius:99px;padding:2.5px 10px;color:#7a5b00}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+  .card h3{margin:0 0 7px;font-size:15.5px}
+  .card ul{margin:0;padding-left:18px}
+  .card li{font-size:12.5px;color:var(--dim);line-height:1.65}
+  .card li b{color:var(--ink)}
+  .aside{margin-top:14px;background:#eef6ff;border:1px dashed #a9c8ea;border-radius:12px;padding:11px 15px;font-size:12.5px;color:#2a567e}
+  .foot{margin-top:18px;border-top:1px dashed var(--line);padding-top:12px;font-size:12px;color:var(--dim);line-height:1.7}
+</style></head><body>
+
+<h1>iroh 聊天室 · 架构一览</h1>
+<div class="sub">2026-10-11 · 核心心智模型：<b>所有人都在同一个房间里，平级</b> —— 没有"服务器"居中转发业务</div>
+
+<div class="lbl"><b>① 房间里的人</b>（包括常驻节点和 AI，都是同一层的对等点）</div>
+<div class="row4">
+  <div class="chip"><h3>你（浏览器）<span class="tag t-blue">relay-only</span></h3><p>能聊天、能收发文件</p></div>
+  <div class="chip"><h3>手机 App<span class="tag t-teal">可直连</span></h3><p>同一套核心，能打洞直连</p></div>
+  <div class="chip"><h3>CLI / AI Agent<span class="tag t-teal">就是个用户</span></h3><p>跟人一样发言、收文件</p></div>
+  <div class="chip" style="border-color:#f0c66b;background:#fffdf6"><h3>roomd<span class="tag t-gold">常驻用户</span></h3><p>不下线的那位，随身带两样东西 ↓</p></div>
+</div>
+
+<div class="busmargin"></div>
+
+<div class="lbl"><b>② 房间 = 一条广播总线</b>（房间名就是门牌：知道名字就能进，没有审批）</div>
+<div class="bus">
+  <b>房间总线</b>
+  <div class="frames"><span class="frame">聊天消息</span><span class="frame">在线心跳</span><span class="frame">文件控制</span><span class="frame">离开</span></div>
+  <span style="font-size:12px;color:#7a5b00">在房间里的人都能收到 → 所以谁掉线都不影响别人</span>
+</div>
+
+<div class="lbl"><b>③ 两块"支撑"</b>（一个负责送，一个负责记）</div>
+<div class="row2">
+  <div class="card"><h3>中继 <span class="tag t-blue">iroh-relay</span></h3>
+    <ul>
+      <li><b>只是管道</b>：按 EndpointId 盲转发，<b>看不到内容</b></li>
+      <li>浏览器<b>永远走它</b>（平台限制）；原生端先试直连、失败回落</li>
+      <li>它能看到的只有：谁和谁在连、什么时候、多大流量、来源 IP</li>
+    </ul>
+  </div>
+  <div class="card" style="border-color:#f0c66b;background:#fffdf6"><h3>roomd 的两个插件 <span class="tag t-gold">常驻用户</span></h3>
+    <ul>
+      <li><b>📖 历史</b>：新人进房补对话；谁漏了消息，重连后自动补</li>
+      <li><b>📋 入口</b>：回答"这房间现在有谁"，给新人一份花名册</li>
+      <li>房间<b>随用随建</b>：有人提到就订阅，没人用 30 分钟后自动退</li>
+    </ul>
+  </div>
+</div>
+
+<div class="aside"><b>文件不走总线</b>：点对点直连推送，按需拉取 + 断点续传 + BLAKE3 校验；不经过 roomd。</div>
+
+<div class="foot">
+  <b>一句话总结</b>：roomd 不是基础设施，是"一个装了插件、总在线的用户"——
+  它挂了，你照样进房、照样聊天（只是没有历史）；中继挂了，原生端会自己打洞直连。<br>
+  <b>边界（刻意如此）</b>：房间凭名字进入（知道房名就能读到明文）；历史<b>明文</b>存在 roomd 上；消息格式与签名不插件化。
+</div>
+
+</body></html>

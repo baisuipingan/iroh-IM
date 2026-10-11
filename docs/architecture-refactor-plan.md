@@ -205,9 +205,16 @@ trait RoomCapability: Send + Sync {
 
 ## 11. 当前架构（2026-10-11 的"定妆照"）
 
-![当前架构](architecture-2026-10-11.png)
+**一页版（给人看的）** —— 核心心智模型是"**所有人都在同一个房间里，平级**"：
 
-（源文件 `architecture-2026-10-11.html`；改动架构时用 Chrome 打开它、按内容高度截图重出。）
+![当前架构（简洁版）](architecture-simple-2026-10-11.png)
+
+**细节版（给改代码的人看的）**：
+
+![当前架构（细节版）](architecture-2026-10-11.png)
+
+（两张图都有 HTML 源文件：`architecture-simple-2026-10-11.html` / `architecture-2026-10-11.html`；
+改动架构时用 Chrome 打开对应 HTML、按内容高度截图重出。）
 
 一句话读法：**四个端点（浏览器 / 手机 / CLI·agent / roomd）都是 iroh 对等点**，
 房间是一个 gossip topic，**roomd 只是"一个装了插件、总在线的用户"** ——
