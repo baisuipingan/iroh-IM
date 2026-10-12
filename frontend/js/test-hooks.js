@@ -98,7 +98,9 @@ export function installTestHooks({ openRoom, composerInternals: ci, readers } = 
         connFoot: document.getElementById('conn-foot-text')?.textContent ?? '',
         members: document.getElementById('room-members')?.hidden ? '' : (document.getElementById('room-members-text')?.textContent ?? ''),
         filter: sidebar.roomFilter,
-        bubbles: document.querySelectorAll('.ambient__b').length,
+        // 气泡（2026-10-13 起是画布渲染）：颗数读规格数，另给一个画布存在性探针
+        bubbles: window.__iroh_ambient?.count ?? 0,
+        ambientCanvas: !!document.querySelector('.ambient__canvas'),
         roomTags: [...document.querySelectorAll('#panel-body .row__tag')].map((e) => e.textContent),
         // 视图切换 + 中继拓扑
         view: topology.view,

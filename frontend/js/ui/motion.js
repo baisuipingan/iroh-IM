@@ -37,10 +37,62 @@ const BUBBLES = [
   { size: 30, left: 8, dur: 26, delay: 11 },
 ];
 
+/** cubic-bezier(.42,0,.58,1) = CSS 的 ease-in-out（牛顿迭代解 x→t，够准了） */
+function easeInOut(x) {
+  const cx = 3 * 0.42;
+  const bx = 3 * (0.58 - 0.42) - cx;
+  const ax = 1 - cx - bx;
+  const cy = 0;
+  const by = 3 * (1 - 0) - cy;
+  const ay = 1 - cy - by;
+  const sampleX = (t) => ((ax * t + bx) * t + cx) * t;
+  const sampleY = (t) => ((ay * t + by) * t + cy) * t;
+  let t = x;
+  for (let i = 0; i < 8; i += 1) {
+    const d = sampleX(t) - x;
+    if (Math.abs(d) < 1e-4) break;
+    const dx = (3 * ax * t + 2 * bx) * t + cx;
+    if (Math.abs(dx) < 1e-6) break;
+    t -= d / dx;
+  }
+  return sampleY(t);
+}
+
+/**
+ * 气泡上浮路径的关键帧插值 —— 与旧 CSS `@keyframes floatUp` **逐项一致**，
+ * 只是换了执行方式（画布按 12fps 画，见 `_paintAmbient` 的注释）。
+ * 关键帧（百分比）：0 / 15 / 50 / 85 / 100；transform 段 0→50→100、opacity 四段，
+ * 缓动都是 CSS 的 `ease-in-out`。
+ * 返回 `ty` 的单位是 vh（viewport 高度的比例），调用方乘上实际像素。
+ */
+function floatUpAt(k) {
+  let ty = 0;
+  let tx = 0;
+  let scale = 0.7;
+  let alpha = 0;
+  if (k <= 50) {
+    const u = easeInOut(k / 50);
+    ty = -0.55 * u;
+    tx = 18 * u;
+    scale = 0.7 + 0.3 * u;
+  } else {
+    const u = easeInOut((k - 50) / 50);
+    ty = -0.55 - 0.55 * u;
+    tx = 18 - 30 * u;
+    scale = 1 + 0.15 * u;
+  }
+  if (k <= 15) alpha = 0.65 * easeInOut(k / 15);
+  else if (k <= 50) alpha = 0.65 - 0.1 * easeInOut((k - 15) / 35);
+  else if (k <= 85) alpha = 0.55 + 0.05 * easeInOut((k - 50) / 35);
+  else alpha = 0.6 - 0.6 * easeInOut((k - 85) / 15);
+  return { ty, tx, scale, alpha };
+}
+
 export const motion = {
   init(host) {
     this.host = host;
     this._paintAmbient();
+    this._startPingTicker();
     this._wireHead();
     this._wireChips();
     this._wireFooter();
@@ -58,22 +110,100 @@ export const motion = {
     this._syncSoundBtn();
   },
 
-  /* ---------------------------------------------------------------- 环境气泡 */
+  /* ------------------------------------------------------------ 环境气泡（低帧率画布） */
+  //
+  // 2026-10-13：从「7 个 DOM 元素各跑一条 CSS 动画」改成「一张画布按 ~12fps 统一画」。
+  // 为什么：CSS 动画只要有一条在跑，浏览器就会**永远以 60fps 出帧** ——
+  // 实测（软件合成）常驻 ~22% CPU；老 Intel Mac 上表现为"开着聊天页风扇就转"。
+  // 画布版把出帧降到 ~12fps；视觉上仍是那 7 颗、同一条上浮路径与淡入淡出
+  // （10% 透明度的慢速漂浮，12fps 的步进肉眼不可见）。窗口不可见/失焦时直接停画。
   _paintAmbient() {
     const box = $('ambient');
-    if (!box || box.childElementCount) return;   // 只生成一次
-    const frag = document.createDocumentFragment();
-    for (const b of BUBBLES) {
-      const el = document.createElement('div');
-      el.className = 'ambient__b';
-      el.style.width = `${b.size}px`;
-      el.style.height = `${b.size}px`;
-      el.style.left = `${b.left}%`;
-      el.style.animationDuration = `${b.dur}s`;
-      el.style.animationDelay = `${b.delay}s`;
-      frag.appendChild(el);
+    if (!box || this._ambientStarted) return;
+    this._ambientStarted = true;
+    // 尊重"减少动态效果"：整层不画（CSS 那边也会把 .ambient 藏掉）
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const canvas = document.createElement('canvas');
+    canvas.className = 'ambient__canvas';
+    box.appendChild(canvas);
+    this._ambientCanvas = canvas;
+    this._ambientCtx = canvas.getContext('2d');
+    this._ambientT0 = performance.now();
+    this._readAmbientColors();
+    document.addEventListener('themechange', () => this._readAmbientColors());
+    this._ambientTimer = setInterval(() => this._drawAmbient(), 1000 / 12);
+    this._drawAmbient();
+    // 测试钩子：气泡"颗数"从 DOM 节点数变成规格数（e2e 仍然盯 7）
+    window.__iroh_ambient = { count: BUBBLES.length, frameMs: Math.round(1000 / 12) };
+  },
+
+  /** 气泡的描边/填充跟着主题走（--water-tint / --water-line，浅深两套） */
+  _readAmbientColors() {
+    const c = this._ambientCanvas;
+    if (!c) return;
+    const cs = getComputedStyle(c);
+    this._ambientFill = cs.getPropertyValue('--water-tint').trim() || 'rgba(110, 236, 255, .10)';
+    this._ambientLine = cs.getPropertyValue('--water-line').trim() || 'rgba(110, 236, 255, .30)';
+  },
+
+  _drawAmbient() {
+    const c = this._ambientCanvas;
+    const ctx = this._ambientCtx;
+    if (!c || !ctx) return;
+    if (document.hidden || !document.hasFocus()) return; // 看不见就不出帧
+    const box = c.parentElement;
+    const w = box.clientWidth;
+    const h = box.clientHeight;
+    if (!w || !h) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
     }
-    box.appendChild(frag);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const vh = window.innerHeight;
+    const t = (performance.now() - this._ambientT0) / 1000;
+    ctx.fillStyle = this._ambientFill;
+    ctx.strokeStyle = this._ambientLine;
+    ctx.lineWidth = 1;
+    for (const b of BUBBLES) {
+      if (t < b.delay) continue; // CSS 的 animation-delay：还没上场（在屏幕下方候场）
+      const k = (((t - b.delay) % b.dur) / b.dur) * 100;
+      const f = floatUpAt(k);
+      const size = b.size * f.scale;
+      // `left: N%` 是**左边缘**；transform 的缩放围绕元素中心（origin: 50% 50%）。
+      const cx = (b.left / 100) * w + b.size / 2 + f.tx;
+      // 起点：bottom:-60px（元素底边在面板下缘再往下 60px）；ty 为负 = 向上。
+      const cy = h + 60 - b.size / 2 + f.ty * vh;
+      if (cy + size / 2 < 0 || cy - size / 2 > h) continue;
+      ctx.globalAlpha = f.alpha;
+      ctx.beginPath();
+      ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  },
+
+  /**
+   * 在线光点的"雷达环"：相位由 JS 每 ~83ms 写一次 `--ping`（0→1），
+   * 环的 transform/opacity 在 CSS 里由它算出来（见 components.css）。
+   * 走 JS 而不是 CSS 动画的理由同环境气泡：**别让任何 CSS 常驻动画把出帧锁死在 60fps**。
+   */
+  _startPingTicker() {
+    if (this._pingTimer) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const t0 = performance.now();
+    this._pingTimer = setInterval(() => {
+      if (document.hidden || !document.hasFocus()) return;
+      const now = performance.now() - t0;
+      const pill = document.querySelector('#node-pill .pill__dot');
+      if (pill) pill.style.setProperty('--ping', ((now % 2200) / 2200).toFixed(3));
+      for (const dot of document.querySelectorAll('.row__dot.radar-ring')) {
+        dot.style.setProperty('--ping', ((now % 2400) / 2400).toFixed(3));
+      }
+    }, 1000 / 12);
   },
 
   /* ------------------------------------------------------------ 顶栏快捷操作 */

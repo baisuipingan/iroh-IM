@@ -216,7 +216,23 @@ select:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 1px; }
   background: var(--bb-emerald);
   box-shadow: 0 0 0 2px var(--bg-panel);
 }
-.row__dot.radar-ring { animation: radarPing 2.4s ease-out infinite; }
+/* 在线光点的"雷达扩散"（2026-10-13 改）：原来是给 dot 自己动 box-shadow ——
+   每帧重绘，而且让浏览器永远 60fps 出帧（老机器风扇的元凶之一）。
+   现在换成**伪元素环**：环只做 transform/opacity，相位由 JS 每 ~83ms 写一次
+   `--ping`（0→1，见 motion.js）。`--ping` 缺省为 1 = 环不可见（没 JS / 减少动效时不残留）。 */
+.row__dot.radar-ring,
+.pill.is-ok .pill__dot { position: relative; }
+.row__dot.radar-ring::after,
+.pill.is-ok .pill__dot::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 230, 118, .7);
+  pointer-events: none;
+  transform: scale(calc(.55 + var(--ping, 1) * 1.15));
+  opacity: calc(.85 * (1 - var(--ping, 1)));
+}
 .row__avatar { position: relative; flex: none; display: flex; }
 
 .row__meta { flex: 1; min-width: 0; }
@@ -663,8 +679,8 @@ select.dialog__field {
 .pill.is-wait { color: var(--c-warn); }
 .pill.is-wait .pill__dot { background: var(--c-warn); animation: pulse 1.2s ease-in-out infinite; }
 
-/* 在线的呼吸扩散（设计稿的 radarPing 用在"在线"药丸上） */
-.pill.is-ok .pill__dot { animation: radarPing 2.2s ease-out infinite; }
+/* 在线的呼吸扩散（设计稿的 radarPing 用在"在线"药丸上）——
+   环本体在下面 `.pill.is-ok .pill__dot::after` 那条共用规则里（JS 驱动相位）。 */
 
 /* ==========================================================================
  * 消息时间线

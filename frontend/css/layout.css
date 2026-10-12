@@ -190,24 +190,28 @@ html[data-wallpaper='jelly'] .chat {
 
 /* ---------- 环境气泡层（设计稿 floatUp） ----------
  * 纯装饰、不吃事件。放在 .chat 里、消息区之下，z-index 让给 .timeline。
- * 气泡由 js/ui/motion.js 生成（数量/位置/时长随机但可复现）。 */
+ * 2026-10-13：由 motion.js 的**一张画布按 ~12fps 画**（原来是 7 个 DOM 各跑 CSS 动画；
+ * 只要有一条 CSS 常驻动画在跑，浏览器就永远以 60fps 出帧 —— 老 Intel Mac 上风扇狂转）。
+ * 视觉不变：还是 7 颗、同一条上浮路径（关键帧与缓动逐项搬进 motion.js）。
+ *
+ * top 从头部下缘开始：气泡本来也从头部后面穿过，而头部 90% 不透明（看不见）；
+ * 裁掉这一段后，头部那条 `backdrop-filter` 的背景就是静态的 —— 省掉每帧重算模糊。 */
 .ambient {
   position: absolute;
-  inset: 0;
+  top: var(--head-h);
+  right: 0;
+  bottom: 0;
+  left: 0;
   overflow: hidden;
   pointer-events: none;
   z-index: 1;
 }
-.ambient__b {
+.ambient__canvas {
   position: absolute;
-  bottom: -60px;
-  border-radius: 50%;
-  border: 1px solid var(--water-line);
-  background: var(--water-tint);
-  animation-name: floatUp;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-  will-change: transform, opacity;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 /* 设计稿里消息流中央还有一枚巨大的水滴水印 */
@@ -317,13 +321,8 @@ html[data-wallpaper='jelly'] .chat {
  * 关键帧（设计稿定义的水下动效；放这里是为了组件层不重复声明）
  * ========================================================================*/
 
-@keyframes floatUp {
-  0%   { transform: translateY(0) translateX(0) scale(.7); opacity: 0; }
-  15%  { opacity: .65; }
-  50%  { transform: translateY(-55vh) translateX(18px) scale(1); opacity: .55; }
-  85%  { opacity: .6; }
-  100% { transform: translateY(-110vh) translateX(-12px) scale(1.15); opacity: 0; }
-}
+/* ⚠️ `floatUp` 关键帧已搬进 js/ui/motion.js（`floatUpAt`，画布执行）——
+   别再在这里加回来：CSS 常驻动画会把出帧锁在 60fps（见 .ambient 的注释）。 */
 
 @keyframes causticShimmer {
   0%   { background-position: 0% 50%; }
@@ -331,12 +330,8 @@ html[data-wallpaper='jelly'] .chat {
   100% { background-position: 0% 50%; }
 }
 
-/* 在线光点的雷达扩散（设计稿 radarPing） */
-@keyframes radarPing {
-  0%   { transform: scale(.9); box-shadow: 0 0 0 0 rgba(0, 230, 118, .7); }
-  70%  { transform: scale(1.05); box-shadow: 0 0 0 7px rgba(0, 230, 118, 0); }
-  100% { transform: scale(.9); box-shadow: 0 0 0 0 rgba(0, 230, 118, 0); }
-}
+/* ⚠️ `radarPing` keyframes 已删除：在线光点的环改由 motion.js 每 ~83ms 写 `--ping`
+   驱动（transform/opacity 在 components.css 里算）。别加回 CSS 常驻动画。 */
 
 /* 消息弹入（设计稿 popInBounce） */
 @keyframes popInBounce {
@@ -365,7 +360,6 @@ html[data-wallpaper='jelly'] .chat {
 @media (prefers-reduced-motion: reduce) {
   .chat { animation: none; }
   .ambient { display: none; }
-  .ambient__b { animation: none; }
   .radar-ring { animation: none; }
   .animate-pop-in { animation: none; }
 }

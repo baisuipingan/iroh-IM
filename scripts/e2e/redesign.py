@@ -70,7 +70,8 @@ time.sleep(2)
 
 # ── A 结构就位 ──────────────────────────────────────────────────────────
 a = json.loads(p.ev("""JSON.stringify({
-  bubbles: document.querySelectorAll('.ambient__b').length,
+  bubbles: (window.__iroh_ambient?.count ?? 0),
+  ambientCanvas: !!document.querySelector('.ambient__canvas'),
   watermark: !!document.querySelector('.chat-watermark svg'),
   chips: [...document.querySelectorAll('#panel-tabs .tab-chip')].map(c => c.textContent),
   chipOn: document.querySelector('#panel-tabs .tab-chip.is-on')?.textContent,
@@ -83,6 +84,9 @@ a = json.loads(p.ev("""JSON.stringify({
   pinnedTag: document.querySelectorAll('#panel-body .row__tag').length,
 })"""))
 tt.check("环境气泡层渲染 7 颗", a["bubbles"] == 7, str(a["bubbles"]))
+# 2026-10-13：气泡/脉冲从"CSS 常驻动画"改成"低帧率画布 + JS 相位"——
+# CSS 常驻动画会把出帧锁死在 60fps（老 Intel Mac 风扇狂转）。视觉不变，渲染方式变了。
+tt.check("气泡走低帧率画布（防老机器风扇）", a["ambientCanvas"] is True, str(a["ambientCanvas"]))
 tt.check("中央水滴水印存在", a["watermark"] is True)
 # 只有「全部 / 置顶」两个：「未读」筛选已删 ——
 # 它只在页面开着时计数、回到页面就清零，而这个产品不是 IM（没好友/私信/群组），
