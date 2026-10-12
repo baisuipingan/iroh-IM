@@ -15,8 +15,8 @@
  * （{nick} 是发送者，{bot} 是本 agent 自己的昵称）。
  * ==========================================================================*/
 
-import { renderTemplate } from '../brain.ts';
-import type { AgentBrain, IncomingMessage } from '../brain.ts';
+import { renderTemplate } from './index.ts';
+import type { AgentBrain, IncomingMessage } from './index.ts';
 
 export type RuleReply = string | ((msg: IncomingMessage) => string);
 

@@ -16,8 +16,8 @@
 
 import { spawn } from 'node:child_process';
 import process from 'node:process';
-import { renderTemplate } from '../brain.ts';
-import type { AgentBrain, ChatContext, IncomingMessage } from '../brain.ts';
+import { renderTemplate } from './index.ts';
+import type { AgentBrain, ChatContext, IncomingMessage } from './index.ts';
 
 export interface CommandBrainOptions {
   command: string;

@@ -9,10 +9,12 @@
  *   adapter.start();
  * ==========================================================================*/
 
-export * from './protocol.ts';
-export * from './brain.ts';
-export * from './client.ts';
-export * from './adapter.ts';
-export * from './brains/rule.ts';
-export * from './brains/command.ts';
-export * from './tools.ts';
+// room side：传输（行协议 + 子进程）与成员策略（触发/闸门）
+export * from './room/protocol.ts';
+export * from './room/client.ts';
+export * from './room/adapter.ts';
+// agent-io：可插的 agent 接口与后端（acp 首选 / command 兜底 / pi-sdk / rule 测试替身）
+export * from './agent-io/index.ts';
+export * from './agent-io/rule.ts';
+export * from './agent-io/command.ts';
+export * from './agent-io/tools.ts';

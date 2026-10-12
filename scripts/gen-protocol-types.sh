@@ -14,4 +14,4 @@ cargo run --quiet --manifest-path client-wasm/Cargo.toml \
   --offline --locked --no-default-features --features "cli ts-export" \
   --bin export-protocol -- \
   mobile/src/bridge/protocol.gen.ts \
-  agent-pi/src/protocol.gen.ts
+  agent-pi/src/room/protocol.gen.ts

@@ -199,5 +199,8 @@ iOS 端实现；UI 改版；性能压测；把 `!` 加回来（任何形式）�
 | R2a（名片：客户端侧） | ✅ 已完成 | `docs/release-2026-10-12-profile-r2a.md`；名片 = 约定格式的**签名消息**（`{"t":"profile",…}`）+ 本地聚合；新用例 `profile` **11/11**（含验收标准：新进房的人立刻看得到）；花名册（简介/标签/最近说过/一键 @）；CF `443786c0-…`。顺带修掉"自己改完名片自己看不见"的真 bug |
 | R2b（名片进快照） | ✅ 已完成 | `docs/release-2026-10-12-profile-r2b.md`；常驻节点在**首次拉历史**时把"每人最新名片"填进 `RoomSnapshot`（`bio`/`tags`/`profile_ts`，全 `serde(default)` ⇒ 非破坏）；新事件 `RoomEvent::Profiles`；Rust 72 + history-storage 9；e2e `profile` **15/15**（含"名片被挤出首页后新人仍看得到"的验收）；`verify.sh all` **退出码 0**；roomd `b64e61f9…`、前端 `786ab6d6-…`。顺带修掉一个**静默失效**的真 bug：`LIKE` 扫被转义的 JSON 永远返回空（已钉成回归断言） |
 | **R（成员模型）整期** | ✅ 已完成 | R1（@ by id）+ R2（名片：客户端聚合 + 快照聚合）都上线；`verify.sh all` 退出码 0 |
-| B1–B5（适配器与 ACP） | ⏳ 待做 | —— |
+| B1（契约扶正） | ✅ 已完成 | `docs/release-2026-10-12-adapter-contract-split.md`；`docs/agent-daemon-protocol.md` 改成**适配器契约**（"必须做/实现自由"两栏表；状态更新为"黄金转录 + TS 适配器都已落地"） |
+| B2（room / agent-io 拆分） | ✅ 已完成 | 全部 `git mv`（保历史）：`src/room/`（协议+客户端+成员策略）与 `src/agent-io/`（`index.ts` 接口 + rule/command/pi-sdk/tools）；零行为变化（tsc / 11 项单测 / 协议闸门 / 活体验证全过）；顺带修掉 `adapter.ts` 里"还写着 `!` 前缀"的过时注释 |
+| B5（非 Rust 示例） | ✅ 已完成（提前） | `agent-pi/examples/minimal-supervisor.ts`：**40 行、不 import 仓库任何代码**，只按契约起 daemon/等 hello/校验版本/@id8 回话；活体验证：另一个房间 `@89cc2cec ping` → 回 `收到：ping` |
+| B3（ACP 后端）/ B4（过程可见） | ⏳ 待做 | 下一期：`agent-io/acp.ts`（spawn `claude-code-acp`，权限 `allow-all` 开关默认关）+ 把 `session/update` 的工具调用/权限请求映射进房间（复用 `Plugin` 事件通道） |
 | A / C / V6 | ⏳ 待做 | —— |

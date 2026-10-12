@@ -2,9 +2,12 @@
  * adapter.ts · 触发策略 + 去重 + 冷却 —— 把「房间里的消息」接到「brain」
  *
  * 触发规则（任一命中就调 brain；可在 CLI 上关掉）：
- *   1. 前缀：`!ping`（默认前缀 `!`，剥离前缀后作为 {text}）
- *   2. @提及：`@小助手 在吗`（剥离提及后作为 {text}）
+ *   1. **@我的 id8**：`@9b45b7ef 在吗`（R1 起的规范寻址；剥离 token 后作为 {text}）
+ *   2. @昵称：`@小助手 在吗`（**兼容兜底**，`--no-mention` 可关）
  *   3. respondToAll：所有消息都算触发（噪音大，慎用）
+ *
+ * ⚠️ 这里**没有** `!前缀` 那条 —— 2026-10-12 已整个删除（agent 是房间里的成员，
+ *    不是命令行工具；前缀还会跟真人聊天里的感叹号撞车）。别再加回来。
  *
  * 防回环/防刷屏（默认开）：
  *   - 自己的消息（mine）不回
@@ -19,7 +22,7 @@
 
 import { Buffer } from 'node:buffer';
 import { join } from 'node:path';
-import type { AgentBrain, ChatContext, IncomingMessage } from './brain.ts';
+import type { AgentBrain, ChatContext, IncomingMessage } from '../agent-io/index.ts';
 import type { AgentClient } from './client.ts';
 import type { ChatMessage, FileMeta, RoomEvent } from './protocol.ts';
 

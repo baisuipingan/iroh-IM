@@ -46,7 +46,7 @@
 | 进房必须连上 roomd，否则 `bail!`（`client-wasm/src/room.rs` join） | 连不上也能进房，降级 + 后台重连 | **阶段 A ✅ 已上线** |
 | 用 `fetch_history(room,1)` 的**副作用**让 roomd 订阅房间 | 显式的 Announce 控制帧 | 阶段 C′ |
 | 核心写死 `accept(GOSSIP/FILE/HISTORY)` | 能力注册表：ALPN → 插件 | 阶段 C′ |
-| 三份手抄协议（Rust serde / `mobile/src/bridge/types.ts` / `agent-pi/src/protocol.ts`），已漂过（`relay` vs `relayStatus`） | 单一来源生成 TS | 阶段 D |
+| 三份手抄协议（Rust serde / `mobile/src/bridge/types.ts` / `agent-pi/src/room/protocol.ts`），已漂过（`relay` vs `relayStatus`） | 单一来源生成 TS | 阶段 D |
 | relay 配置两份（`frontend/relay-config.json` + `mobile/App.tsx` 硬编码） | 运行期拉取 + 内置兜底 | 阶段 D |
 | roomd 同时是入口与历史提供者，不可拆 | 两个独立插件 | 阶段 B′ |
 | 历史只有 roomd 一个来源 | 多提供者 | 阶段 E（暂缓） |
@@ -172,7 +172,7 @@ trait RoomCapability: Send + Sync {
 - roomd 当前二进制 `7280433a…`（v5）；回滚副本 `/opt/iroh/roomd/roomd.bak-20261010-200154`（= C′ `77280f12…`）。
 - 常驻 agent 跑在 `iroh-agent-pi.service`，账号 `iroh-agent`（非 root），房间 `patrick`；
   Rust 二进制现在来自 **GitHub Release `agent-v1.2.0`**（`c18a09277c025a0a…`），
-  `agent-pi/src/protocol.gen.ts` 也已是 v5 —— 第 6 节那条硬约束（服务器上的二进制必须
+  `agent-pi/src/room/protocol.gen.ts` 也已是 v5 —— 第 6 节那条硬约束（服务器上的二进制必须
   属于某个 Release）到此满足。
   ⚠️ **`deploy/agent/install-release.sh` 的默认 `VERSION` 必须跟着协议走**：
   它是 `agent-v1.2.0`。默认值停在 `agent-v1.1.0`（v4）的那种状态会让新装的人

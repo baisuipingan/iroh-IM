@@ -91,7 +91,7 @@ export const composer = {
     const el = $('input');
     if (!el) return null;
     const upto = el.value.slice(0, el.selectionStart ?? el.value.length);
-    const m = /(^|[\s，。！？、；：,.!?;:()\[\]{}「」“”'’])@([^\s@#]{0,32})$/.exec(upto);
+    const m = /(^|[\s，。！？、；：,.!?;:()[\]{}「」“”'’])@([^\s@#]{0,32})$/.exec(upto);
     if (!m) return null;
     return { query: m[2], start: upto.length - m[2].length - 1, end: upto.length };
   },

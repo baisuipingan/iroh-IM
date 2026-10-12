@@ -3,7 +3,7 @@
 //! ## 为什么要有这个模块
 //!
 //! 改造前同一套协议在三个地方各写了一遍：Rust 的 serde 结构、`mobile/src/bridge/types.ts`、
-//! `agent-pi/src/protocol.ts`。手抄的代价不是"多打几个字"，而是**静默漂移** ——
+//! `agent-pi/src/room/protocol.ts`。手抄的代价不是"多打几个字"，而是**静默漂移** ——
 //! 已经真实发生过：Rust 发的是 `relayStatus{relays}`，移动端声明的是 `relay{status}`，
 //! 类型看着对、运行期读到 `undefined`，还不报错（只能靠 UI 定时轮询兜着）。
 //!

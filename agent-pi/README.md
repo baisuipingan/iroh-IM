@@ -64,7 +64,7 @@ node src/cli.ts --room 我的房间 --nick 小助手 \
 
 ### 方式 B：pi SDK 大脑（`--brain pi-sdk`，长会话，推荐）
 
-已内置实现（`src/brains/pi-sdk.ts`），不再需要手写：
+已内置实现（`src/agent-io/pi-sdk.ts`），不再需要手写：
 
 ```bash
 cd agent-pi && npm ci   # 已锁定 @earendil-works/pi-coding-agent@0.83.0
@@ -213,14 +213,36 @@ node src/cli.ts --room X --nick 小助手 --brain pi-sdk --pi-model … \
 
 ## 实现与测试
 
+代码分成**两半**，边界就是"房间侧"与"agent 侧"（改哪一半心里要有数）：
+
+```
+src/
+├── room/        ← 房间侧：传输与成员策略（不认识具体是哪个 agent）
+│   ├── protocol.ts      行协议类型与错误码（与 docs/agent-daemon-protocol.md 对齐）
+│   ├── protocol.gen.ts  由 Rust 生成的三端共用类型（**不要手改**）
+│   ├── client.ts        子进程 + 行协议客户端（请求/事件/看门狗/自动重启）
+│   └── adapter.ts       触发（@id8 / @昵称 / respondToAll）、去重、冷却、文件闸门、截断
+├── agent-io/    ← agent 侧：可插的后端（换一个 agent = 换一份 spawn 配置）
+│   ├── index.ts         `AgentBrain` 接口（LLM/规则逻辑与聊天室协议解耦的边界）
+│   ├── rule.ts          规则后端（无 LLM；冒烟、自动化通知、**测试替身**）
+│   ├── command.ts       子进程后端：把消息交给任意命令行程序（**兜底**，与框架无关）
+│   ├── pi-sdk.ts        pi SDK 长会话后端（自有生态）
+│   └── tools.ts         pi-sdk 用的自定义工具（天气 / fetch_url）
+├── cli.ts       命令行入口（`--brain` 选后端）
+└── mod.ts       库入口
+```
+
 | 文件 | 职责 |
 |---|---|
-| `src/protocol.ts` | 行协议类型与错误码（与协议文档对齐） |
-| `src/client.ts` | 子进程 + 行协议客户端（请求/事件/看门狗/自动重启） |
-| `src/adapter.ts` | 触发、去重、冷却、截断（UTF-8 安全） |
-| `src/brain.ts` | `AgentBrain` 接口（LLM 逻辑与协议解耦的边界） |
-| `src/brains/rule.ts` `command.ts` `pi-sdk.ts` | 规则大脑 / 子进程大脑 / pi SDK 长会话大脑 |
+| `src/room/protocol.ts` | 行协议类型与错误码（与协议文档对齐） |
+| `src/room/client.ts` | 子进程 + 行协议客户端（请求/事件/看门狗/自动重启） |
+| `src/room/adapter.ts` | 触发、去重、冷却、文件闸门、截断（UTF-8 安全） |
+| `src/agent-io/index.ts` | `AgentBrain` 接口（LLM 逻辑与协议解耦的边界） |
+| `src/agent-io/{rule,command,pi-sdk}.ts` | 三个后端：规则 / 子进程 / pi SDK 长会话 |
 | `src/cli.ts` `mod.ts` | 命令行入口 / 库入口 |
+
+> ⚠️ **加一个 agent 应该只动 `agent-io/`**：新写一个 `AgentBrain` 实现（或直接用 `command`
+> 后端包一个 CLI），`room/` 那半不该有任何改动 —— 这是这套拆分的验收标准。
 
 改完先过 lint（在仓库根目录）：`npx biome lint agent-pi`。
 回归与验证（清单和前置见 [`scripts/e2e/README.md`](../scripts/e2e/README.md) 的

@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
-import { ChatAdapter } from '../agent-pi/src/adapter.ts';
+import { ChatAdapter } from '../agent-pi/src/room/adapter.ts';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

@@ -23,7 +23,7 @@ import * as U from '../util.js';
 const $ = (id) => document.getElementById(id);
 
 /** 展开状态：点了"最近说过"的成员 id（重开对话框不保留） */
-let expanded = new Set();
+const expanded = new Set();
 
 function recentBy(id, limit = 5) {
   return timeline._recent.filter((m) => m.from === id).slice(-limit);

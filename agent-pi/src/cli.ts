@@ -8,11 +8,11 @@
 
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
-import { ChatAdapter } from './adapter.ts';
-import type { AgentBrain } from './brain.ts';
-import { AgentClient } from './client.ts';
-import { CommandBrain } from './brains/command.ts';
-import { defaultRules, parseRuleSpecs, RuleBrain } from './brains/rule.ts';
+import { ChatAdapter } from './room/adapter.ts';
+import type { AgentBrain } from './agent-io/index.ts';
+import { AgentClient } from './room/client.ts';
+import { CommandBrain } from './agent-io/command.ts';
+import { defaultRules, parseRuleSpecs, RuleBrain } from './agent-io/rule.ts';
 
 const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
 
@@ -211,8 +211,8 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
     // pi-sdk 是 async 工厂（创建 SDK 会话），单独走 AsyncBrain 包装
     return new AsyncBrain(async () => {
       // ⚠️ 动态 import：不装 pi SDK 时，rule/command 两条路照常能用（零依赖保留）
-      const { createPiSdkBrain } = await import('./brains/pi-sdk.ts');
-      const { buildCustomTools, CUSTOM_TOOL_NAMES } = await import('./tools.ts');
+      const { createPiSdkBrain } = await import('./agent-io/pi-sdk.ts');
+      const { buildCustomTools, CUSTOM_TOOL_NAMES } = await import('./agent-io/tools.ts');
 
       const tools = parsePiTools(flags.piTools);
       const wanted = (flags.tools ?? '')

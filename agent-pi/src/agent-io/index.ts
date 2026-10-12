@@ -9,7 +9,7 @@
  *    「安全」节）。prompt injection 的防线在 brain/配置侧，Rust 的 serve 只做搬运。
  * ==========================================================================*/
 
-import type { ChatMessage } from './protocol.ts';
+import type { ChatMessage } from '../room/protocol.ts';
 
 /** 进 brain 的消息：`raw` 保留完整原始 JSON（含 id/签名/file 字段），便于做审计。 */
 export interface IncomingMessage {

@@ -15,7 +15,7 @@ cargo run --quiet --manifest-path client-wasm/Cargo.toml \
   --bin export-protocol -- "$OUT/mobile.ts" "$OUT/agent-pi.ts" >/dev/null
 
 fail=0
-for pair in "mobile/src/bridge/protocol.gen.ts:$OUT/mobile.ts" "agent-pi/src/protocol.gen.ts:$OUT/agent-pi.ts"; do
+for pair in "mobile/src/bridge/protocol.gen.ts:$OUT/mobile.ts" "agent-pi/src/room/protocol.gen.ts:$OUT/agent-pi.ts"; do
   committed="${pair%%:*}"; generated="${pair##*:}"
   if cmp -s "$committed" "$generated"; then
     echo "    ✅ $committed 与 Rust 定义一致"

@@ -1,16 +1,34 @@
-# iroh-agent daemon 行协议
+# 适配器契约：iroh-agent daemon 行协议
 
-> **状态：Rust 侧 v1 已实现**（`agent.rs` 的 `serve` 子命令，2026-10-08）。
-> 已实测：单进程协议冒烟（hello / reply / 错误码 / 优雅退出）与双进程真实收发
-> （消息互收、presence 互见、peerUp/peerDown、退出码 0）。
-> 待办：黄金转录回归（§12）与 TS/pi 适配器。
+> **这份文档就是"怎么把任意一个 agent 接进房间"的官方契约。**
+> 任何语言写一个 supervisor（起进程、按行读写 JSON）就能让那个 agent 成为房间成员 ——
+> **Rust 只是这份契约的参考实现**，我们不为任何语言造 iroh 绑定（见方案文档的硬约束）。
 >
-> 目标读者是两边的实现者：
-> - Rust 侧：`agent.rs` 的 `serve`
-> - TS 侧：`pi` 适配器（LLM 编排、工具、记忆）通过本协议与 Rust 进程对话
+> 状态（2026-10-12）：
+> - Rust 侧 v1 已实现：`client-wasm/src/bin/agent.rs` 的 `serve` 子命令。
+> - **黄金转录回归已落地**：`client-wasm/tests/daemon-protocol.rs` 冻结了"命令 → reply、
+>   错误码、事件信封"这些**契约行为**（有意改协议时 `UPDATE_GOLDEN=1` 重录，review diff 再提交）。
+> - **TS 侧已落地**：`agent-pi/`（`room/` = 这份契约的参考客户端 + 成员策略；
+>   `agent-io/` = 可插的 agent 后端）。
+> - 最小示例：`agent-pi/examples/minimal-supervisor.ts`（**不 import 仓库任何代码**，
+>   只按这份契约起进程、读 hello、回一条 `pong`）—— 别的语言照着它移植即可。
 >
-> 设计目标一句话：**Rust 只做搬运（协议/签名/gossip/文件），TS 只做智能（LLM/触发/记忆），
-> 中间用 JSON Lines 解耦。** 协议层（含 `room.rs` 的签名与验签）不在 TS 里重新实现。
+> 设计目标一句话：**搬运侧只做搬运（协议/签名/gossip/文件），agent 侧只做智能
+> （LLM/触发/记忆），中间用 JSON Lines 解耦。** 协议层（含 `room.rs` 的签名与验签）
+> **不在 agent 侧重新实现**。
+
+## 契约里什么是"必须"，什么是"自由"
+
+分成两栏看，边界很清楚（这也是"加一个 agent = 加一份 spawn 配置"的依据）：
+
+| **规范（必须做，违反就是不兼容）** | **实现自由（写 agent 的人自己定）** |
+|---|---|
+| 启动后**必须先等 `hello`**，并校验 `chatProtocol` 是否等于自己支持的版本（不匹配要**拒绝启动**） | 触发策略：被 @ 才答、还是全都答、怎么冷却 |
+| **stdout 只跑协议**，日志一律走 stderr（一条 `println` 就能污染整个流） | prompt 怎么组织、要不要带历史/上下文 |
+| 每条命令带 `id`，对应 `reply` 必须带**同一个 `id`**（能关联才有意义） | 用什么模型、什么工具（MCP/Skill/bash 都是私事） |
+| 事件 `seq` 单调递增（跨重连/换房不重置），消费者据此判断有没有漏读 | 记忆与状态放哪（进程内/本地文件/数据库） |
+| 单行 ≤ 1 MiB；超长行整行丢弃并回 `badRequest` | 会话怎么保活（一次性 CLI / 常驻 SDK / 后台会话） |
+| 不得绕过服务端的资源闸门（文件接收的字节/并发/累计上限是样板） | 具体语言与运行时（Rust/TS/Go/Python…） |
 
 ---
 

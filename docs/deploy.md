@@ -226,7 +226,7 @@ bash scripts/deploy-web.sh
    ssh root@<host> 'ls -la /opt/iroh/backups/roomd/ | tail -3'   # 确认真的生成了
    ```
 2. **roomd → 前端 → agent**，**同一窗口内**换完（顺序反了也一样废，见第 4 条）。
-   agent 侧还要一起换 `agent-pi/src/protocol.gen.ts` —— 适配器会拿 `hello` 里的
+   agent 侧还要一起换 `agent-pi/src/room/protocol.gen.ts` —— 适配器会拿 `hello` 里的
    `chatProtocol` 跟自己支持的版本比，不匹配就**拒绝启动**（这是故意的，别绕过）。
 3. **清掉旧历史**（旧签名的行在新代码下验不过，加载时会被当作无效记录逐条丢弃）：
    ```bash

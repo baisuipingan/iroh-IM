@@ -24,8 +24,8 @@ import {
   ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent';
-import { renderTemplate } from '../brain.ts';
-import type { AgentBrain, ChatContext, IncomingMessage } from '../brain.ts';
+import { renderTemplate } from './index.ts';
+import type { AgentBrain, ChatContext, IncomingMessage } from './index.ts';
 
 export interface PiSdkBrainOptions {
   /** 本 agent 的昵称（人设里的 {bot}） */
