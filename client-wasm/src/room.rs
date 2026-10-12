@@ -591,6 +591,121 @@ pub struct MemberSnapshot {
     pub files: Vec<String>,
     #[serde(default)]
     pub epoch: u64,
+    /// 这个成员的名片（简介）—— 由常驻节点从**历史里的名片消息**学到（R2b）。
+    ///
+    /// 为什么放在快照里：客户端只加载最近一页历史，**更早的名片翻不到**；
+    /// 常驻点手上有全量历史，顺手把"每人最新的一份"带给新人，就不必让客户端翻页。
+    #[serde(default)]
+    pub bio: String,
+    /// 名片上的标签
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// 那条名片消息的时间戳（客户端据此判断谁更新；0 = 没名片）
+    #[serde(default)]
+    pub profile_ts: u64,
+}
+
+/// 一份名片（R2b）：从历史里的**名片消息**学来的"每人最新一份"。
+///
+/// 与前端 `js/profile.js` 的 `{bio, tags}` 一一对应 —— 两边都是同一份约定的读者，
+/// **编码只有前端一个实现**（见 `PROFILE_PREFIX` 的注释）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+pub struct MemberProfile {
+    /// 作者 EndpointId（hex）
+    pub id: String,
+    #[serde(default)]
+    pub bio: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// 名片消息的 ts（0 = 未知）
+    #[serde(default)]
+    pub ts: u64,
+}
+
+/// 名片消息的文本前缀 —— **必须与 `frontend/js/profile.js` 的 `encodeProfile` 严格一致**
+/// （键序固定、无空格）。改任何一边都要同步改另一边，否则常驻节点会"看不见"名片。
+pub const PROFILE_PREFIX: &str = "{\"t\":\"profile\"";
+
+/// 这条消息是不是"名片"（只认前缀；坏 JSON 由 [`parse_profile`] 兜底）
+pub fn is_profile_text(text: &str) -> bool {
+    text.starts_with(PROFILE_PREFIX)
+}
+
+/// 从名片消息里取出 `(bio, tags)`；不是名片 / 坏 JSON 一律 `None`（**永不 panic**）。
+///
+/// 上限与前端保持一致（简介 160 字、标签 8 个 × 16 字），避免历史里塞进来的超长文本
+/// 把快照撑爆（快照本身还有 `HISTORY_SNAPSHOT_MAX_BYTES` 的总预算兜底）。
+pub fn parse_profile(text: &str) -> Option<(String, Vec<String>)> {
+    if !is_profile_text(text) {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if value.get("t").and_then(|t| t.as_str()) != Some("profile") {
+        return None;
+    }
+    let bio = value
+        .get("bio")
+        .and_then(|b| b.as_str())
+        .unwrap_or_default()
+        .replace(['\r', '\n'], " ");
+    let bio = bio.trim().chars().take(160).collect::<String>();
+    let tags = value
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|t| t.as_str())
+                .map(|t| t.trim().chars().take(16).collect::<String>())
+                .filter(|t| !t.is_empty())
+                .take(8)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some((bio, tags))
+}
+
+/// 把一串消息折叠成"每人最新的一份名片"（按 `ts` 取最后一条；同 ts 后者胜）。
+///
+/// 抽成自由函数是为了能直接测：`latest_profiles` 的 SQL 与内存两条路都走它。
+pub fn latest_profiles_from(messages: &[ChatMessage]) -> Vec<MemberProfile> {
+    let mut map: HashMap<String, MemberProfile> = HashMap::new();
+    for m in messages {
+        let Some((bio, tags)) = parse_profile(&m.text) else {
+            continue;
+        };
+        let entry = map.entry(m.from.clone()).or_insert_with(|| MemberProfile {
+            id: m.from.clone(),
+            ..Default::default()
+        });
+        if entry.ts > m.ts {
+            continue;   // 旧名片盖不动新名片（gossip/历史都不保证"最后写的最先读"）
+        }
+        entry.bio = bio;
+        entry.tags = tags;
+        entry.ts = m.ts;
+    }
+    let mut out: Vec<MemberProfile> = map.into_values().collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));   // 稳定输出：测试与日志都好读
+    out
+}
+
+/// 把名片并进快照的成员表（R2b）。
+///
+/// 只填**在场成员**：快照里只有此刻在线的人，给不在场的人塞名片没有意义
+/// （UI 上也看不到他）。没名片的人保持空值 —— 客户端据此知道"这人没写简介"。
+fn fill_snapshot_profiles(snapshot: &mut RoomSnapshot, profiles: &[MemberProfile]) {
+    if profiles.is_empty() {
+        return;
+    }
+    for member in snapshot.members.iter_mut() {
+        if let Some(p) = profiles.iter().find(|p| p.id == member.id) {
+            member.bio = p.bio.clone();
+            member.tags = p.tags.clone();
+            member.profile_ts = p.ts;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,6 +817,16 @@ pub enum RoomEvent {
     ///    "请刷新"，而不是让消息静默验签失败（改造前就是这样，极难排查）。
     ///    真正的旧客户端没有这段代码 —— 它们只能靠服务端日志发现。
     ProtocolMismatch { room: String, ours: String, theirs: String },
+    /// **房间里成员的名片**（R2b）：常驻节点从历史里学来的"每人最新一份"。
+    ///
+    /// 为什么需要它：客户端只加载最近一页历史，**更早的名片翻不到**；
+    /// 常驻节点手上有全量历史，拉历史时顺手把名片放进快照，客户端原样端给 UI。
+    /// ⚠️ 它是**软状态**（和 presence 一样不是权威）：常驻节点不在时，
+    ///    UI 仍然只有"从自己加载到的消息里学到的"那部分名片。
+    Profiles {
+        room: String,
+        list: Vec<MemberProfile>,
+    },
     /// **插件自定义事件**（终态 ③ 的扩展点）。
     ///
     /// ⚠️ 加这个变体是为了**不再为每个新能力改这张枚举**：核心只负责把插件的消息
@@ -1315,6 +1440,49 @@ impl HistoryStore {
         Ok(self.mem.lock().unwrap().get(room).map(|v| v.len()).unwrap_or(0))
     }
 
+    /// **每人最新的一份名片**（R2b）：从房间历史里学，按 `ts` 取最后一条。
+    ///
+    /// 为什么不维护增量状态：常驻节点的历史就是权威，查一次比"每次收到消息都更新一份
+    /// 内存里的副本、重启还要重建"简单得多，也不会出现两份真相。
+    /// 代价：这是**整房读**（只挑名片那些行），所以只在首次拉历史时调一次。
+    pub fn latest_profiles(&self, room: &str) -> Result<Vec<MemberProfile>> {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+        let messages = if let Some(db) = &self.db {
+            let guard = db.lock().map_err(|_| anyhow::anyhow!("历史数据库锁已失效"))?;
+            guard
+                .messages_with_text_prefix(room, PROFILE_PREFIX)
+                .context("读取名片失败")?
+        } else {
+            self.mem
+                .lock()
+                .unwrap()
+                .get(room)
+                .cloned()
+                .unwrap_or_default()
+        };
+        #[cfg(not(all(not(target_arch = "wasm32"), feature = "cli")))]
+        let messages = self
+            .mem
+            .lock()
+            .unwrap()
+            .get(room)
+            .cloned()
+            .unwrap_or_default();
+        Ok(latest_profiles_from(&messages))
+    }
+
+    /// 同 [`HistoryStore::latest_profiles`]，但不阻塞运行时（SQLite 走 `spawn_blocking`）
+    pub async fn latest_profiles_async(&self, room: String) -> Result<Vec<MemberProfile>> {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+        if self.db.is_some() {
+            let store = self.clone();
+            return tokio::task::spawn_blocking(move || store.latest_profiles(&room))
+                .await
+                .context("名片查询任务失败")?;
+        }
+        self.latest_profiles(&room)
+    }
+
     /// 启动时载入历史。
     ///
     /// SQLite 后端在 `HistoryStore::new()` 里就打开了数据库，数据按需从库读（分页走索引），
@@ -1491,7 +1659,25 @@ impl ProtocolHandler for HistoryService {
         // 第一次见到这个房间 → 让 controller 去订阅（常驻节点自动看住每个被访问的房间）
         let _ = self.join_tx.try_send(req.room.clone());
 
-        let snapshot = snapshot_get(&self.snaps, &req.room);
+        // 首次拉历史（`before` 为空）时，顺手把"每人最新名片"填进快照（R2b）：
+        // 客户端只加载最近一页，更早的名片它翻不到 —— 由常驻节点带来，新人立刻就有。
+        // ⚠️ **只在首页做**：`latest_profiles` 是按房间扫的（见它的注释），
+        //    翻页每次都要跟着扫一遍就不划算了，而名片本来就只在"刚进房"那一下有用。
+        let mut snapshot = snapshot_get(&self.snaps, &req.room);
+        if req.before.is_none() {
+            if let Some(snap) = snapshot.as_mut() {
+                match n0_future::time::timeout(
+                    HISTORY_REQUEST_TIMEOUT,
+                    self.store.latest_profiles_async(req.room.clone()),
+                )
+                .await
+                {
+                    Ok(Ok(profiles)) => fill_snapshot_profiles(snap, &profiles),
+                    Ok(Err(e)) => warn!("读取名片失败（不影响历史）: {e:#}"),
+                    Err(_) => warn!("读取名片超时（不影响历史）"),
+                }
+            }
+        }
         let message_budget = if snapshot.is_some() {
             HISTORY_RESPONSE_MAX_BYTES
                 .saturating_sub(HISTORY_SNAPSHOT_MAX_BYTES + 4096)
@@ -2588,6 +2774,11 @@ impl RoomNode {
                                                 last_seen_ms: now_ms(),
                                                 files: p.files.clone(),
                                                 epoch: p.epoch,
+                                                // 名片不从这里来（心跳里没有它）—— 见 HistoryService 那侧
+                                                // 从历史里学的 `latest_profiles`
+                                                bio: String::new(),
+                                                tags: Vec::new(),
+                                                profile_ts: 0,
                                             },
                                         );
                                     }
@@ -3144,6 +3335,29 @@ impl RoomNode {
                 .await
                 .ok();
         }
+
+        // 名片（R2b）：快照里带的"每人最新一份"原样端给 UI。
+        // 只报**有内容**的（没名片的人不该让 UI 去清掉本地已有的那份）。
+        let list: Vec<MemberProfile> = snap
+            .members
+            .iter()
+            .filter(|m| m.profile_ts > 0 && (!m.bio.is_empty() || !m.tags.is_empty()))
+            .map(|m| MemberProfile {
+                id: m.id.clone(),
+                bio: m.bio.clone(),
+                tags: m.tags.clone(),
+                ts: m.profile_ts,
+            })
+            .collect();
+        if !list.is_empty() {
+            self.events_tx
+                .send(RoomEvent::Profiles {
+                    room: room.to_string(),
+                    list,
+                })
+                .await
+                .ok();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -3619,6 +3833,9 @@ mod security_tests {
             last_seen_ms: now_ms(),
             files: vec!["available".into()],
             epoch: 20,
+            bio: String::new(),
+            tags: Vec::new(),
+            profile_ts: 0,
         };
         snapshot_upsert(&snapshots, ROOM, member.clone());
         snapshot_upsert(&snapshots, ROOM, MemberSnapshot {
@@ -4074,6 +4291,59 @@ mod security_tests {
         assert!(!valid_history_request(&invalid_timestamp));
     }
 
+    /// ★ R2b：名片 = 一条**约定格式的签名消息**，常驻节点从历史里折出"每人最新一份"。
+    ///
+    /// 这里钉住四件事：前缀必须从**开头**匹配（否则任何引用都能伪造名片）、
+    /// 坏 JSON 不 panic、折叠**不依赖输入顺序**（gossip/历史都可能乱序）、
+    /// 以及长度上限（历史里塞进来的超长文本不能把快照撑爆）。
+    #[test]
+    fn 名片只认固定前缀并按时间取每人最新一份() {
+        let key = kp();
+        let mk = |ts: u64, text: &str| {
+            ChatMessage {
+                id: String::new(),
+                from: key.public().to_string(),
+                nickname: "n".into(),
+                text: text.into(),
+                ts,
+                sig: String::new(),
+                file: None,
+            }
+            .sign(&key, ROOM)
+        };
+
+        // 前缀判定：必须从**开头**就是那个固定形状
+        assert!(is_profile_text(r#"{"t":"profile","v":1,"bio":"x"}"#));
+        assert!(!is_profile_text("普通消息"));
+        assert!(!is_profile_text(r#"引用一下 {"t":"profile"} 看看"#));
+        assert!(!is_profile_text(r#"{"t":"profileX"}"#));
+        // 坏 JSON / 缺字段：None，永不 panic
+        assert_eq!(parse_profile(r#"{"t":"profile", 坏"#), None);
+        assert_eq!(
+            parse_profile(r#"{"t":"profile"}"#),
+            Some((String::new(), Vec::new()))
+        );
+        // 换行压成空格、超长截断、标签个数与长度都有上限
+        let long = format!(r#"{{"t":"profile","bio":"{}","tags":["a"]}}"#, "x".repeat(400));
+        let (bio, _) = parse_profile(&long).unwrap();
+        assert_eq!(bio.chars().count(), 160);
+        let many = r#"{"t":"profile","bio":"b","tags":["1","2","3","4","5","6","7","8","9","10"]}"#;
+        assert_eq!(parse_profile(many).unwrap().1.len(), 8);
+
+        // 折叠：**故意逆序**给出（新的在前、旧的在后），仍然要取 ts 最大的那条
+        let messages = vec![
+            mk(20, r#"{"t":"profile","v":1,"bio":"新简介","tags":["b","c"]}"#),
+            mk(30, "中间插一句普通消息（必须被忽略）"),
+            mk(10, r#"{"t":"profile","v":1,"bio":"旧简介","tags":["a"]}"#),
+        ];
+        let profiles = latest_profiles_from(&messages);
+        assert_eq!(profiles.len(), 1, "同一个人的多份名片要折叠成一份：{profiles:?}");
+        assert_eq!(profiles[0].bio, "新简介");
+        assert_eq!(profiles[0].tags, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(profiles[0].ts, 20);
+        assert_eq!(profiles[0].id, key.public().to_string());
+    }
+
     #[test]
     fn 房间快照按成员数与字节预算裁剪() {
         let snapshots = new_snapshots();
@@ -4087,6 +4357,9 @@ mod security_tests {
                     last_seen_ms: now_ms(),
                     files: vec![format!("file-{index}"); MAX_FILES_IN_HB],
                     epoch: index,
+                    bio: String::new(),
+                    tags: Vec::new(),
+                    profile_ts: 0,
                 },
             );
         }

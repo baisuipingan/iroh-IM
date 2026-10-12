@@ -351,6 +351,11 @@ async fn main() -> Result<()> {
                                                 last_seen_ms: iroh_web::room::now_ms(),
                                                 files: p.files.clone(),
                                                 epoch: p.epoch,
+                                                // 名片不走心跳（R2b）：由 HistoryService 在
+                                                // 首次拉历史时从历史里查出来填进快照
+                                                bio: String::new(),
+                                                tags: Vec::new(),
+                                                profile_ts: 0,
                                             },
                                         );
                                     }

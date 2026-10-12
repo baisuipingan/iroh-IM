@@ -24,7 +24,7 @@
 //! 导出物是**生成产物**：不要手改，改 Rust 后跑 `bash scripts/gen-protocol-types.sh`。
 
 use crate::filetransfer::FileMeta;
-use crate::room::{ChatMessage, FileRef, PeerInfo, RelayInfo, RoomEvent};
+use crate::room::{ChatMessage, FileRef, MemberProfile, PeerInfo, RelayInfo, RoomEvent};
 use ts_rs::{Config, TS};
 
 /// 生成文件的开头（含"不要手改"与来源说明）
@@ -51,6 +51,7 @@ fn export_all(cfg: &Config) -> Result<Vec<(&'static str, String)>, ts_rs::Export
         ("ChatMessage", ChatMessage::export_to_string(cfg)?),
         ("PeerInfo", PeerInfo::export_to_string(cfg)?),
         ("RelayInfo", RelayInfo::export_to_string(cfg)?),
+        ("MemberProfile", MemberProfile::export_to_string(cfg)?),
         ("RoomEvent", RoomEvent::export_to_string(cfg)?),
     ])
 }
@@ -147,7 +148,15 @@ mod tests {
     #[test]
     fn all_client_visible_types_are_exported() {
         let ts = render().expect("导出失败");
-        for name in ["FileRef", "FileMeta", "ChatMessage", "PeerInfo", "RelayInfo", "RoomEvent"] {
+        for name in [
+            "FileRef",
+            "FileMeta",
+            "ChatMessage",
+            "PeerInfo",
+            "RelayInfo",
+            "MemberProfile",
+            "RoomEvent",
+        ] {
             assert!(ts.contains(&format!("export type {name} =")), "缺少 {name}");
         }
     }

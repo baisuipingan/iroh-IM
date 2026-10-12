@@ -117,6 +117,12 @@ async fn main() -> anyhow::Result<()> {
                     "[协议不一致] 本端 {ours}，对端 {} —— 旧的那端要升级/刷新",
                     if theirs.is_empty() { "未上报（旧版）" } else { &theirs }
                 ),
+                // 名片（R2b）：常驻节点从历史里学来的"每人最新一份"
+                RoomEvent::Profiles { list, .. } => {
+                    for p in list {
+                        println!("[名片] {} 简介={:?} 标签={:?}", &p.id[..p.id.len().min(8)], p.bio, p.tags);
+                    }
+                }
                 // 插件自定义事件（终态 ③ 的扩展点）：核心不认识它的内容，原样打出来
                 RoomEvent::Plugin { name, payload } => {
                     println!("[插件:{name}] {payload}")

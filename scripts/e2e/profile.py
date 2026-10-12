@@ -9,6 +9,8 @@
   B. 时间线上它**不是聊天气泡**，而是一行紧凑提示
   C. 对方（gossip）与**新进房的人**（从历史里学）都能看到这份名片  ← 验收标准
   D. 花名册：简介 + 标签可见；"最近说过"能展开他在这房间说过的话
+  E. **R2b**：名片被后来的消息挤出"最近一页"之后，**新人仍然看得到** ——
+     此时客户端自己翻不到（它只加载一页），只能来自常驻节点放在房间快照里的那份。
 """
 import importlib.util, sys, time, json, os
 
@@ -38,8 +40,11 @@ def boot(key, label):
     return tab, p
 
 
-def history(p):
-    return json.loads(p.ev(f"(async () => JSON.stringify(await window.__iroh_net.history('{ROOM}', 50)))()"))
+def history(p, limit=50):
+    """读房间历史。⚠️ 要定位"老消息"时得放大 limit —— 用 50 条那页是**找不到**它的。"""
+    return json.loads(
+        p.ev(f"(async () => JSON.stringify(await window.__iroh_net.history('{ROOM}', {limit})))()")
+    )
 
 
 def send(p, text):
@@ -123,11 +128,51 @@ tt.check("新人 C 的时间线里有这条名片更新（从历史里来）", s
 rows_c = roster_text(c)
 tt.check("**新进房的人立刻看得到 A 的名片**（不靠翻页）", BIO in rows_c, rows_c[:220])
 
-tt.check("三个页面都没有未处理异常",
-         a.ev("window.__errs.length") == 0 and c.ev("window.__errs.length") == 0,
-         f"A={a.ev('JSON.stringify(window.__errs)')} C={c.ev('JSON.stringify(window.__errs)')}")
+# ── E. R2b：名片掉出"最近一页"之后，新人还能看到（来源只能是快照）──────
+#
+# 先把名片挤出去：timeline 每次只加载 PAGE=50 条。但"发出去"不等于"已经落进
+# 常驻节点的历史"（它是异步追加的，实测刚发完只查到 26/56 条）—— 所以这里
+# **等到数据真的满足前提**再往下走，而不是睡固定秒数（第一版就是那样，偶发假失败）。
+fillers = 55
+# ⚠️ 数字要**内联**在表达式里：`Page.ev` 不传参数，写成 `(async (n) => …)` 会让 n 是
+#    undefined、循环一次都不跑（第一版就是这么错的 —— 而且它会**静默**不报错，
+#    只有"名片之后没积累出消息"这个前提断言把它揪出来）。
+c.ev(
+    f"(async () => {{ for (let i = 1; i <= {fillers}; i++) await window.__iroh_net.send('补历史 ' + i); "
+    f"return {fillers}; }})()",
+    timeout=180,
+)
 
-for t in (tab_a, tab_b, tab_c):
+def messages_after_profile(p):
+    """名片消息之后有多少条（≥50 才说明它已经掉出最近一页）"""
+    all_msgs = history(p, 500)   # 必须放大窗口，否则名片早就不在这一页里了（-1）
+    idx = next((i for i, m in enumerate(all_msgs) if str(m.get("text", "")).startswith('{"t":"profile"')), -1)
+    return -1 if idx < 0 else len(all_msgs) - idx - 1
+
+after = -1
+for _ in range(40):
+    time.sleep(1)
+    after = messages_after_profile(c)
+    if after >= fillers - 5:
+        break
+tt.check("前提：名片之后已积累足够多的消息（它掉出了最近一页）",
+         after >= fillers - 5, f"名片之后 {after} 条（需要 ≥ {fillers - 5}）")
+
+tab_d, d = boot('d' * 64, 'd')
+time.sleep(3)   # 等它把首页历史拉完
+page50 = json.loads(d.ev(f"(async () => JSON.stringify(await window.__iroh_net.history('{ROOM}', 50)))()"))
+tt.check("前提：新人自己拉的最近 50 条里**没有**名片消息（它学不到）",
+         not any(str(m.get("text", "")).startswith('{"t":"profile"') for m in page50))
+tt.check("前提：新人的时间线里也没有那行名片提示", lines(d) == [], json.dumps(lines(d), ensure_ascii=False))
+rows_d = roster_text(d)
+tt.check("★ R2b：即使名片不在最近一页，新人仍然看得到（只能来自房间快照）",
+         BIO in rows_d, rows_d[:220])
+
+tt.check("三个页面都没有未处理异常",
+         a.ev("window.__errs.length") == 0 and d.ev("window.__errs.length") == 0,
+         f"A={a.ev('JSON.stringify(window.__errs)')} D={d.ev('JSON.stringify(window.__errs)')}")
+
+for t in (tab_a, tab_b, tab_c, tab_d):
     tt.close_tab(t["id"])
 print(f"\n总计 PASS={tt.PASS} FAIL={tt.FAIL}", flush=True)
 sys.exit(1 if tt.FAIL else 0)

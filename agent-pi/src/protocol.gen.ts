@@ -79,5 +79,21 @@ epoch: number, };
 
 export type RelayInfo = { url: string, connected: boolean, lastError: string | null, authDenied: string | null, };
 
-export type RoomEvent = { "type": "joined", room: string, } | { "type": "message", room: string, message: ChatMessage, mine: boolean, } | { "type": "presence", room: string, peers: Array<PeerInfo>, } | { "type": "peerUp", id: string, } | { "type": "peerDown", id: string, } | { "type": "history", room: string, messages: Array<ChatMessage>, } | { "type": "fileInvite", room: string, meta: FileMeta, } | { "type": "fileRejected", room: string, file_id: string, reason: string, by: string, } | { "type": "fileAccepted", room: string, file_id: string, have: string, receiver_relay: string, by: string, } | { "type": "fileDone", room: string, file_id: string, ok: boolean, reason: string, } | { "type": "fileQueryAsked", room: string, file_id: string, by: string, } | { "type": "fileProgress", file_id: string, direction: string, done_chunks: number, total_chunks: number, received_bytes: number, total_bytes: number, } | { "type": "isolated", room: string, isolated: boolean, } | { "type": "protocolMismatch", room: string, ours: string, theirs: string, } | { "type": "plugin", name: string, payload: unknown, } | { "type": "relayStatus", relays: Array<RelayInfo>, } | { "type": "error", message: string, };
+/**
+ * 一份名片（R2b）：从历史里的**名片消息**学来的"每人最新一份"。
+ *
+ * 与前端 `js/profile.js` 的 `{bio, tags}` 一一对应 —— 两边都是同一份约定的读者，
+ * **编码只有前端一个实现**（见 `PROFILE_PREFIX` 的注释）。
+ */
+export type MemberProfile = { 
+/**
+ * 作者 EndpointId（hex）
+ */
+id: string, bio: string, tags: Array<string>, 
+/**
+ * 名片消息的 ts（0 = 未知）
+ */
+ts: number, };
+
+export type RoomEvent = { "type": "joined", room: string, } | { "type": "message", room: string, message: ChatMessage, mine: boolean, } | { "type": "presence", room: string, peers: Array<PeerInfo>, } | { "type": "peerUp", id: string, } | { "type": "peerDown", id: string, } | { "type": "history", room: string, messages: Array<ChatMessage>, } | { "type": "fileInvite", room: string, meta: FileMeta, } | { "type": "fileRejected", room: string, file_id: string, reason: string, by: string, } | { "type": "fileAccepted", room: string, file_id: string, have: string, receiver_relay: string, by: string, } | { "type": "fileDone", room: string, file_id: string, ok: boolean, reason: string, } | { "type": "fileQueryAsked", room: string, file_id: string, by: string, } | { "type": "fileProgress", file_id: string, direction: string, done_chunks: number, total_chunks: number, received_bytes: number, total_bytes: number, } | { "type": "isolated", room: string, isolated: boolean, } | { "type": "protocolMismatch", room: string, ours: string, theirs: string, } | { "type": "profiles", room: string, list: Array<MemberProfile>, } | { "type": "plugin", name: string, payload: unknown, } | { "type": "relayStatus", relays: Array<RelayInfo>, } | { "type": "error", message: string, };
 

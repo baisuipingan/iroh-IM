@@ -242,6 +242,39 @@ impl SqliteHistory {
         )?;
         Ok(n as usize)
     }
+
+    /// 取这个房间里 **`text` 字段以 `prefix` 开头**的消息（用于"把名片消息挑出来"）。
+    ///
+    /// ⚠️ **必须用 `json_extract`，不能用 `LIKE` 直接扫那一列**：
+    ///    `json` 存的是整条 `ChatMessage`，`text` 在里面是**被转义**的字符串
+    ///    （`{"t":"profile"` 实际写成 `{\"t\":\"profile\"`），所以
+    ///    `CAST(json AS TEXT) LIKE '%{"t":"profile"%'` **永远匹配不上**（实测踩到，
+    ///    表现为"名片查询永远是空的、而且不报错"）。`json_extract` 会先把字符串解码。
+    /// ⚠️ `prefix` 里不能有 `%` / `_`（我们只传固定前缀），所以不需要 ESCAPE。
+    /// ⚠️ 只在**首次拉历史**（`before` 为空）时调用 —— 它是按房间顺序扫，
+    ///    不是 O(1) 的；房间很大时这是唯一的"整房读"，见 `HistoryService::accept` 的注释。
+    pub fn messages_with_text_prefix(
+        &self,
+        room: &str,
+        prefix: &str,
+    ) -> rusqlite::Result<Vec<ChatMessage>> {
+        let mut statement = self.conn.prepare(
+            "SELECT json FROM messages \
+             WHERE room = ?1 AND json_extract(json, '$.text') LIKE ?2 ESCAPE '\\' \
+             ORDER BY ts ASC",
+        )?;
+        let rows = statement.query_map(params![room, format!("%{prefix}%")], |row| {
+            let raw: Vec<u8> = row.get(0)?;
+            Ok(raw)
+        })?;
+        let mut out = Vec::new();
+        for raw in rows {
+            if let Ok(message) = serde_json::from_slice::<ChatMessage>(&raw?) {
+                out.push(message);
+            }
+        }
+        Ok(out)
+    }
 }
 
 fn sql_timestamp(timestamp: u64) -> rusqlite::Result<i64> {

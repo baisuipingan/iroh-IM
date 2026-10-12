@@ -65,22 +65,35 @@ export function parseProfile(text) {
 }
 
 /**
- * 从一批消息里学名片（实时消息与历史消息都走这里）。
- * **只认更新的那条**：gossip 不保证顺序，重放旧名片不该把新简介盖回去。
+ * 并进一批名片（**唯一的写入口**）。
+ *
+ * **只认更新的那条**（按 `ts`）：gossip 不保证顺序、历史也可能被重放，
+ * 一份旧名片不该把新简介盖回去。`ts` 相同则后到的胜（同一条消息重放没有差别）。
+ *
+ * @param {string} room
+ * @param {Array<{id: string, bio: string, tags: string[], ts: number}>} entries
  */
-export function learn(room, messages) {
-  if (!room || !messages?.length) return false;
+export function upsert(room, entries) {
+  if (!room || !entries?.length) return false;
   const all = store.profiles();
   const table = (all[room] ??= {});
   let changed = false;
-  for (const m of messages) {
-    const p = parseProfile(m?.text);
-    if (!p || !m.from) continue;
-    const cur = table[m.from];
-    const ts = Number(m.ts ?? 0);
+  for (const e of entries) {
+    const id = e?.id;
+    if (!id) continue;
+    const bio = String(e.bio ?? '')
+      .replace(/[\r\n]+/g, ' ')
+      .trim()
+      .slice(0, MAX_BIO);
+    const tags = (Array.isArray(e.tags) ? e.tags : [])
+      .map((t) => String(t ?? '').trim().slice(0, MAX_TAG_LEN))
+      .filter(Boolean)
+      .slice(0, MAX_TAGS);
+    const ts = Number(e.ts ?? 0);
+    const cur = table[id];
     if (cur && Number(cur.ts ?? 0) > ts) continue;
-    if (cur && cur.bio === p.bio && JSON.stringify(cur.tags) === JSON.stringify(p.tags)) continue;
-    table[m.from] = { bio: p.bio, tags: p.tags, ts };
+    if (cur && cur.bio === bio && JSON.stringify(cur.tags) === JSON.stringify(tags)) continue;
+    table[id] = { bio, tags, ts };
     changed = true;
   }
   if (changed) {
@@ -88,6 +101,27 @@ export function learn(room, messages) {
     bus.emit(EV.PROFILES, { room });
   }
   return changed;
+}
+
+/** 从一批消息里学名片（实时消息与历史消息都走这里） */
+export function learn(room, messages) {
+  if (!room || !messages?.length) return false;
+  const entries = [];
+  for (const m of messages) {
+    const p = parseProfile(m?.text);
+    if (!p || !m.from) continue;
+    entries.push({ id: m.from, bio: p.bio, tags: p.tags, ts: Number(m.ts ?? 0) });
+  }
+  return upsert(room, entries);
+}
+
+/**
+ * 常驻节点从历史里学来的名片（R2b，`RoomEvent::Profiles`）→ 并进本地表。
+ *
+ * 它补的是客户端够不着的那部分：**只加载最近一页历史时，更早的名片翻不到**。
+ */
+export function mergeSnapshot(room, list) {
+  return upsert(room, list);
 }
 
 /** 某个成员在这个房间的名片；没有则 null */

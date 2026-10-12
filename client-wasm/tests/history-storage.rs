@@ -222,3 +222,55 @@ async fn locked_database_does_not_block_async_timers() {
     assert!(timer_elapsed < std::time::Duration::from_millis(150), "{timer_elapsed:?}");
     writer.join().unwrap();
 }
+
+/// ★ R2b：常驻节点"从历史里挑出名片"是**两层过滤**——
+/// `messages_like` 只做粗筛（`LIKE` 匹配 json 文本），真正的判定在 `is_profile_text`
+/// （必须是**开头**就是那个前缀）。这条用例把两层都钉住：粗筛可以多，判定不能漏也不能多。
+#[test]
+fn profile_lookup_is_a_two_stage_filter() {
+    let directory = TestDirectory::new();
+    let key = SecretKey::generate();
+    let mut database = SqliteHistory::open(&directory.database()).unwrap();
+    let profile = r#"{"t":"profile","v":1,"bio":"能查代码","tags":["ts"]}"#;
+
+    for (ts, text) in [
+        (1u64, "普通消息"),
+        (2, profile),
+        (3, "又说一句"),
+        // ⚠️ 这条**碰巧在正文中间**含那个前缀：`LIKE` 会把它粗筛出来，
+        //    但 Rust 侧的前缀判定必须把它挡掉（否则任何引用都能伪造一张名片）
+        (4, r#"看这个 {"t":"profile" 是不是很像"#),
+    ] {
+        let entry = message(&key, "room", ts, text.to_string());
+        database.append("room", &entry, &serde_json::to_vec(&entry).unwrap()).unwrap();
+    }
+    // 别的房间的名片不该被带出来
+    let other = message(&key, "other", 5, profile.to_string());
+    database.append("other", &other, &serde_json::to_vec(&other).unwrap()).unwrap();
+
+    let coarse = database
+        .messages_with_text_prefix("room", iroh_web::room::PROFILE_PREFIX)
+        .unwrap();
+    // ★ 回归：**不能**用 `CAST(json AS TEXT) LIKE '%{"t":"profile"%'` ——
+    //   `text` 在整条消息 JSON 里是被转义的（实际是 `{\"t\":...`），那条 SQL
+    //   永远返回空、而且不报错（实测踩到：名片查询一直是空的，没人发现）。
+    //   下面这条断言把这个存储格式假设钉住：**如果它不再为 0，说明格式变了**，
+    //   得重新审视 `messages_with_text_prefix` 的实现。
+    let naive: i64 = Connection::open(directory.database())
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM messages WHERE room='room' AND CAST(json AS TEXT) LIKE ?1",
+            params![format!("%{}%", iroh_web::room::PROFILE_PREFIX)],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(naive, 0, "存储格式变了：`text` 不再被转义，请重新审视这个查询");
+    assert_eq!(coarse.len(), 2, "粗筛会连'碰巧含有前缀'的那条一起捞出来：{coarse:?}");
+
+    let mut folded = iroh_web::room::latest_profiles_from(&coarse);
+    folded.retain(|p| !p.bio.is_empty() || !p.tags.is_empty());
+    assert_eq!(folded.len(), 1, "判定层必须只留下真名片：{folded:?}");
+    assert_eq!(folded[0].bio, "能查代码");
+    assert_eq!(folded[0].tags, vec!["ts".to_string()]);
+    assert_eq!(folded[0].ts, 2);
+}

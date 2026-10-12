@@ -197,6 +197,7 @@ iOS 端实现；UI 改版；性能压测；把 `!` 加回来（任何形式）�
 | 前端插件通道（R/B 都要用） | ✅ 已完成 | `docs/release-2026-10-12-plugin-channel.md`；CF `2909e983-…`；新用例 `plugin-channel` 11/11 |
 | R1（@ 按 id 寻址） | ✅ 已完成 | `docs/release-2026-10-12-mention-by-id.md`；新用例 `mention-id` **18/18**（含三层：纯函数 / 三成员同名消歧 / 改名重画 / 补全）；agent-pi 单测 11/11；线上 7 个文件哈希逐一相等；CF `05829de2-…`。顺带修掉一个真 bug：chip 上"我自己"的名字曾取自 localStorage（多标签会串） |
 | R2a（名片：客户端侧） | ✅ 已完成 | `docs/release-2026-10-12-profile-r2a.md`；名片 = 约定格式的**签名消息**（`{"t":"profile",…}`）+ 本地聚合；新用例 `profile` **11/11**（含验收标准：新进房的人立刻看得到）；花名册（简介/标签/最近说过/一键 @）；CF `443786c0-…`。顺带修掉"自己改完名片自己看不见"的真 bug |
-| R2b（名片进快照） | ⏳ 待做 | 常驻节点把名片聚合进 `RoomSnapshot`（`MemberSnapshot` 加 bio/tags，从历史里学）→ 解决"翻页翻不到的老名片"；需要重建 wasm + roomd 并同窗口发版 |
+| R2b（名片进快照） | ✅ 已完成 | `docs/release-2026-10-12-profile-r2b.md`；常驻节点在**首次拉历史**时把"每人最新名片"填进 `RoomSnapshot`（`bio`/`tags`/`profile_ts`，全 `serde(default)` ⇒ 非破坏）；新事件 `RoomEvent::Profiles`；Rust 72 + history-storage 9；e2e `profile` **15/15**（含"名片被挤出首页后新人仍看得到"的验收）；`verify.sh all` **退出码 0**；roomd `b64e61f9…`、前端 `786ab6d6-…`。顺带修掉一个**静默失效**的真 bug：`LIKE` 扫被转义的 JSON 永远返回空（已钉成回归断言） |
+| **R（成员模型）整期** | ✅ 已完成 | R1（@ by id）+ R2（名片：客户端聚合 + 快照聚合）都上线；`verify.sh all` 退出码 0 |
 | B1–B5（适配器与 ACP） | ⏳ 待做 | —— |
 | A / C / V6 | ⏳ 待做 | —— |
