@@ -20,6 +20,13 @@
  *   · `learn()`：把见到的名片记进本地表（**只认更新的那条**，按 ts）
  *   · `of()` / `mine()`：给 UI 读
  *
+ * ## V6.2：名片升为**状态帧**
+ *
+ * 新客户端不再把名片塞进聊天消息 —— `net.setProfile()` 发一条签名的**状态帧**
+ * （广播即达、不进历史；`RoomEvent::Profile` 事件流）。本文件里的
+ * `encodeProfile`/`parseProfile`/`learn()` 保留为**旧路径的读者**（历史里的名片消息
+ * 仍然要学 —— 迁移期两头都不丢，常驻节点也按 ts 合并两种来源）。
+ *
  * 名片表持久化在 `store.profiles()`：历史每次进房都要重拉，不存一份的话刷新就丢了。
  * ==========================================================================*/
 
@@ -116,9 +123,10 @@ export function learn(room, messages) {
 }
 
 /**
- * 常驻节点从历史里学来的名片（R2b，`RoomEvent::Profiles`）→ 并进本地表。
+ * 把常驻节点/状态帧来的名片并进本地表。
  *
- * 它补的是客户端够不着的那部分：**只加载最近一页历史时，更早的名片翻不到**。
+ * 两个来源共用这一条路：`RoomEvent::Profiles`（快照里的"每人最新一份"，
+ * R2b —— 补"更早的名片翻不到"）与 `RoomEvent::Profile`（V6.2 状态帧，实时）。
  */
 export function mergeSnapshot(room, list) {
   return upsert(room, list);

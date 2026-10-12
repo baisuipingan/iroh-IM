@@ -19,7 +19,7 @@ import { net } from '../net.js';
 import { dialog } from './dialog.js';
 import { timeline } from './timeline.js';
 import { avatar } from './primitives.js';
-import { encodeProfile, of as profileOf } from '../profile.js';
+import { of as profileOf } from '../profile.js';
 import { currentMembers, id8Of } from '../mention.js';
 import * as U from '../util.js';
 
@@ -214,11 +214,10 @@ export const roster = {
           .map((t) => t.trim())
           .filter(Boolean);
         try {
-          const m = await net.send(encodeProfile({ bio, tags }));
-          // ⚠️ 必须自己补一条**本地回显**：这条消息没走 composer，
-          //    而"自己发的消息"是靠 composer 那边 emit 的 —— 少了这一行，
-          //    改完名片**自己看不见那行提示**（对方却能收到），实测踩到。
-          bus.emit(EV.MSG, { room: timeline.room, message: m, mine: true, isHistory: false });
+          // V6.2：名片走**状态帧**（广播即达，**不进聊天历史**）。
+          // 本地由 wasm 回一条 self 事件（RoomEvent::Profile）——
+          // 不用再像 R2a 那样手补一条本地回显。
+          await net.setProfile(bio, tags);
           bus.emit(EV.TIP, '名片已更新');
           return true;
         } catch (e) {

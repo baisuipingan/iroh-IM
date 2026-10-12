@@ -334,6 +334,21 @@ async fn main() -> Result<()> {
                                         // 返回 false 时它已经打过 warn 了。
                                         let _ = store_c.append_async(room_c.clone(), m).await;
                                     }
+                                    // 名片**状态帧**（V6.2）：验签后记进档案 ——
+                                    // 拉历史时的快照会把它并进"每人最新一份"，
+                                    // 不再依赖"扫历史里的名片消息"。
+                                    Wire::Profile { u } => {
+                                        if !u.verify(&room_c) {
+                                            continue;
+                                        }
+                                        let short = u.from[..u.from.len().min(12)].to_string();
+                                        if store_c
+                                            .upsert_profile_async(room_c.clone(), u.to_profile())
+                                            .await
+                                        {
+                                            debug!("[{}] 名片更新：{}", room_c, short);
+                                        }
+                                    }
                                     Wire::Presence { p } => {
                                         if !p.verify(&room_c) {
                                             continue;

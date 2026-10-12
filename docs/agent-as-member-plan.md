@@ -182,9 +182,16 @@ C 期显式未做（记录在案，不许静默缩范围）：房间外你批（
 - 切割执行记录（cutover 文档 [`docs/v6-cutover-plan.md`](v6-cutover-plan.md) 的落地版）：
   roomd → 前端 → agent 一次窗口；`verify.sh all` 退出码 0。
 
-**V6.2 · 名片升为房间状态帧** —— ⏳ 待做（加法，不破坏；新帧类型 + 快照权威）。
+**V6.2 · 名片升为房间状态帧** —— ✅ 已完成并上线（2026-10-12，见
+[`docs/release-2026-10-12-profile-state-frame.md`](release-2026-10-12-profile-state-frame.md)）：
 
-**V6.3 · 可选加密** —— ⏳ 待威胁模型后再定。
+- 名片 = 签名的 `Wire::Profile` 帧：**广播即达、不进聊天历史**（旧的名片消息仍双读，
+  按 `ts` 与帧档案合并取新）；常驻节点**直接记账**（SQLite `profiles` 表）并继续做
+  "新人补全"的快照权威；前端「我的名片」走帧、进房重播一次兜底。
+- 兼容：旧端忽略未知帧（无害）；旧版 agent 二进制**无需重发**（已核实）。
+
+**V6.3 · 可选加密** —— 📄 威胁模型已写：[`docs/threat-model-room-encryption.md`](threat-model-room-encryption.md)。
+**建议暂不做**（理由与"若要做需要改什么"都在文里）；实现与否留给所有者拍板。
 
 ## 5. 每期完成定义（DoD，缺一不可）
 
@@ -271,4 +278,5 @@ iOS 端实现；UI 改版；性能压测；把 `!` 加回来（任何形式）�
 | A（入房与生命周期） | ✅ 已完成 | `docs/release-2026-10-12-invite-summoner.md`；A2 召唤器（单测 9/9；真端到端 `scripts/e2e/summoner.py`：人类 @注册名 → 🫡 → 成员进名册 → **@id8 转交** → 成员答复 → 收摊无残留）；A3 一房一会话（CLI 拒 `--rooms a,b`）；A4 花名册状态（`profile` e2e **21/21**，含在线/忙碌/离线）；`verify.sh all` 退出码 0；前端 CF `41bff1e1-…` |
 | C（约束与安全） | ✅ 已完成（v1） | `docs/release-2026-10-12-acp-constraints.md`；单测 **32/32**（新增：C1 权限策略 ×3、C2 沙箱 ×1、C3 成本闸门 ×2、C4 召唤治理 ×2）；**真实 claude-code-acp 端到端**：`read-only` 下 Write 被拒且文件不存在；`verify.sh all` 退出码 0 |
 | V6.1（结构化 mentions：进签名 + 双读 + 握手 v6） | ✅ 已完成并上线 | `docs/release-2026-10-12-protocol-v6.md`；Rust 75 库测试 + golden 全绿；agent-pi 14/14 + 11/11 + 8/8；前端 10/10；召唤器真端到端（v6·真实中继）；`verify.sh all` 退出码 0；roomd `84264e32…`、CF `888adb02-…`、agent Release `agent-v1.3.0`（两侧哈希/安装校验一致）；**历史未清**（v5 旧消息实测仍可读） |
-| V6.2 / V6.3 | ⏳ 待做 | 名片状态帧（加法）；可选加密（需威胁模型） |
+| V6.2（名片状态帧） | ✅ 已完成并上线 | `docs/release-2026-10-12-profile-state-frame.md`；Rust 77 库测试 + SQLite 持久化新测；`profile` e2e **20/20**（帧语义重写：不进历史/实时/快照权威）；`verify.sh all` 退出码 0；roomd `0529e182…`、CF `a4e14e36-…` |
+| V6.3（可选加密） | 📄 已评估（建议暂不做） | `docs/threat-model-room-encryption.md`；实现与否由所有者拍板 |

@@ -4,13 +4,12 @@
 人怎么认识群里的人？看名字、看简介、翻他在这里说过什么 —— agent 也一样。
 名片就是一条**普通签名消息**（零协议变更），进历史，新人翻记录就能看到。
 
-覆盖：
-  A. 真实路径改名片（设置页 → 我的名片 → 保存）→ 历史里是约定格式的签名消息
-  B. 时间线上它**不是聊天气泡**，而是一行紧凑提示
-  C. 对方（gossip）与**新进房的人**（从历史里学）都能看到这份名片  ← 验收标准
+覆盖（V6.2：名片 = **状态帧**，广播即达、不进聊天历史）：
+  A. 真实路径改名片（设置页 → 我的名片 → 保存）→ **不再**塞进聊天历史；B 侧实时看得到
+  B. 它**不是**聊天消息：时间线上没有名片提示行、也没有气泡
+  C. 对方（gossip → 状态帧）与**新进房的人**（只能来自常驻节点快照）都能看到  ← 验收标准
   D. 花名册：简介 + 标签可见；"最近说过"能展开他在这房间说过的话
-  E. **R2b**：名片被后来的消息挤出"最近一页"之后，**新人仍然看得到** ——
-     此时客户端自己翻不到（它只加载一页），只能来自常驻节点放在房间快照里的那份。
+  E. 快照权威：历史里**根本没有**名片（帧不进历史），新人在海量消息之后仍然看得到。
 """
 import importlib.util, sys, time, json, os
 
@@ -81,24 +80,25 @@ a.ev("(() => { document.getElementById('dlg-bio').value = %s; document.getElemen
 a.ev("document.getElementById('dlg-ok').click()")
 time.sleep(2.5)
 
-msgs = [m for m in history(a) if str(m.get("text", "")).startswith('{"t":"profile"')]
-tt.check("名片是一条**约定格式的签名消息**（进历史、可验签）",
-         len(msgs) == 1 and BIO in msgs[0]["text"], json.dumps(msgs, ensure_ascii=False)[:220])
+msgs = [m for m in history(a, 200) if str(m.get("text", "")).startswith('{"t":"profile"')]
+tt.check("名片**不再**塞进聊天历史（V6.2 状态帧：广播即达、不进历史）",
+         len(msgs) == 0, json.dumps(msgs, ensure_ascii=False)[:220])
 
-# ── B. 时间线上不是聊天气泡 ──────────────────────────────────────────
-got = lines(a)
-tt.check("A 侧渲染成一行名片提示（含简介）", any(BIO in x for x in got), json.dumps(got, ensure_ascii=False))
+# ── B. 它不是聊天消息：时间线上既没有提示行、也没有气泡 ──────────────
 bubbles = a.ev("JSON.stringify([...document.querySelectorAll('.bubble')].map(e => e.textContent))")
 tt.check("原始 JSON **没有**被画成聊天气泡", '"t":"profile"' not in bubbles, bubbles[:140])
+tt.check("时间线上没有'名片提示'行（帧不是聊天消息）", lines(a) == [], json.dumps(lines(a), ensure_ascii=False))
 
-# ── C1. 对方从 gossip 收到 ───────────────────────────────────────────
+# ── C1. 对方从 gossip 收到状态帧（实时） ─────────────────────────────
 ok = False
-for _ in range(20):
-    time.sleep(1)
-    if any(BIO in x for x in lines(b)):
+rows_b = ""
+for _ in range(30):
+    time.sleep(0.8)
+    rows_b = roster_text(b)
+    if BIO in rows_b:
         ok = True
         break
-tt.check("B 侧也收到了这条名片更新（实时）", ok, json.dumps(lines(b), ensure_ascii=False))
+tt.check("B 侧实时看到 A 的新名片（V6.2 状态帧）", ok, rows_b[:220])
 
 # ── D. 花名册：简介 / 标签 / 最近说过 ────────────────────────────────
 send(a, SENTENCE)
@@ -176,54 +176,52 @@ a.ev("document.getElementById('input').value = ''")
 # ── C2. 新进房的人也能看到（这一条才是验收标准）─────────────────────
 tab_c, c = boot('c' * 64, 'c')
 seen = False
-for _ in range(20):
+rows_c = ""
+for _ in range(30):
     time.sleep(1)
-    if any(BIO in x for x in lines(c)):
+    rows_c = roster_text(c)
+    if BIO in rows_c:
         seen = True
         break
-tt.check("新人 C 的时间线里有这条名片更新（从历史里来）", seen, json.dumps(lines(c), ensure_ascii=False))
-rows_c = roster_text(c)
-tt.check("**新进房的人立刻看得到 A 的名片**（不靠翻页）", BIO in rows_c, rows_c[:220])
+tt.check("**新进房的人立刻看得到 A 的名片**（历史里没有名片消息 —— 只能来自常驻节点快照）",
+         seen, rows_c[:220])
 
-# ── E. R2b：名片掉出"最近一页"之后，新人还能看到（来源只能是快照）──────
-#
-# 先把名片挤出去：timeline 每次只加载 PAGE=50 条。但"发出去"不等于"已经落进
-# 常驻节点的历史"（它是异步追加的，实测刚发完只查到 26/56 条）—— 所以这里
-# **等到数据真的满足前提**再往下走，而不是睡固定秒数（第一版就是那样，偶发假失败）。
+# ── E. 快照权威（V6.2）：海量消息之后的新人，仍然看得到（唯一来源=快照）──
+# 前提变了：名片**根本不在历史里**（状态帧）——所以"新人看得到"只能来自快照。
+all_msgs = history(c, 500)
+tt.check("前提：历史里没有任何名片消息（帧不进历史）",
+         not any(str(m.get("text", "")).startswith('{"t":"profile"') for m in all_msgs),
+         json.dumps([str(m.get("text", ""))[:24] for m in all_msgs])[:220])
+
 fillers = 55
 # ⚠️ 数字要**内联**在表达式里：`Page.ev` 不传参数，写成 `(async (n) => …)` 会让 n 是
-#    undefined、循环一次都不跑（第一版就是这么错的 —— 而且它会**静默**不报错，
-#    只有"名片之后没积累出消息"这个前提断言把它揪出来）。
+#    undefined、循环一次都不跑（踩过 —— 而且它会**静默**不报错）。
 c.ev(
     f"(async () => {{ for (let i = 1; i <= {fillers}; i++) await window.__iroh_net.send('补历史 ' + i); "
     f"return {fillers}; }})()",
     timeout=180,
 )
 
-def messages_after_profile(p):
-    """名片消息之后有多少条（≥50 才说明它已经掉出最近一页）"""
-    all_msgs = history(p, 500)   # 必须放大窗口，否则名片早就不在这一页里了（-1）
-    idx = next((i for i, m in enumerate(all_msgs) if str(m.get("text", "")).startswith('{"t":"profile"')), -1)
-    return -1 if idx < 0 else len(all_msgs) - idx - 1
-
-after = -1
+# 等最后一条真的落进 roomd（异步追加），再让新人进房 —— 别睡固定秒数。
+landed = False
 for _ in range(40):
     time.sleep(1)
-    after = messages_after_profile(c)
-    if after >= fillers - 5:
+    if any(m.get("text") == f"补历史 {fillers}" for m in history(c, 200)):
+        landed = True
         break
-tt.check("前提：名片之后已积累足够多的消息（它掉出了最近一页）",
-         after >= fillers - 5, f"名片之后 {after} 条（需要 ≥ {fillers - 5}）")
+tt.check("前提：补历史已经落到常驻节点", landed)
 
 tab_d, d = boot('d' * 64, 'd')
-time.sleep(3)   # 等它把首页历史拉完
-page50 = json.loads(d.ev(f"(async () => JSON.stringify(await window.__iroh_net.history('{ROOM}', 50)))()"))
-tt.check("前提：新人自己拉的最近 50 条里**没有**名片消息（它学不到）",
-         not any(str(m.get("text", "")).startswith('{"t":"profile"') for m in page50))
-tt.check("前提：新人的时间线里也没有那行名片提示", lines(d) == [], json.dumps(lines(d), ensure_ascii=False))
-rows_d = roster_text(d)
-tt.check("★ R2b：即使名片不在最近一页，新人仍然看得到（只能来自房间快照）",
-         BIO in rows_d, rows_d[:220])
+seen_d = False
+rows_d = ""
+for _ in range(30):
+    time.sleep(1)
+    rows_d = roster_text(d)
+    if BIO in rows_d:
+        seen_d = True
+        break
+tt.check("★ 快照权威：新人（视野里只有后 55 条）仍然看得到 A 的名片", seen_d, rows_d[:220])
+tt.check("前提：新人的时间线里没有名片提示行", lines(d) == [], json.dumps(lines(d), ensure_ascii=False))
 
 tt.check("三个页面都没有未处理异常",
          a.ev("window.__errs.length") == 0 and d.ev("window.__errs.length") == 0,

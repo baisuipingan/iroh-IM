@@ -901,6 +901,10 @@ self.onmessage = async (e) => {
         case 'send':
           value = await node.send(args[0], args[1] ?? []);
           break;
+        case 'setProfile':
+          // V6.2：名片走**状态帧**（广播即达，不进聊天历史）
+          value = await node.set_profile(args[0], args[1] ?? []);
+          break;
         case 'history':
           // ⚠️ 第三个参数是**复合游标** `"<ts>:<id>"`（字符串），不是毫秒时间戳。
           //    只传时间戳会漏掉同一毫秒里的消息 —— 游标边界把它们整体跳过了。

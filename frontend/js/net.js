@@ -31,7 +31,7 @@ import { loadRelayConfig, probeAll } from './probe.js';
 import { bus, EV } from './bus.js';
 import { store } from './store.js';
 import { withTimeout, roomNameError } from './util.js';
-import { mergeSnapshot } from './profile.js';
+import { mergeSnapshot, of as profileOf } from './profile.js';
 
 /**
  * wasm 构建号：**每次重新构建 wasm 都必须 +1**。
@@ -446,6 +446,10 @@ export const net = {
       case 'profiles':
         mergeSnapshot(ev.room, ev.list);
         break;
+      // 名片**状态帧**（V6.2）：某人刚改了名片 —— 广播即达，和快照学走同一条路
+      case 'profile':
+        mergeSnapshot(ev.room, [ev.profile]);
+        break;
       // ⚠️ Worker 的 wasm 事件流断了（复检 P3-10）：**入站通道整体失效** ——
       //    再也收不到消息/心跳/邀约，但发送仍然可用、状态还显示"在线"。
       //    这种"静默半死"必须让用户看见，并主动重连（重连会重建节点与事件流）。
@@ -600,6 +604,14 @@ export const net = {
       e.room = winner;
       throw e;
     }
+    // V6.2：进房时**重播自己的名片状态帧**（如果有存过）。
+    // 帧是"广播即达"的软状态：roomd 在广播时没订阅到、或换了库重启，
+    // 快照里就会缺这一份；每次进房重播一遍（一条签名，幂等），
+    // "新人立刻看得到"就有了兜底。
+    const mineProfile = profileOf(room, this.endpoint_id());
+    if (mineProfile && (mineProfile.bio || mineProfile.tags?.length)) {
+      this.client.call('setProfile', mineProfile.bio, mineProfile.tags ?? []).catch(() => {});
+    }
     return room;
   },
 
@@ -649,6 +661,12 @@ export const net = {
     if (!this.canSend) throw new Error(this.phase === 'online' ? '还没进入房间' : '网络未连接');
     // V6：mentions = @ 的完整端点 id 列表（寻址的真相；文本 token 只是渲染锚点）
     return JSON.parse(await this.client.call('send', text, mentions));
+  },
+
+  /** 发布我的名片（V6.2 **状态帧**）：广播即达，不进聊天历史。返回帧 JSON。 */
+  async setProfile(bio, tags = []) {
+    if (!this.canSend) throw new Error(this.phase === 'online' ? '还没进入房间' : '网络未连接');
+    return JSON.parse(await this.client.call('setProfile', bio, tags));
   },
 
   /**

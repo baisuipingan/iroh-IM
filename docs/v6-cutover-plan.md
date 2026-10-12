@@ -5,7 +5,8 @@
 > 执行中的两处**显式收敛**（已写回四处文档）：① 只有 ChatMessage 升 v6 标签
 > （presence/文件族保持 v5，过渡期双向互通）；② mentions 不参与 id 派生（改动最小，
 > mentions 已被签名覆盖）。历史策略按推荐用了**双读**（实测旧消息仍可读、不清库）；
-> Android 另排（android-v0.3.0）；V6.2 作为加法下一期。
+> Android 另排（`android-v0.3.0` 的 .so 由 CI 出；APK 重建仍是独立话题）；
+> **V6.2 已完成并上线**（见 [`docs/release-2026-10-12-profile-state-frame.md`](release-2026-10-12-profile-state-frame.md)）。
 
 > 方案 §V6 的落地说明。**这是破坏性升级**：签名载荷版本 v5→v6，
 > 按 v4→v5 的先例，roomd / 前端 / agent **必须同时升级**。

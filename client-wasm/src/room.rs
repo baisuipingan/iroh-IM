@@ -542,6 +542,10 @@ pub enum Wire {
     /// 文件可用性质询（点了一张卡但联系不上发送方时广播，见 `FileQuery`）
     #[serde(rename = "q")]
     FileQuery { q: FileQuery },
+    /// **名片状态帧**（V6.2）：`u` = 名片（user card）。
+    /// 旧端（不认识这个变体）解析整帧失败、静默丢弃 —— 兼容无碍。
+    #[serde(rename = "u")]
+    Profile { u: ProfileFrame },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -729,6 +733,106 @@ pub fn latest_profiles_from(messages: &[ChatMessage]) -> Vec<MemberProfile> {
     out
 }
 
+/// **名片状态帧**（V6.2）：名片从"约定格式的聊天消息"升为**独立帧**。
+///
+/// 为什么升：消息形态是过渡方案（R2a，零协议变更）—— 它把状态塞进聊天历史，
+/// 得靠常驻节点扫 SQL、新人翻页才能补全；帧形态则「广播即达、常驻节点直接记账、
+/// **不进聊天历史**」。这是方案 §V6.2 要求的正式形态。
+///
+/// 兼容：旧的名片**消息**仍然照读（`parse_profile`），常驻节点会把两种来源
+/// 按 `ts` **合并取新**（见 `latest_profiles`）—— 迁移期两头都不丢。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileFrame {
+    pub from: String,
+    pub ts: u64,
+    #[serde(default)]
+    pub bio: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub sig: String,
+}
+
+impl ProfileFrame {
+    /// 参与签名的规范化串（收发双方必须一致）。标签**去重+排序**后逐项独立编码。
+    pub fn canonical(&self, room: &str) -> String {
+        let ts = self.ts.to_string();
+        let mut tags = self.tags.clone();
+        tags.sort();
+        tags.dedup();
+        let n = tags.len().to_string();
+        let mut out = crate::sigfmt::encode_fields(&[
+            crate::sigfmt::PROTO_V6,
+            "room",
+            room,
+            "profile",
+            "from",
+            self.from.as_str(),
+            "ts",
+            ts.as_str(),
+            "bio",
+            self.bio.as_str(),
+            "ntags",
+            n.as_str(),
+        ]);
+        for tag in &tags {
+            out.push_str(&crate::sigfmt::encode_fields(&[tag.as_str()]));
+        }
+        out
+    }
+
+    pub fn signed(key: &SecretKey, room: &str, bio: String, tags: Vec<String>) -> Self {
+        let mut f = Self {
+            from: key.public().to_string(),
+            ts: now_ms(),
+            bio,
+            tags,
+            sig: String::new(),
+        };
+        let sig = key.sign(f.canonical(room).as_bytes());
+        f.sig = hex::encode(sig.to_bytes());
+        f
+    }
+
+    pub fn verify(&self, room: &str) -> bool {
+        let Ok(pk) = PublicKey::from_str(&self.from) else {
+            return false;
+        };
+        let Ok(raw) = hex::decode(&self.sig) else {
+            return false;
+        };
+        let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else {
+            return false;
+        };
+        pk.verify(self.canonical(room).as_bytes(), &Signature::from_bytes(&arr))
+            .is_ok()
+    }
+
+    pub fn to_profile(&self) -> MemberProfile {
+        MemberProfile {
+            id: self.from.clone(),
+            bio: self.bio.clone(),
+            tags: self.tags.clone(),
+            ts: self.ts,
+        }
+    }
+}
+
+/// 把 `list` 按"只认更新的（`ts`）"并进 `by_id`。
+fn merge_profiles_newest(
+    by_id: &mut HashMap<String, MemberProfile>,
+    list: impl IntoIterator<Item = MemberProfile>,
+) {
+    for p in list {
+        match by_id.get(&p.id) {
+            Some(cur) if cur.ts > p.ts => {}
+            _ => {
+                by_id.insert(p.id.clone(), p);
+            }
+        }
+    }
+}
+
 /// 把名片并进快照的成员表（R2b）。
 ///
 /// 只填**在场成员**：快照里只有此刻在线的人，给不在场的人塞名片没有意义
@@ -864,6 +968,12 @@ pub enum RoomEvent {
     Profiles {
         room: String,
         list: Vec<MemberProfile>,
+    },
+    /// **某人的名片有更新**（V6.2 的状态帧）：广播即达，UI 立刻学 ——
+    /// 不用等常驻节点把它并入快照（快照仍负责"新人补全"）。
+    Profile {
+        room: String,
+        profile: MemberProfile,
     },
     /// **插件自定义事件**（终态 ③ 的扩展点）。
     ///
@@ -1266,6 +1376,9 @@ pub struct HistoryStore {
     mem: Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>,
     /// 内存分支的写锁（原生走 SQLite 时不需要）
     append_lock: Arc<Mutex<()>>,
+    /// V6.2：名片**状态帧**的档案（每房间每人一份，只认更新的）。
+    /// 与"名片消息"扫出来的结果在 `latest_profiles` 里按 `ts` 合并。
+    profiles: Arc<Mutex<HashMap<String, HashMap<String, MemberProfile>>>>,
 }
 
 impl std::fmt::Debug for HistoryStore {
@@ -1294,13 +1407,78 @@ impl HistoryStore {
         #[cfg(not(all(not(target_arch = "wasm32"), feature = "cli")))]
         anyhow::ensure!(dir.is_none(), "当前构建不支持持久化历史，请启用 cli feature");
 
+        // V6.2：把落盘的名片档案种回内存 —— 重启后"只认更新的"这条判定才有基线。
+        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+        let profiles_seed = {
+            let mut seed: HashMap<String, HashMap<String, MemberProfile>> = HashMap::new();
+            if let Some(db) = &db {
+                if let Ok(guard) = db.lock() {
+                    if let Ok(list) = guard.all_profiles() {
+                        for (room, profile) in list {
+                            seed.entry(room).or_default().insert(profile.id.clone(), profile);
+                        }
+                    }
+                }
+            }
+            seed
+        };
+        #[cfg(not(all(not(target_arch = "wasm32"), feature = "cli")))]
+        let profiles_seed: HashMap<String, HashMap<String, MemberProfile>> = HashMap::new();
+
         Ok(Self {
             dir,
             #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
             db,
             mem: Arc::new(Mutex::new(HashMap::new())),
             append_lock: Arc::new(Mutex::new(())),
+            profiles: Arc::new(Mutex::new(profiles_seed)),
         })
+    }
+
+    /// 记一份名片**状态帧**（V6.2）。只认更新的（按 `ts`）；返回是否有变化。
+    pub fn upsert_profile(&self, room: &str, p: &MemberProfile) -> bool {
+        {
+            let mut g = self.profiles.lock().unwrap();
+            let table = g.entry(room.to_string()).or_default();
+            let entry = table.entry(p.id.clone()).or_default();
+            if entry.ts > p.ts {
+                return false;
+            }
+            if entry.ts == p.ts && entry.bio == p.bio && entry.tags == p.tags {
+                return false;
+            }
+            *entry = p.clone();
+        }
+        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+        if let Some(db) = &self.db {
+            match db.lock() {
+                Ok(guard) => {
+                    if let Err(e) = guard.upsert_profile(room, p) {
+                        warn!("名片落盘失败 room={room}: {e}");
+                    }
+                }
+                Err(_) => warn!("名片落盘失败：历史数据库锁已失效"),
+            }
+        }
+        true
+    }
+
+    /// 同 [`HistoryStore::upsert_profile`]，但不阻塞运行时（SQLite 走 `spawn_blocking`）
+    pub async fn upsert_profile_async(&self, room: String, profile: MemberProfile) -> bool {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+        if self.db.is_some() {
+            let store = self.clone();
+            return match tokio::task::spawn_blocking(move || store.upsert_profile(&room, &profile))
+                .await
+            {
+                Ok(changed) => changed,
+                Err(error) => {
+                    warn!("名片写入任务失败：{error}");
+                    false
+                }
+            };
+        }
+        self.upsert_profile(&room, &profile)
     }
 
     /// 追加一条消息到历史（内存 + 落盘）。
@@ -1506,7 +1684,30 @@ impl HistoryStore {
             .get(room)
             .cloned()
             .unwrap_or_default();
-        Ok(latest_profiles_from(&messages))
+        // V6.2：把**状态帧**档案与"名片消息"两个来源按 `ts` 合并取新（迁移期两头都可能有）。
+        let mut by_id: HashMap<String, MemberProfile> = latest_profiles_from(&messages)
+            .into_iter()
+            .map(|p| (p.id.clone(), p))
+            .collect();
+        let from_frames: Vec<MemberProfile> = self
+            .profiles
+            .lock()
+            .unwrap()
+            .get(room)
+            .map(|t| t.values().cloned().collect())
+            .unwrap_or_default();
+        merge_profiles_newest(&mut by_id, from_frames);
+        #[cfg(all(not(target_arch = "wasm32"), feature = "cli"))]
+        if let Some(db) = &self.db {
+            if let Ok(guard) = db.lock() {
+                if let Ok(list) = guard.profiles(room) {
+                    merge_profiles_newest(&mut by_id, list);
+                }
+            }
+        }
+        let mut out: Vec<MemberProfile> = by_id.into_values().collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id)); // 稳定输出：测试与日志都好读
+        Ok(out)
     }
 
     /// 同 [`HistoryStore::latest_profiles`]，但不阻塞运行时（SQLite 走 `spawn_blocking`）
@@ -2754,6 +2955,21 @@ impl RoomNode {
                                         .await
                                         .ok();
                                 }
+                                Wire::Profile { u } => {
+                                    // 名片**状态帧**（V6.2）：验签后原样端给 UI。
+                                    // 房间已进签名载荷，跨房间搬运会在这里被拦下。
+                                    if !u.verify(&room_s) {
+                                        warn!("名片帧签名无效，丢弃（或来自其它房间）");
+                                        continue;
+                                    }
+                                    events
+                                        .send(RoomEvent::Profile {
+                                            room: room_s.clone(),
+                                            profile: u.to_profile(),
+                                        })
+                                        .await
+                                        .ok();
+                                }
                                 Wire::File { c } => {
                                     // 文件控制消息：验签后转成 UI 事件（内容走独立数据流）
                                     if let Some(ctrl) = c.verify(&room_s) {
@@ -3202,6 +3418,29 @@ impl RoomNode {
         // 自己刚签的消息必然验得过；忽略返回值（失败也会有 warn）
         let _ = self.store.append_async(room, msg.clone()).await;
         Ok(msg)
+    }
+
+    /// 发布我的名片（V6.2 **状态帧**）：广播 + 立刻给自己端一条 UI 事件
+    /// （不等 gossip 回环，也不产生聊天消息）。
+    pub async fn set_profile(&self, bio: String, tags: Vec<String>) -> Result<ProfileFrame> {
+        let (sender, room) = {
+            let g = self.inner.lock().unwrap();
+            match g.joined.as_ref() {
+                Some(j) => (j.sender.clone(), j.room.clone()),
+                None => anyhow::bail!("还没进房间"),
+            }
+        };
+        let frame = ProfileFrame::signed(&self.secret_key, &room, bio, tags);
+        let bytes = serde_json::to_vec(&Wire::Profile { u: frame.clone() })?;
+        sender.lock().await.broadcast(bytes.into()).await?;
+        self.events_tx
+            .send(RoomEvent::Profile {
+                room,
+                profile: frame.to_profile(),
+            })
+            .await
+            .ok();
+        Ok(frame)
     }
 
     /// 从常驻节点拉历史消息。
@@ -3980,6 +4219,99 @@ mod security_tests {
         let mut tampered = m.clone();
         tampered.text = "被动过".into();
         assert!(!tampered.verify(ROOM));
+    }
+
+    // ── V6.2：名片状态帧 ──────────────────────────────────────────
+
+    #[test]
+    fn v62_名片帧_签名与房间绑定() {
+        let k = kp();
+        let f = ProfileFrame::signed(
+            &k,
+            ROOM,
+            "能查代码 · 会跑脚本".into(),
+            vec!["ts".into(), "rust".into(), "ts".into()],
+        );
+        assert!(f.verify(ROOM), "名片帧自洽");
+        assert!(!f.verify("别的房间"), "房间进载荷：跨房间搬运必须验不过");
+
+        let mut tampered = f.clone();
+        tampered.bio = "改过的简介".into();
+        assert!(!tampered.verify(ROOM), "改简介必须验不过");
+
+        let mut retagged = f.clone();
+        retagged.tags.push("偷偷加的标签".into());
+        assert!(!retagged.verify(ROOM), "偷加标签必须验不过");
+
+        // 标签是集合：乱序/重复签出同一串
+        let g = ProfileFrame {
+            tags: vec!["rust".into(), "ts".into()],
+            ..f.clone()
+        };
+        assert_eq!(f.canonical(ROOM), g.canonical(ROOM), "标签去重+排序");
+    }
+
+    #[test]
+    fn v62_名片档案_只认更新的且与老名片消息按ts合并() {
+        let store = HistoryStore::new(None).unwrap(); // 内存分支
+        let k = kp();
+        let id = k.public().to_string();
+
+        // 旧路径：一条"约定格式"的名片消息（ts=100）
+        let msg = ChatMessage {
+            id: String::new(),
+            from: id.clone(),
+            nickname: "n".into(),
+            text: r#"{"t":"profile","v":1,"bio":"旧简介","tags":["a"]}"#.into(),
+            ts: 100,
+            sig: String::new(),
+            file: None,
+            mentions: Vec::new(),
+        }
+        .sign(&k, ROOM);
+        assert!(store.append(ROOM, msg));
+
+        // 状态帧更新（ts=200）→ 盖过消息来源
+        assert!(store.upsert_profile(
+            ROOM,
+            &MemberProfile {
+                id: id.clone(),
+                bio: "新简介".into(),
+                tags: vec!["b".into()],
+                ts: 200,
+            },
+        ));
+        let got = store.latest_profiles(ROOM).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].bio, "新简介");
+        assert_eq!(got[0].tags, vec!["b".to_string()]);
+
+        // 更旧的帧（ts=50）不能把新的盖回去
+        assert!(!store.upsert_profile(
+            ROOM,
+            &MemberProfile {
+                id: id.clone(),
+                bio: "更旧".into(),
+                tags: vec![],
+                ts: 50,
+            },
+        ));
+        assert_eq!(store.latest_profiles(ROOM).unwrap()[0].bio, "新简介");
+
+        // 消息比帧新时，消息来源胜（迁移期两个来源都可能在写）
+        let msg2 = ChatMessage {
+            id: String::new(),
+            from: id.clone(),
+            nickname: "n".into(),
+            text: r#"{"t":"profile","v":1,"bio":"消息更新","tags":[]}"#.into(),
+            ts: 300,
+            sig: String::new(),
+            file: None,
+            mentions: Vec::new(),
+        }
+        .sign(&k, ROOM);
+        assert!(store.append(ROOM, msg2));
+        assert_eq!(store.latest_profiles(ROOM).unwrap()[0].bio, "消息更新");
     }
 
     #[test]

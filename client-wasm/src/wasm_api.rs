@@ -100,6 +100,13 @@ impl RoomNode {
         serde_json::to_string(&m).map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// 发布我的名片（V6.2 **状态帧**）：广播 + 本地立即生效（不等 gossip 回环）。
+    /// 返回帧 JSON（含 ts/sig），前端可顺手存档。
+    pub async fn set_profile(&self, bio: String, tags: Vec<String>) -> Result<String, JsError> {
+        let frame = self.inner.set_profile(bio, tags).await.map_err(to_js_err)?;
+        serde_json::to_string(&frame).map_err(|e| JsError::new(&e.to_string()))
+    }
+
     pub fn set_nickname(&self, name: String) {
         self.inner.set_nickname(&name);
     }

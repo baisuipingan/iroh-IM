@@ -275,3 +275,40 @@ fn profile_lookup_is_a_two_stage_filter() {
     assert_eq!(folded[0].tags, vec!["ts".to_string()]);
     assert_eq!(folded[0].ts, 2);
 }
+
+#[test]
+fn profile_frames_persist_and_merge_with_messages() {
+    let directory = TestDirectory::new();
+    let key = SecretKey::generate();
+    let id = key.public().to_string();
+    let profile = |bio: &str, ts: u64| iroh_web::room::MemberProfile {
+        id: id.clone(),
+        bio: bio.to_string(),
+        tags: vec!["x".into()],
+        ts,
+    };
+
+    {
+        let store = HistoryStore::new(Some(directory.0.clone())).unwrap();
+        // 旧路径：名片消息进历史（ts=100）
+        let m = message(&key, "r", 100, r#"{"t":"profile","v":1,"bio":"旧","tags":[]}"#.into());
+        assert!(store.append("r", m));
+        // 状态帧（ts=200）落盘
+        assert!(store.upsert_profile("r", &profile("新", 200)));
+    }
+    {
+        // 重开（模拟 roomd 重启）：两个来源都在，取新者
+        let store = HistoryStore::new(Some(directory.0.clone())).unwrap();
+        let got = store.latest_profiles("r").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].bio, "新");
+        assert_eq!(got[0].ts, 200);
+
+        // 重启后基线仍在：更旧的帧写不进去
+        assert!(!store.upsert_profile("r", &profile("更旧", 50)));
+        // 更旧的消息来源也盖不过
+        let m = message(&key, "r", 90, r#"{"t":"profile","v":1,"bio":"更旧消息","tags":[]}"#.into());
+        assert!(store.append("r", m));
+        assert_eq!(store.latest_profiles("r").unwrap()[0].bio, "新");
+    }
+}

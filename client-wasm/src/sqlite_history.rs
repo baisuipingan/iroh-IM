@@ -23,7 +23,7 @@
 //! `room / ts / id` 提出来做索引，消息本体整条存 JSON：
 //! **既是真索引，又不与协议耦合。**
 
-use crate::room::{ChatMessage, MAX_HISTORY_LINE_BYTES};
+use crate::room::{ChatMessage, MemberProfile, MAX_HISTORY_LINE_BYTES};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use tracing::{debug, warn};
@@ -72,6 +72,16 @@ impl SqliteHistory {
               id   TEXT    NOT NULL,
               json BLOB    NOT NULL,
               PRIMARY KEY (room, ts, id)
+            ) WITHOUT ROWID;
+
+            -- 名片**状态帧**（V6.2）：每人每房一份、只留最新的。
+            -- 与 messages 分表：名片不是聊天历史，别混进翻页/去重/裁剪那套逻辑。
+            CREATE TABLE IF NOT EXISTS profiles (
+              room   TEXT    NOT NULL,
+              member TEXT    NOT NULL,
+              ts     INTEGER NOT NULL,
+              json   BLOB    NOT NULL,
+              PRIMARY KEY (room, member)
             ) WITHOUT ROWID;
             "#,
         )?;
@@ -271,6 +281,58 @@ impl SqliteHistory {
         for raw in rows {
             if let Ok(message) = serde_json::from_slice::<ChatMessage>(&raw?) {
                 out.push(message);
+            }
+        }
+        Ok(out)
+    }
+
+    /// 记一份名片**状态帧**（V6.2）：只认更新的（`ts` 更大或相等才覆盖）。
+    pub fn upsert_profile(&self, room: &str, profile: &MemberProfile) -> rusqlite::Result<()> {
+        let json = serde_json::to_vec(profile).map_err(|error| {
+            rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+        })?;
+        let ts = sql_timestamp(profile.ts)?;
+        self.conn.execute(
+            "INSERT INTO profiles (room, member, ts, json) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(room, member) DO UPDATE SET ts = excluded.ts, json = excluded.json \
+             WHERE excluded.ts >= profiles.ts",
+            params![room, profile.id, ts, json],
+        )?;
+        Ok(())
+    }
+
+    /// 读一个房间的名片档案（V6.2）。坏行跳过（不让一条脏数据挡住整房）。
+    pub fn profiles(&self, room: &str) -> rusqlite::Result<Vec<MemberProfile>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT json FROM profiles WHERE room = ?1")?;
+        let rows = statement.query_map(params![room], |row| {
+            let raw: Vec<u8> = row.get(0)?;
+            Ok(raw)
+        })?;
+        let mut out = Vec::new();
+        for raw in rows {
+            if let Ok(profile) = serde_json::from_slice::<MemberProfile>(&raw?) {
+                out.push(profile);
+            }
+        }
+        Ok(out)
+    }
+
+    /// 读**全部**房间的名片档案（V6.2）：进程启动时把内存档案种回来
+    /// —— 否则"更旧的帧不能覆盖更新的"这条判定在重启后就失效了（内存里没有基线）。
+    pub fn all_profiles(&self) -> rusqlite::Result<Vec<(String, MemberProfile)>> {
+        let mut statement = self.conn.prepare("SELECT room, json FROM profiles")?;
+        let rows = statement.query_map([], |row| {
+            let room: String = row.get(0)?;
+            let raw: Vec<u8> = row.get(1)?;
+            Ok((room, raw))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (room, raw) = row?;
+            if let Ok(profile) = serde_json::from_slice::<MemberProfile>(&raw) {
+                out.push((room, profile));
             }
         }
         Ok(out)

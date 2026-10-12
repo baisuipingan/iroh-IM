@@ -123,6 +123,15 @@ async fn main() -> anyhow::Result<()> {
                         println!("[名片] {} 简介={:?} 标签={:?}", &p.id[..p.id.len().min(8)], p.bio, p.tags);
                     }
                 }
+                // 名片状态帧（V6.2）：单人的实时更新
+                RoomEvent::Profile { profile, .. } => {
+                    println!(
+                        "[名片帧] {} 简介={:?} 标签={:?}",
+                        &profile.id[..profile.id.len().min(8)],
+                        profile.bio,
+                        profile.tags
+                    );
+                }
                 // 插件自定义事件（终态 ③ 的扩展点）：核心不认识它的内容，原样打出来
                 RoomEvent::Plugin { name, payload } => {
                     println!("[插件:{name}] {payload}")
