@@ -172,13 +172,19 @@ C 期显式未做（记录在案，不许静默缩范围）：房间外你批（
 
 ### V6 · 破坏性（攒一次切）
 
-- **V6.1** 结构化 `mentions: [endpoint_id]` 参与签名（文本里不再需要 token）。
-- **V6.2** 名片升为**房间状态帧**（广播 + 快照的权威来源）。
-- **V6.3**（可选，视范围）房间级可选加密 —— 需先写威胁模型。
+**V6.1 · 结构化 mentions** —— ✅ 已完成并上线（2026-10-12，见
+[`docs/release-2026-10-12-protocol-v6.md`](release-2026-10-12-protocol-v6.md)）：
 
-**落地说明见 [`docs/v6-cutover-plan.md`](v6-cutover-plan.md)**（精确改动面 / 切割顺序 /
-验证与回滚 / 待拍板的三个决定：历史策略、Android、切点）。"攒一次切"的**切点由所有者拍板**：
-拍完即按该文档执行。
+- `ChatMessage` 载荷加 `mentions: [EndpointId]`（去重+排序后进签名）；文本 `@<id8>` 降级为
+  **渲染锚点**。**只有它的标签升 v6**（presence/文件族载荷没变 → 保持 v5，过渡期双向互通）。
+- **双读**：验证先 v6 后 v5 —— 旧消息/旧历史照常可读，**没有清历史**（与 v4→v5 不同）。
+- 三端接线：agent-pi 结构化触发 + `say(mentions)`；前端 `resolveDraft→mentions`；召唤器转交带 mentions。
+- 切割执行记录（cutover 文档 [`docs/v6-cutover-plan.md`](v6-cutover-plan.md) 的落地版）：
+  roomd → 前端 → agent 一次窗口；`verify.sh all` 退出码 0。
+
+**V6.2 · 名片升为房间状态帧** —— ⏳ 待做（加法，不破坏；新帧类型 + 快照权威）。
+
+**V6.3 · 可选加密** —— ⏳ 待威胁模型后再定。
 
 ## 5. 每期完成定义（DoD，缺一不可）
 
@@ -264,4 +270,5 @@ iOS 端实现；UI 改版；性能压测；把 `!` 加回来（任何形式）�
 | B 期收尾 | ✅ 已完成 | B1/B2/B5/B3/B4 全部完成 → **B 期结束** |
 | A（入房与生命周期） | ✅ 已完成 | `docs/release-2026-10-12-invite-summoner.md`；A2 召唤器（单测 9/9；真端到端 `scripts/e2e/summoner.py`：人类 @注册名 → 🫡 → 成员进名册 → **@id8 转交** → 成员答复 → 收摊无残留）；A3 一房一会话（CLI 拒 `--rooms a,b`）；A4 花名册状态（`profile` e2e **21/21**，含在线/忙碌/离线）；`verify.sh all` 退出码 0；前端 CF `41bff1e1-…` |
 | C（约束与安全） | ✅ 已完成（v1） | `docs/release-2026-10-12-acp-constraints.md`；单测 **32/32**（新增：C1 权限策略 ×3、C2 沙箱 ×1、C3 成本闸门 ×2、C4 召唤治理 ×2）；**真实 claude-code-acp 端到端**：`read-only` 下 Write 被拒且文件不存在；`verify.sh all` 退出码 0 |
-| V6 | ⏳ 待做 | —— |
+| V6.1（结构化 mentions：进签名 + 双读 + 握手 v6） | ✅ 已完成并上线 | `docs/release-2026-10-12-protocol-v6.md`；Rust 75 库测试 + golden 全绿；agent-pi 14/14 + 11/11 + 8/8；前端 10/10；召唤器真端到端（v6·真实中继）；`verify.sh all` 退出码 0；roomd `84264e32…`、CF `888adb02-…`、agent Release `agent-v1.3.0`（两侧哈希/安装校验一致）；**历史未清**（v5 旧消息实测仍可读） |
+| V6.2 / V6.3 | ⏳ 待做 | 名片状态帧（加法）；可选加密（需威胁模型） |
