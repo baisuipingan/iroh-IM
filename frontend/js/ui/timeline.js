@@ -11,6 +11,7 @@
 import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
+import { segments, currentMembers } from '../mention.js';
 import { avatar } from './primitives.js';
 import * as U from '../util.js';
 
@@ -125,6 +126,10 @@ export const timeline = {
       if (room === this.room) this.loadLatest({ silent: true });
     });
     bus.on(EV.PEER_UP, () => this._scheduleSync(500));
+    // 名册变了 → chip 上的昵称跟着变（改名后历史立即显示新名）
+    bus.on(EV.PRESENCE, () => this.repaintMentions());
+    // 我自己改名也要重画（chip 上显示的是"渲染时查到"的名字）
+    document.addEventListener('nickchange', () => this.repaintMentions());
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) this._scheduleSync(0);
     });
@@ -905,7 +910,7 @@ export const timeline = {
   _fillBubble(box, text) {
     const m = /^\[img\]([\s\S]+?)\[\/img\]\n?([\s\S]*)$/.exec(text || '');
     if (!m) {
-      box.textContent = text || '';
+      this._fillMentions(box, text || '');
       return;
     }
     // ⚠️ `[img]` 里的地址是**对端可控**的（composer 早就不再产生这种消息了，
@@ -923,7 +928,7 @@ export const timeline = {
       if (m[2]) {
         const cap = document.createElement('div');
         cap.style.marginTop = '4px';
-        cap.textContent = m[2];
+        this._fillMentions(cap, m[2]);
         box.appendChild(cap);
       }
       return;
@@ -938,8 +943,48 @@ export const timeline = {
     if (m[2]) {
       const cap = document.createElement('div');
       cap.style.marginTop = '4px';
-      cap.textContent = m[2];
+      this._fillMentions(cap, m[2]);
       box.appendChild(cap);
+    }
+  },
+
+  /**
+   * 把 `@<id8>` 渲染成 chip（R1）。
+   *
+   * ⚠️ chip 上显示的名字是**渲染时**按名册查出来的，不是消息里存的 ——
+   *    所以别人改了昵称，**历史里的 chip 会立刻显示新名字**（按 id 寻址的意义就在这）。
+   *    名册来自 presence 软状态：查不到（离线/换房）就老实显示 id8，不猜。
+   */
+  _fillMentions(box, text) {
+    // ⚠️ 名字用 `net.myNickname()`（我进房时广播的那个），不是 `store.nick()`：
+    //    一个浏览器开多标签时 localStorage 共享，后者会读到别的标签刚改的值。
+    const self = { id: net.endpoint_id?.() ?? '', nickname: net.myNickname?.() ?? store.nick() };
+    const segs = segments(text, currentMembers(), self);
+    // 全是普通文本时走原来的最快路径（`textContent`），别为没有 @ 的消息白建节点
+    if (!segs.some((s) => s.type === 'mention')) {
+      box.textContent = text;
+      delete box.dataset.mentionSrc;
+      return;
+    }
+    box.replaceChildren(
+      ...segs.map((s) => {
+        if (s.type === 'text') return document.createTextNode(s.text);
+        const chip = document.createElement('span');
+        chip.className = `mention${s.known ? '' : ' mention--unknown'}`;
+        chip.dataset.mentionId8 = s.id8;
+        chip.textContent = `@${s.nickname ?? s.id8}`;
+        chip.title = s.nickname ? `@${s.nickname}（${s.id8}）` : `成员不在场（${s.id8}）`;
+        return chip;
+      }),
+    );
+    // 留一份原文，供名册变化时重画（改名后 chip 要跟着变）
+    box.dataset.mentionSrc = text;
+  },
+
+  /** 名册（presence）变了 → 重画所有 chip 上显示的名字 */
+  repaintMentions() {
+    for (const box of document.querySelectorAll('.bubble[data-mention-src]')) {
+      this._fillMentions(box, box.dataset.mentionSrc);
     }
   },
 

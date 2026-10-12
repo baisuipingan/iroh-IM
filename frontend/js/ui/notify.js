@@ -25,7 +25,9 @@
  * ==========================================================================*/
 
 import { bus, EV } from '../bus.js';
+import { net } from '../net.js';
 import { store } from '../store.js';
+import { mentionsMe } from '../mention.js';
 
 /** 通知正文的最大长度（超过就省略号） */
 const MAX_BODY = 60;
@@ -108,9 +110,12 @@ export const notify = {
    * 真正有隐私含义的决定，必须能用断言钉死（见 `redesign.py`），
    * 而不是"看着代码好像是对的"。
    */
-  bodyFor(room, message, prefs = store.prefs()) {
+  bodyFor(room, message, prefs = store.prefs(), myId = net.endpoint_id?.() ?? '') {
     const alias = room ? store.room(room)?.alias || '' : '';
-    const title = alias || room || '新消息';
+    const base = alias || room || '新消息';
+    // 被 @ 了要在标题上体现（R1）：正文仍然受「显示消息内容」开关约束，
+    // 而"有人 @ 你"这件事本身不算内容泄露 —— 它只是寻址信息。
+    const title = mentionsMe(message?.text, myId) ? `${base} · 有人 @ 你` : base;
     const nick = message?.nickname || '有人';
     const text = String(message?.text || '').slice(0, MAX_BODY);
     const body = prefs.notifyContent === false || !text ? '新消息' : `${nick}: ${text}`;

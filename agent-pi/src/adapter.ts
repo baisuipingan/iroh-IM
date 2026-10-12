@@ -353,12 +353,27 @@ export class ChatAdapter {
    */
   #extract(text: string): string | null {
     const trimmed = text.trim();
+    // ① **规范方式**：`@<我的 id8>` —— id8 = 我自己的 EndpointId 前 8 位（R1）。
+    //    这是唯一可靠的寻址：改名、同名都不影响（昵称只是给人看的）。
+    const myId8 = this.#myId8();
+    if (myId8) {
+      const re = new RegExp(`@${myId8}(?![0-9a-f])`, 'g');
+      const stripped = trimmed.replace(re, '');
+      if (stripped !== trimmed) return stripped.trim();
+    }
+    // ② 兼容兜底：`@昵称`（人手打的、或老客户端）—— `--no-mention` 可关掉
     const mention = this.#opts.mention ?? null;
     if (mention && trimmed.includes(`@${mention}`)) {
       return trimmed.replaceAll(`@${mention}`, '').trim();
     }
     if (this.#opts.respondToAll) return trimmed;
     return null;
+  }
+
+  /** 我自己的 id8（EndpointId 前 8 位小写 hex）；hello 还没到时为空串 */
+  #myId8(): string {
+    const id = this.#opts.client?.hello?.endpointId ?? '';
+    return String(id).slice(0, 8).toLowerCase();
   }
 
   /** 消息 id 去重（LRU：只留最近 1024 个）。返回 true = 第一次见。 */

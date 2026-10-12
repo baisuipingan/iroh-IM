@@ -91,4 +91,6 @@ run_case "redesign"        scripts/e2e/redesign.py
 run_case "relay-enabled"   scripts/e2e/relay-enabled.py
 # 前端插件通道：新能力的事件要被认领；没人认领也不能出事 —— "万物皆插件"的客户端半边
 run_case "plugin-channel"  scripts/e2e/plugin-channel.py
+# R1：@ 按 id 寻址（昵称只给人看）—— 同名/改名都不该 @ 错人
+run_case "mention-id"      scripts/e2e/mention-id.py
 exit "$fail"

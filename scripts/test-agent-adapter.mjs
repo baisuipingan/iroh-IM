@@ -19,7 +19,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** 一个假的 AgentClient：只实现 adapter 会用到的那几个方法 */
 function makeClient({ sayDelay = 50 } = {}) {
   const client = new EventEmitter();
-  client.hello = { nickname: '小助手' };
+  // `endpointId` 是 @ 规范寻址的底层（R1）：id8 = 前 8 位
+  client.hello = { nickname: '小助手', endpointId: `9b45b7ef${'00'.repeat(28)}` };
   client.said = [];
   client.rejected = [];
   client.say = async (text) => {
@@ -218,4 +219,47 @@ test('`!前缀` 已整个删除：它不再是触发方式', async () => {
   client.emit('event', message('4', '@小助手 你好'));
   await sleep(200);
   assert.deepEqual(client.said, ['你好']);
+});
+
+test('@ 按 id 寻址：@<我的 id8> 触发，别人的 id8 不触发（R1）', async () => {
+  const client = makeClient({ sayDelay: 10 });
+  const adapter = makeAdapter(client, { cooldownMs: 0 });
+  adapter.start();
+
+  // 别人的 id8：绝不该触发（同名/改名都挡不住的那种误触发，靠这条挡）
+  client.emit('event', message('1', '@deadbeef 你好'));
+  await sleep(150);
+  assert.deepEqual(client.said, [], '别人的 id8 不该触发我');
+
+  // 我的 id8：触发，且 token 被剥掉，brain 拿到的是纯文本
+  client.emit('event', message('2', '@9b45b7ef 你好'));
+  await sleep(150);
+  assert.deepEqual(client.said, ['你好']);
+});
+
+test('@<我的 id8> 不依赖昵称：关掉 --mention 也照样触发（R1）', async () => {
+  const client = makeClient({ sayDelay: 10 });
+  const adapter = makeAdapter(client, { cooldownMs: 0, mention: null });
+  adapter.start();
+
+  // 昵称兜底被关掉 → 裸 @昵称 不再是提及
+  client.emit('event', message('1', '@小助手 你好'));
+  await sleep(150);
+  assert.deepEqual(client.said, [], '关掉昵称兜底后，@昵称 不该触发');
+
+  // 但规范的 id 寻址照常工作 —— 这才是"改名/同名都不受影响"的基础
+  client.emit('event', message('2', '@9b45b7ef 在吗'));
+  await sleep(150);
+  assert.deepEqual(client.said, ['在吗']);
+});
+
+test('id8 必须是完整 8 位：长 id 的前缀不会误触发（边界）', async () => {
+  const client = makeClient({ sayDelay: 10 });
+  const adapter = makeAdapter(client, { cooldownMs: 0, mention: null });
+  adapter.start();
+
+  // `@9b45b7ef123` 是**更长的 id**（第 9 位仍是 hex）→ 不是我的 token
+  client.emit('event', message('1', '@9b45b7ef123 你好'));
+  await sleep(150);
+  assert.deepEqual(client.said, [], '9 位以上 hex 不该被截成 8 位来匹配');
 });

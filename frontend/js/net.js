@@ -627,6 +627,16 @@ export const net = {
     this.client.call('setNickname', name).catch(() => {});
   },
 
+  /**
+   * **本端在这个房间用的昵称** —— 与 `store.nick()` 不是一回事：
+   * 前者是"我进房时广播出去的那个名字"（权威），后者是 localStorage 里的偏好。
+   * 一个浏览器开多个标签时，localStorage 是共享的 —— 拿偏好当"我的名字"会读到
+   * 别的标签刚改的值（实测踩到：@ 我的 chip 显示成了另一个标签的昵称）。
+   */
+  myNickname() {
+    return this._nick || store.nick();
+  },
+
   async send(text) {
     // ⚠️ 离线时不要把请求丢进黑洞：直接抛一个可读的错误，
     //    让 UI 走"发送失败 + 保留输入"的分支，而不是卡住不动。

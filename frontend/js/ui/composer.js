@@ -28,6 +28,7 @@
 import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
+import { resolveDraft, currentMembers, id8Of } from '../mention.js';
 import { dialog } from './dialog.js';
 import { fileTransfer, canTransferFiles } from './filetransfer.js';
 import * as U from '../util.js';
@@ -71,10 +72,138 @@ export const composer = {
   enabled: false,
   /** 底部提示的自动消失计时器 */
   _tipTimer: null,
+  /**
+   * @ 提及补全的当前状态（R1）。
+   *   `range` = 输入框里那段 `@查询词` 的 [起, 止)，接受候选时替换它
+   *   `items` = 候选成员（昵称匹配或 id8 前缀匹配）
+   */
+  _mention: { open: false, items: [], index: 0, range: null },
+
+  /* ------------------------------------------------------------------ @ 提及 */
+
+  /**
+   * 输入框里当前"正在输入的 @查询词"落在哪一段。
+   *
+   * 只认三种边界开头的 `@`（行首 / 空白 / 常见中英文标点），
+   * 这样 `a@b.com` 这种邮箱不会被当成提及（与 `js/mention.js` 的规则一致）。
+   */
+  _mentionQuery() {
+    const el = $('input');
+    if (!el) return null;
+    const upto = el.value.slice(0, el.selectionStart ?? el.value.length);
+    const m = /(^|[\s，。！？、；：,.!?;:()\[\]{}「」“”'’])@([^\s@#]{0,32})$/.exec(upto);
+    if (!m) return null;
+    return { query: m[2], start: upto.length - m[2].length - 1, end: upto.length };
+  },
+
+  _mentionCandidates(query) {
+    const list = currentMembers();
+    const q = query.toLowerCase();
+    const hit = (p) =>
+      !q || String(p.nickname ?? '').toLowerCase().includes(q) || id8Of(p.id).startsWith(q);
+    return list.filter(hit).slice(0, 8);
+  },
+
+  _mentionTyped() {
+    const q = this._mentionQuery();
+    if (!q || !this.enabled) return this._closeMention();
+    const items = this._mentionCandidates(q.query);
+    if (!items.length) return this._closeMention();
+    this._mention = { open: true, items, index: 0, range: [q.start, q.end] };
+    this._paintMention();
+  },
+
+  _mentionMenuEl() {
+    let el = $('mention-menu');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'mention-menu';
+    el.className = 'mention-menu';
+    el.hidden = true;
+    // 菜单挂在 `.composer`（它是 position: relative）里，浮在输入框上方
+    ($('input')?.closest('.composer') ?? document.body).appendChild(el);
+    // 点选（用 mousedown 而不是 click：click 之前输入框会先失焦，光标位置就没了）
+    el.addEventListener('mousedown', (e) => {
+      const btn = e.target.closest('[data-idx]');
+      if (!btn) return;
+      e.preventDefault();
+      this._acceptMention(Number(btn.dataset.idx));
+    });
+    return el;
+  },
+
+  _paintMention() {
+    const el = this._mentionMenuEl();
+    const { items, index } = this._mention;
+    el.replaceChildren(
+      ...items.map((p, i) => {
+        const row = document.createElement('div');
+        row.className = `mention-menu__row${i === index ? ' is-active' : ''}`;
+        row.dataset.idx = String(i);
+        const name = document.createElement('span');
+        name.className = 'mention-menu__name';
+        name.textContent = p.nickname || '(无名)';
+        const id = document.createElement('span');
+        id.className = 'mention-menu__id';
+        id.textContent = id8Of(p.id);
+        row.append(name, id);
+        return row;
+      }),
+    );
+    el.hidden = false;
+  },
+
+  _closeMention() {
+    this._mention = { open: false, items: [], index: 0, range: null };
+    const el = $('mention-menu');
+    if (el) el.hidden = true;
+  },
+
+  /**
+   * 接受第 i 个候选：把输入框里的 `@查询词` 换成**人能读**的草稿形态。
+   *
+   * ⚠️ 这里插入的**不是**最终的 token —— 昵称重名时补上 `#id8` 消歧，
+   *    真正改写成 `@<id8>` 是在**发送前**（`resolveDraft`）做的。
+   *    这样打字体验是人话，线上/历史里存的是 id。
+   */
+  _acceptMention(i) {
+    const { items, range } = this._mention;
+    const p = items[i];
+    if (!p || !range) return;
+    const dup = items.filter((x) => (x.nickname ?? '') === (p.nickname ?? '')).length > 1;
+    const text = `@${p.nickname || id8Of(p.id)}${dup ? `#${id8Of(p.id)}` : ''} `;
+    const el = $('input');
+    el.setRangeText(text, range[0], range[1], 'end');
+    this._closeMention();
+    this._autoGrow();
+    this._syncSendBtn();
+    el.focus();
+  },
+
+  /** keydown 的第一道关：菜单开着就吃掉这些键；返回 true = 已处理 */
+  _mentionKey(e) {
+    if (!this._mention.open) return false;
+    const { items } = this._mention;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const delta = e.key === 'ArrowDown' ? 1 : -1;
+      this._mention.index = (this._mention.index + delta + items.length) % items.length;
+      this._paintMention();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      this._acceptMention(this._mention.index);
+    } else if (e.key === 'Escape') {
+      this._closeMention();
+    } else {
+      return false;
+    }
+    e.preventDefault();
+    return true;
+  },
 
   init() {
     $('send').onclick = () => this.send();
     $('input').addEventListener('keydown', (e) => {
+      // @ 提及补全菜单打开时，方向键/Enter/Tab/Esc 先归它（否则 Enter 会直接把消息发出去）
+      if (this._mentionKey(e)) return;
       if (e.key !== 'Enter') return;
       // ⚠️ 中文输入法组字期间（拼音还没上屏）按 Enter 是"选词"，不是"发送"。
       //    少了这个判断，用户拼到一半按选词键就会把 `nihao` 这种拼音缓冲发出去。
@@ -94,6 +223,7 @@ export const composer = {
     $('input').addEventListener('input', () => {
       this._autoGrow();
       this._syncSendBtn();
+      this._mentionTyped();
     });
     // 粘贴：图片和文件都进待发送区（**不再直接发送**）
     $('input').addEventListener('paste', (e) => this._onPaste(e));
@@ -315,6 +445,19 @@ export const composer = {
       this.tip('文本最多 64 KiB（按 UTF-8 计算），请缩短或作为文件发送', { bad: true, sticky: true });
       return;
     }
+    // @ 提及：草稿里可能写的是 `@昵称` / `@昵称#id8`，**发送前**统一改写成规范 token `@<id8>`。
+    // 为什么不在打字时就写成 id：那样输入框里全是十六进制，没法读；
+    // 为什么不在收端按昵称认：同名/改名就会认错人（见 js/mention.js 的规范）。
+    const resolved = resolveDraft(trimmed);
+    if (resolved.ambiguous.length || resolved.unresolved.length) {
+      const parts = [];
+      if (resolved.ambiguous.length) parts.push(`同名多人：${resolved.ambiguous.join('、')}`);
+      if (resolved.unresolved.length) parts.push(`没找到：${resolved.unresolved.join('、')}`);
+      // 不拦发送（原样当普通文本），但必须说出来 —— 否则用户以为 @ 到了
+      this.tip(`有 @ 没能确定到唯一成员（${parts.join('；')}），已按普通文本发出`, { bad: true });
+    }
+    const body = resolved.text;
+    this._closeMention();
 
     this.sending = true;
     const sendBtn = $('send');
@@ -340,8 +483,8 @@ export const composer = {
       //    于是把**已经发出去的文字**塞回输入框，还多弹一个"发送失败"的
       //    红色气泡（同一条消息在时间线上出现两次，一次正常一次标红）。
       let textOk = true;
-      if (trimmed) {
-        const r = await this._push(trimmed, room);
+      if (body) {
+        const r = await this._push(body, room);
         textOk = r.ok;
         if (!r.ok) {
           failReason = r.reason;
@@ -396,7 +539,8 @@ export const composer = {
 
   /** 直接发一段文字（重发气泡用），成功返回 true */
   async pushText(text) {
-    const r = await this._push(text);
+    // 与 send() 同一条规则：重发也要把 `@昵称` 改写成规范 token
+    const r = await this._push(resolveDraft(String(text)).text);
     if (!r.ok) {
       bus.emit(EV.SEND_FAILED, { text, reason: r.reason, failed: { el: null } });
       return false;
