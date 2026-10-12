@@ -25,8 +25,8 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
   --agent-bin PATH      iroh-agent 二进制（默认 $IROH_AGENT_BIN 或 PATH 里的 iroh-agent）
   --agent-args JSON     追加给 serve 的参数（如 '["--nick","覆盖名"]'）
   --brain rule|command  大脑类型（默认 rule）
-  --prefix '!'          触发前缀（默认 '!'；--no-prefix 关掉）
   --mention NAME        @提及触发（默认用 --nick；--no-mention 关掉）
+                        ⚠️ 触发方式只有 @ —— 原来的 ! 前缀已于 2026-10-12 删除
   --respond-to-all      所有消息都触发（噪音大，慎用）
   --cooldown-ms 3000    两次回复的最小间隔
   --ping-interval-ms 45000  serve 看门狗（0 = 关）
@@ -87,7 +87,6 @@ const VALUE_FLAGS = new Set([
   'prompt-template',
   'input',
   'timeout-ms',
-  'prefix',
   'mention',
   'cooldown-ms',
   'max-reply-bytes',
@@ -107,7 +106,7 @@ const VALUE_FLAGS = new Set([
   'files-max-concurrent',
   'files-max-total-mb',
 ]);
-const BOOL_FLAGS = new Set(['no-prefix', 'no-mention', 'respond-to-all', 'help']);
+const BOOL_FLAGS = new Set(['no-mention', 'respond-to-all', 'help']);
 
 interface Flags {
   room?: string;
@@ -121,9 +120,7 @@ interface Flags {
   promptTemplate?: string;
   input?: string;
   timeoutMs?: string;
-  prefix?: string;
   mention?: string;
-  noPrefix?: boolean;
   noMention?: boolean;
   respondToAll?: boolean;
   cooldownMs?: string;
@@ -378,7 +375,6 @@ async function main(): Promise<void> {
     client,
     brain,
     room,
-    prefix: flags.noPrefix ? null : (flags.prefix ?? '!'),
     mention,
     respondToAll: flags.respondToAll === true,
     cooldownMs: num(flags.cooldownMs, 3_000),
@@ -405,7 +401,7 @@ async function main(): Promise<void> {
     );
   }
   log(
-    `[cli] 已就绪：prefix=${flags.noPrefix ? '关' : (flags.prefix ?? '!')} mention=${mention ?? '关'} ` +
+    `[cli] 已就绪：mention=${mention ?? '关'}（触发方式只有 @）` +
       `files=${filesMode}${filesMode === 'accept' ? `（上限 ${num(flags.filesMaxMb, 64)} MiB）` : ''}`,
   );
 

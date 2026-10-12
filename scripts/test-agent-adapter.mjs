@@ -66,7 +66,7 @@ const makeAdapter = (client, opts = {}) =>
     client,
     brain: { onMessage: async (msg) => msg.text },
     room: 'r',
-    prefix: '!',
+    mention: '小助手',
     log: () => {},
     ...opts,
   });
@@ -79,9 +79,9 @@ test('同一瞬间到达的多个触发只处理一轮（冷却必须在 await �
   // 回归的是一个真实缺陷：冷却原本在"回复发出后"才更新，
   // 而 #handle 在 await brain 处就让出了执行权 →
   // 同一批消息每一条都能通过检查，各打一次模型（实测两条回复间隔 0ms）。
-  client.emit('event', message('1', '!一'));
-  client.emit('event', message('2', '!二'));
-  client.emit('event', message('3', '!三'));
+  client.emit('event', message('1', '@小助手 一'));
+  client.emit('event', message('2', '@小助手 二'));
+  client.emit('event', message('3', '@小助手 三'));
   await sleep(500);
 
   assert.deepEqual(client.said, ['一'], '只应处理第一条');
@@ -92,9 +92,9 @@ test('上一轮还没结束时到达的触发被丢弃（不排队）', async ()
   const adapter = makeAdapter(client, { cooldownMs: 0 });
   adapter.start();
 
-  client.emit('event', message('1', '!一'));
+  client.emit('event', message('1', '@小助手 一'));
   await sleep(50); // 第一轮仍在飞
-  client.emit('event', message('2', '!二'));
+  client.emit('event', message('2', '@小助手 二'));
   await sleep(600);
 
   assert.deepEqual(client.said, ['一']);
@@ -105,11 +105,11 @@ test('冷却窗口内的后续触发被丢弃，窗口过后恢复', async () =>
   const adapter = makeAdapter(client, { cooldownMs: 400 });
   adapter.start();
 
-  client.emit('event', message('1', '!一'));
+  client.emit('event', message('1', '@小助手 一'));
   await sleep(200); // 第一轮已结束，但仍在冷却窗口内
-  client.emit('event', message('2', '!二'));
+  client.emit('event', message('2', '@小助手 二'));
   await sleep(400); // 窗口已过
-  client.emit('event', message('3', '!三'));
+  client.emit('event', message('3', '@小助手 三'));
   await sleep(200);
 
   assert.deepEqual(client.said, ['一', '三'], '冷却期内的"二"应被丢弃，"三"应恢复');
@@ -120,9 +120,9 @@ test('同一 message.id 只处理一次（gossip 会重复投递）', async () =
   const adapter = makeAdapter(client, { cooldownMs: 0 });
   adapter.start();
 
-  client.emit('event', message('same', '!一'));
+  client.emit('event', message('same', '@小助手 一'));
   await sleep(100);
-  client.emit('event', message('same', '!一'));
+  client.emit('event', message('same', '@小助手 一'));
   await sleep(100);
 
   assert.deepEqual(client.said, ['一']);
@@ -196,4 +196,26 @@ test('白名单外的发送方被拒绝', async () => {
 
   assert.equal(accepted, 0);
   assert.match(client.rejected[0]?.reason ?? '', /白名单/);
+});
+
+test('`!前缀` 已整个删除：它不再是触发方式', async () => {
+  const client = makeClient({ sayDelay: 10 });
+  const adapter = makeAdapter(client, { cooldownMs: 0 });
+  adapter.start();
+
+  // 旧写法：删掉之前这两条都会触发
+  client.emit('event', message('1', '!一'));
+  client.emit('event', message('2', '!ping'));
+  await sleep(200);
+  assert.deepEqual(client.said, [], '`!` 开头的消息不该再触发 agent');
+
+  // 真人聊天里的感叹号也不该被误当成命令（这正是删掉前缀的动机之一）
+  client.emit('event', message('3', '！这也太离谱了'));
+  await sleep(200);
+  assert.deepEqual(client.said, []);
+
+  // @ 照常触发，且 @ 之后的内容原样交给 brain
+  client.emit('event', message('4', '@小助手 你好'));
+  await sleep(200);
+  assert.deepEqual(client.said, ['你好']);
 });

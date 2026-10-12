@@ -1,6 +1,12 @@
 # agent-pi · 把 Agent 接进 iroh 聊天室
 
-让一个 **TS/LLM Agent 作为常驻成员**住进聊天室：有人 @它或敲 `!前缀` 就回话。
+让一个 **TS/LLM Agent 作为常驻成员**住进聊天室：**有人 @它**就回话。
+
+> ⚠️ **触发方式只有 @**（2026-10-12 起）。原来的 `!前缀` 已**整个删除**：
+> agent 在房间里是一个**平等的成员**（有名字、有历史、可以互相 @），
+> `!命令` 是"把 agent 当工具调"的语义，和这个模型冲突；
+> 而且前缀会跟真人聊天里的感叹号撞车（"！这也太离谱了"被当成命令）。
+> 要"所有消息都触发"，用 `--respond-to-all`（显式开关），不是前缀。
 
 ```
 pi / 你的大脑（TS）
@@ -36,7 +42,7 @@ cd agent-pi
 node src/cli.ts --room 我的房间 --nick 小助手 --rules examples/rules.json
 ```
 
-房间里发 `!ping` → 它回 `pong`；发 `@小助手 你好` → 按 `examples/rules.json` 回复。
+房间里发 `@小助手 ping` → 它回 `pong`；发 `@小助手 你好` → 按 `examples/rules.json` 回复。
 
 ## 接 pi 的两种方式
 
@@ -113,8 +119,7 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 | `--command` / `--args` / `--prompt-template` / `--input` / `--timeout-ms` | — | command 大脑 |
 | `--pi-system-prompt` / `--pi-append-prompt` / `--pi-prompt-template` / `--pi-cwd` / `--pi-tools` / `--pi-model` | — | pi-sdk 大脑（见上；`--pi-tools none\|read-only\|all\|逗号名单`） |
 | `--tools` / `--fetch-allow` | 无 | 自定义工具：`weather,fetch_url`；后者可配域名白名单 |
-| `--prefix` / `--no-prefix` | `!` | 前缀触发 |
-| `--mention` / `--no-mention` | 有 `--nick` 时默认开启 | @提及触发 |
+| `--mention` / `--no-mention` | 有 `--nick` 时默认开启 | @提及触发（**唯一**的触发方式） |
 | `--respond-to-all` | 关 | 所有消息都触发（噪音大） |
 | `--cooldown-ms` | 3000 | 两次**开始处理**的最小间隔（期间触发丢弃并记日志）；同时最多一轮在飞 —— 两个闸门一起才挡得住"连发消息打爆 token" |
 | `--max-reply-bytes` | 30000 | 回复 UTF-8 字节上限（防超过 `say` 的 32768 被拒） |

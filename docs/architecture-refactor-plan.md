@@ -202,6 +202,7 @@ trait RoomCapability: Send + Sync {
 | 补齐交付链（同窗口） | ✅ 已完成 | 六期改动入库：分支 `codex/protocol-v5` / [PR #1](https://github.com/baisuipingan/iroh-IM/pull/1)；Release `agent-v1.2.0`（6 平台 14 资产），服务器上的 agent **用它装的**（`c18a09277c025a0a…`）；顺带修掉 `install-release.sh` 的默认版本 |
 | 交付链修链（同窗口） | ✅ 已完成 | Release `android-v0.2.0`（v5 的 `.so`，`dbbe0b75…`）；`latest` 改为**按产物族 tag 前缀**解析（`bc9dfcf`）—— `releases/latest` 是全局的，两条产物线互相砸对方的安装路径，两个方向都实测复现过。修完之后**脚本不再依赖全局 Latest**：实测 `agent-v → agent-v1.2.0`、`android- → android-v0.2.0`，与谁被标成 Latest 无关 |
 | 前端插件通道（客户端半边） | ✅ 已完成 | `docs/release-2026-10-12-plugin-channel.md`；`RoomEvent::Plugin` → `js/plugins.js` 注册表；新用例 `plugin-channel` 11/11；`check-web-event-names` 处理数 13→14（`plugin` 离开未处理名单）；`verify.sh all` 退出码 0；前端 `2909e983-…` |
+| agent 触发只认 @（删掉 `!` 前缀） | ✅ 已完成 | agent 在房间里是**平等的成员**，`!命令` 是"当工具调"的语义、还会跟真人的感叹号撞车；代码/flag/README/测试全删，新增回归用例（`!` 不触发、`@` 触发）；真实环境端到端验证：临时 agent 进临时房间，浏览器 `!ping` 不回、`@检查助手 ping` 回 `pong`；线上"服务器助手"已换成只认 @ 的版本 |
 | 阶段 E（多历史提供者） | ⏳ 暂缓 | 需先确认隐私边界 |
 
 ## 11. 当前架构（2026-10-11 的"定妆照"）

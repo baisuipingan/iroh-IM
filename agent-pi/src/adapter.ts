@@ -40,8 +40,6 @@ export interface AdapterOptions {
   client: AgentClient;
   brain: AgentBrain;
   room: string;
-  /** 触发前缀；null = 关（默认 '!'） */
-  prefix?: string | null;
   /** @ 提及的昵称；null = 关（默认 null；CLI 会在给了 --nick 时默认打开） */
   mention?: string | null;
   /** 所有消息都触发（默认 false） */
@@ -343,16 +341,18 @@ export class ChatAdapter {
   }
 
   /**
-   * 触发判断。返回剥掉前缀/提及后的文本（可能是空串，brain 自己决定怎么处理）；
+   * 触发判断。返回剥掉 @提及后的文本（可能是空串，brain 自己决定怎么处理）；
    * null = 不触发。
+   *
+   * ⚠️ **只有 @ 一种触发方式**（2026-10-12 起）。
+   *    原来还有一个 `!前缀`（默认 `!`）—— 已整个删掉，理由：
+   *    房间里的成员是**平等的用户**（有名字、有历史、可以互相 @），
+   *    `!命令` 是"把 agent 当工具调"的语义，和这个模型冲突；
+   *    而且前缀会跟真人聊天里的感叹号撞车（"！这也太离谱了"被当成命令）。
+   *    要"谁都触发"，那是 `respondToAll`（显式开关），不是前缀。
    */
   #extract(text: string): string | null {
     const trimmed = text.trim();
-    // ⚠️ 用 `=== undefined` 而不是 `??`：`null` 是显式的"关掉这个触发方式"。
-    const prefix = this.#opts.prefix === undefined ? '!' : this.#opts.prefix;
-    if (prefix && trimmed.startsWith(prefix)) {
-      return trimmed.slice(prefix.length).trim();
-    }
     const mention = this.#opts.mention ?? null;
     if (mention && trimmed.includes(`@${mention}`)) {
       return trimmed.replaceAll(`@${mention}`, '').trim();
