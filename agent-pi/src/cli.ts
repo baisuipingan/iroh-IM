@@ -64,6 +64,21 @@ pi-sdk 大脑（直接调 pi SDK；长会话，需 agent-pi 里装有 SDK）：
                         fetch_url 抓取 https 链接文本（带 SSRF/体积/重定向防线）
   --fetch-allow a.com,b.com fetch_url 的域名白名单（不设 = 只靠内置防线）
 
+acp 后端（首选接入口；agent 换一个 = 换一份 spawn 配置）：
+  --acp-bin PATH        ACP agent 可执行文件（默认 claude-code-acp）
+  --acp-args JSON       追加给它的参数
+  --acp-cwd DIR         会话工作目录 = **沙箱边界**（必须绝对路径；给专用目录、低权限账号跑）
+  --acp-permission deny|allow-all|allow-list|read-only
+                        权限策略（C1，默认 deny）：allow-list 需配 --acp-allow；
+                        read-only 只放行读类（kind=read/search/think 或 Read/Grep…）
+  --acp-allow A,B       白名单（大小写不敏感；匹配工具名或标题子串）
+  --acp-narrate tools|off  工具调用/权限请求是否在房间里播报（默认 tools）
+  --acp-timeout-ms 300000  单轮 prompt 硬超时
+
+成本闸门（C3，对所有 brain 生效）：
+  --budget-turns N      滑动窗口内最多起几轮（默认 0 = 不限）
+  --budget-window-min M 窗口长度（分钟，默认 60）
+
 示例：
   # 规则模式（最快冒烟）
   IROH_AGENT_HOME=~/.config/iroh-agent node src/cli.ts --room 我的房间 --nick 小助手 --rules examples/rules.json
@@ -100,8 +115,11 @@ const VALUE_FLAGS = new Set([
   'acp-args',
   'acp-cwd',
   'acp-permission',
+  'acp-allow',
   'acp-narrate',
   'acp-timeout-ms',
+  'budget-turns',
+  'budget-window-min',
   'pi-tools',
   'pi-model',
   'tools',
@@ -143,8 +161,11 @@ interface Flags {
   acpArgs?: string;
   acpCwd?: string;
   acpPermission?: string;
+  acpAllow?: string;
   acpNarrate?: string;
   acpTimeoutMs?: string;
+  budgetTurns?: string;
+  budgetWindowMin?: string;
   tools?: string;
   fetchAllow?: string;
   files?: string;
@@ -274,21 +295,38 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
       // ⚠️ 动态 import：没装 ACP agent 时，其它三条路照常能用
       const { createAcpBrain } = await import('./agent-io/acp.ts');
       const cwd = flags.acpCwd ?? process.cwd();
-      const permission = flags.acpPermission === 'allow-all' ? 'allow-all' : 'deny';
+      // C1：四种策略；拼错/没给一律落回最安全的 deny
+      const permission =
+        (['allow-all', 'allow-list', 'read-only'] as const).find(
+          (mode) => flags.acpPermission === mode,
+        ) ?? 'deny';
+      const allowList = flags.acpAllow
+        ? flags.acpAllow
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+      if (permission === 'allow-list' && !allowList.length) {
+        throw new Error('--acp-permission=allow-list 需要 --acp-allow（如 --acp-allow Read,Grep）');
+      }
       if (permission === 'allow-all') {
         // 不阻止（用户明确要求），但必须说出来 —— 房间里任何人都可能诱导它执行命令
-        log('[cli] ⚠️ --acp-permission=allow-all：agent 的工具调用**一律放行**。' +
-            '这只适合"先把功能对出来"，别长期这么跑（约束另开一期）');
+        log(
+          '[cli] ⚠️ --acp-permission=allow-all：agent 的工具调用**一律放行**。' +
+            '这只适合"把功能对出来"，长期跑请改用 allow-list / read-only（C1）',
+        );
       }
       log(
         `[cli] acp 后端：bin=${flags.acpBin ?? 'claude-code-acp'} cwd=${cwd} ` +
-          `permission=${permission} narrate=${flags.acpNarrate === 'off' ? 'off' : 'tools'}`,
+          `permission=${permission}${permission === 'allow-list' ? `（白名单：${allowList.join(',')}）` : ''} ` +
+          `narrate=${flags.acpNarrate === 'off' ? 'off' : 'tools'}`,
       );
       return await createAcpBrain({
         bin: flags.acpBin ?? 'claude-code-acp',
         args: flags.acpArgs ? (parseJsonArray(flags.acpArgs, '--acp-args') as string[]) : [],
         cwd,
         permission,
+        allowList,
         narrate: flags.acpNarrate === 'off' ? 'off' : 'tools',
         promptTimeoutMs: num(flags.acpTimeoutMs, 5 * 60 * 1000),
         log: (...args2: unknown[]) => log(args2.map(String).join(' ')),

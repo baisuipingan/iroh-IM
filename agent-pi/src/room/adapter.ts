@@ -49,6 +49,13 @@ export interface AdapterOptions {
   respondToAll?: boolean;
   /** 两次回复的最小间隔，默认 3000ms */
   cooldownMs?: number;
+  /**
+   * 成本闸门（C3）：**滑动窗口**内最多起几轮（默认 0 = 不限）。
+   * 冷却挡的是"频率"，它挡的是"总量"——常驻 agent 在公开房间里，这是最后一道量闸。
+   */
+  budgetTurns?: number;
+  /** 成本闸门的窗口长度（毫秒，默认 1 小时） */
+  budgetWindowMs?: number;
   /** 回复文本上限（UTF-8 字节），默认 30000（serve 的 say 上限是 32768） */
   maxReplyBytes?: number;
   /** 这些昵称前缀的消息不触发（默认 ['[bot]']，避免机器人们互相刷屏） */
@@ -86,6 +93,10 @@ export class ChatAdapter {
   #dedupe = new Set<string>();
   #dedupeOrder: string[] = [];
   #lastReplyAt = 0;
+  /** C3 成本闸门：最近各"开跑轮"的时间戳（滑动窗口） */
+  #turnStamps: number[] = [];
+  /** C3：预算用尽的提示别刷屏（每分钟最多一条） */
+  #lastBudgetNoticeAt = 0;
   #started = false;
   /**
    * 有一轮正在处理（brain 还没返回）。
@@ -287,6 +298,32 @@ export class ChatAdapter {
     if (this.#busy) {
       this.#log(`[adapter] 上一轮还没处理完，忽略来自 ${message.nickname} 的触发`);
       return;
+    }
+    // 成本闸门（C3）：只统计"真的会开跑"的轮 —— 冷却/去重/忙碌都没挡住的触发才走到这里。
+    // 用**滑动窗口**而不是"每小时整点清零"：后者的边界会让两倍额度挤在窗口交叠处。
+    const budgetTurns = this.#opts.budgetTurns ?? 0;
+    if (budgetTurns > 0) {
+      const windowMs = this.#opts.budgetWindowMs ?? 60 * 60 * 1000;
+      this.#turnStamps = this.#turnStamps.filter((t) => now - t < windowMs);
+      if (this.#turnStamps.length >= budgetTurns) {
+        const mins = Math.max(1, Math.round(windowMs / 60_000));
+        this.#log(
+          `[adapter] 预算用尽：最近 ${mins} 分钟内已起 ${budgetTurns} 轮，忽略来自 ${message.nickname} 的触发`,
+        );
+        // 如实说一句（每分钟最多一条，别把房间刷屏）
+        if (now - this.#lastBudgetNoticeAt > 60_000) {
+          this.#lastBudgetNoticeAt = now;
+          try {
+            await this.#opts.client.say(
+              `⏳ 用量预算用尽（最近 ${mins} 分钟 ${budgetTurns} 轮）—— 稍后再来，或让所有者调高 --budget-turns`,
+            );
+          } catch (error) {
+            this.#log(`[adapter] 预算提示发送失败：${(error as Error).message}`);
+          }
+        }
+        return;
+      }
+      this.#turnStamps.push(now);
     }
     // ⚠️ 在 `await` **之前**就把冷却窗口占住。
     //    原来 `#lastReplyAt` 是回复发出去之后才更新的，于是并发触发全都能挤进来。

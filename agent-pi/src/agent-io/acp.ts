@@ -18,8 +18,9 @@
  * · **不实现 `fs/*` 与 `terminal/*`**：`initialize` 里我们**不声明**这些能力，
  *   agent 就会用它自己的工具（在 `cwd` 沙箱里干活）。声明了反而要替它读写文件，
  *   多一份攻击面。
- * · **权限默认拒绝**（决策⑤）：`--acp-permission=allow-all` 才全放开；
- *   无论批不批，都会在房间里说出来（不能偷偷拒绝）。
+ * · **权限默认拒绝**（决策⑤）；C1 起有四种策略（`deny` / `allow-all` / `allow-list` /
+ *   `read-only`，见 `AcpBrainOptions.permission`）。无论批不批，都会在房间里说出来
+ *   （不能偷偷拒绝），而且**说出理由**（命中白名单哪条 / 只读策略为什么放行）。
  * · 一轮 prompt 有硬超时（默认 5 分钟）：超时就 `session/cancel` 并如实说明，
  *   不把"卡住"伪装成"没回答"。
  *
@@ -31,6 +32,8 @@
  * ==========================================================================*/
 
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { existsSync, statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { createInterface, type Interface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import type { AgentBrain, ChatContext, IncomingMessage } from './index.ts';
@@ -43,11 +46,15 @@ export interface AcpBrainOptions {
   /** 会话工作目录（agent 的"地面"；必须是绝对路径） */
   cwd: string;
   /**
-   * 权限策略：
+   * 权限策略（C1）：
    *   `deny`（默认）—— 一律选 `reject_*`（决策⑤：默认拒绝）
    *   `allow-all`   —— 一律选 `allow_*`（**只为把功能对出来**，别长期这么跑）
+   *   `allow-list`  —— 只批 `allowList` 命中的工具（固定白名单）
+   *   `read-only`   —— 只批"读"类：`kind=read/search/think`，或名字/标题命中内置只读表
    */
-  permission?: 'deny' | 'allow-all';
+  permission?: 'deny' | 'allow-all' | 'allow-list' | 'read-only';
+  /** `allow-list` 的白名单（大小写不敏感；匹配工具 `name` 全等或 `title` 子串） */
+  allowList?: string[];
   /**
    * 过程可见（B4）：
    *   `tools`（默认）—— 每个工具调用在房间里发一行（同名 3 秒内合并）
@@ -70,6 +77,23 @@ interface Turn {
   done?: (reason: string) => void;
 }
 
+/** C1 只读预设：ACP 工具 kind 里的"读"类 */
+const READ_KINDS = new Set(['read', 'search', 'think']);
+/** C1 只读预设的内置工具名（兜底：有些 agent 不填 kind；匹配 name 全等或 title 子串） */
+export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'LS', 'List', 'NotebookRead'];
+
+/** 大小写不敏感：`name` 全等 或 `title` 子串 就命中；返回命中的那条（给播报用） */
+function hitsTool(patterns: string[], tool: { name: string; title: string }): string | null {
+  const name = tool.name.trim().toLowerCase();
+  const title = tool.title.toLowerCase();
+  for (const raw of patterns) {
+    const pat = String(raw ?? '').trim().toLowerCase();
+    if (!pat) continue;
+    if ((name && name === pat) || title.includes(pat)) return raw;
+  }
+  return null;
+}
+
 export class AcpBrain implements AgentBrain {
   #opts: Required<Omit<AcpBrainOptions, 'args' | 'log'>> & Pick<AcpBrainOptions, 'args' | 'log'>;
   /** ⚠️ 不是 `ChildProcessWithoutNullStreams`：stderr 是 `inherit`（agent 日志直接进我们这侧） */
@@ -85,10 +109,16 @@ export class AcpBrain implements AgentBrain {
   #narrated = new Map<string, number>();
 
   constructor(opts: AcpBrainOptions) {
+    // C2：cwd 就是 agent 的"地面"（沙箱边界）—— 必须是绝对路径（相对路径会让
+    // spawn 以"适配器进程当时的 cwd"为基准悄悄跑偏，那种漂移最难查）
+    if (!isAbsolute(opts.cwd)) {
+      throw new Error(`ACP cwd 必须是绝对路径（收到：${opts.cwd}）—— 见 --acp-cwd`);
+    }
     this.#opts = {
       bin: opts.bin,
       cwd: opts.cwd,
       permission: opts.permission ?? 'deny',
+      allowList: opts.allowList ?? [],
       narrate: opts.narrate ?? 'tools',
       promptTimeoutMs: opts.promptTimeoutMs ?? 5 * 60 * 1000,
       args: opts.args,
@@ -104,6 +134,13 @@ export class AcpBrain implements AgentBrain {
 
   async #ensure(): Promise<void> {
     if (this.#proc && this.#sessionId) return;
+    // C2：沙箱目录不在就明确拒绝 —— 别让 spawn 抛一个只带 ENOENT 的天书错误
+    if (!existsSync(this.#opts.cwd) || !statSync(this.#opts.cwd).isDirectory()) {
+      throw new Error(
+        `ACP 沙箱目录不存在或不是目录：${this.#opts.cwd}` +
+          '（--acp-cwd 指到专用目录；建议低权限账号/容器里跑，见 deploy/agent/README.md）',
+      );
+    }
     const child = spawn(this.#opts.bin, this.#opts.args ?? [], {
       cwd: this.#opts.cwd,
       // stdout 只跑 ACP 协议；它的日志走 stderr（继承到我们这一侧）
@@ -236,16 +273,18 @@ export class AcpBrain implements AgentBrain {
     void this.#turn.ctx.say(`🔧 ${title}`).catch(() => {});
   }
 
-  /** 权限请求（B4 + 决策⑤）：**无论批不批都在房间里说出来** */
+  /** 权限请求（B4 + C1）：**无论批不批都在房间里说出来，且说出理由** */
   #onPermissionRequest(frame: any) {
     const options: any[] = frame.params?.options ?? [];
-    const allow = this.#opts.permission === 'allow-all';
-    const wanted = allow
-      ? ['allow_always', 'allow_once']
-      : ['reject_always', 'reject_once'];
+    const tool = {
+      name: String(frame.params?.toolCall?.name ?? ''),
+      title: String(frame.params?.toolCall?.title ?? ''),
+      kind: String(frame.params?.toolCall?.kind ?? ''),
+    };
+    const title = tool.title || tool.name || '一个操作';
+    const { allow, verdict } = this.#decide(tool);
+    const wanted = allow ? ['allow_always', 'allow_once'] : ['reject_always', 'reject_once'];
     const picked = wanted.map((kind) => options.find((o) => o.kind === kind)).find(Boolean) ?? options[0];
-    const title = String(frame.params?.toolCall?.title ?? frame.params?.toolCall?.name ?? '一个操作');
-    const verdict = allow ? '已按 allow-all 批准' : '已拒绝（默认策略）';
     if (this.#turn?.ctx) {
       void this.#turn.ctx.say(`⚠️ 它想做：${title} —— ${verdict}`).catch(() => {});
     }
@@ -254,6 +293,32 @@ export class AcpBrain implements AgentBrain {
       return;
     }
     this.#respond(Number(frame.id), { outcome: { outcome: 'selected', optionId: picked.optionId } });
+  }
+
+  /** C1：权限策略的唯一决策点 —— 放不放行 + 给人看的理由（理由一律进房间） */
+  #decide(tool: { name: string; title: string; kind: string }): { allow: boolean; verdict: string } {
+    switch (this.#opts.permission) {
+      case 'allow-all':
+        return { allow: true, verdict: '已按 allow-all 批准' };
+      case 'allow-list': {
+        const hit = hitsTool(this.#opts.allowList, tool);
+        return hit
+          ? { allow: true, verdict: `已按白名单批准（命中「${hit}」）` }
+          : { allow: false, verdict: '已拒绝（不在白名单）' };
+      }
+      case 'read-only': {
+        const kind = tool.kind.trim().toLowerCase();
+        if (READ_KINDS.has(kind)) {
+          return { allow: true, verdict: `已按只读策略批准（kind=${kind}）` };
+        }
+        const hit = hitsTool(READ_ONLY_TOOLS, tool);
+        return hit
+          ? { allow: true, verdict: `已按只读策略批准（命中「${hit}」）` }
+          : { allow: false, verdict: '已拒绝（只读策略只放行读类操作）' };
+      }
+      default:
+        return { allow: false, verdict: '已拒绝（默认策略）' };
+    }
   }
 
   /* ------------------------------------------------------------- 对外接口 */

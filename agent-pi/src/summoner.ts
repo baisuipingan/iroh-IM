@@ -13,8 +13,8 @@
  * · **谁提供**：由 agent **所有者**在他自己的机器上跑这个进程（凭据/沙箱都在那边）。
  *   它本身也是房间里一个普通成员（默认昵称"召唤器"），用 `respondToAll` 看所有消息。
  * · **谁有权**：v1 = **房间里任何成员**（与"知道房名就能进"一致）；
- *   想收窄就配 `--summon-from <id8,…>`。**但无论如何，只能召唤注册表里列出的名字** ——
- *   不能召唤任意程序（这是最重要的一道闸门）。更细的治理（配额/审批）在 C 期。
+ *   想收窄就配 `--summon-from <id8,…>`（全局），或在注册表里按名字配 `allowFrom`（C4，更细）。
+ *   **但无论如何，只能召唤注册表里列出的名字** —— 不能召唤任意程序（最重要的一道闸门）。
  *
  * ## 怎么被叫到（两条寻址，都落到注册表里的名字）
  *
@@ -65,6 +65,11 @@ export interface SpawnSpec {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  /**
+   * C4 治理：**只有这些成员（id8）能召唤这一个名字**（可选）。
+   * 与全局 `--summon-from` 是"与"的关系：两道都过才叫得动。
+   */
+  allowFrom?: string[];
 }
 export type Registry = Record<string, SpawnSpec>;
 
@@ -264,6 +269,13 @@ export class Summoner {
     if (this.#summonFrom.size && !this.#summonFrom.has(sender8)) {
       this.#log(`拒绝：${sender8} 不在 --summon-from 名单里（想叫「${name}」）`);
       await say(`我不能替你叫「${name}」——房主没把 ${sender8} 加进召唤名单`);
+      return;
+    }
+    // C4 治理：注册表里还能按**名字**收窄（谁有权召唤哪一个）
+    const perName = (this.#registry[name].allowFrom ?? []).map((s) => s.toLowerCase());
+    if (perName.length && !perName.includes(sender8)) {
+      this.#log(`拒绝：${sender8} 不在「${name}」的专属名单里（注册表 allowFrom）`);
+      await say(`「${name}」只接受名单内成员的召唤 —— 你（${sender8}）不在名单里`);
       return;
     }
 

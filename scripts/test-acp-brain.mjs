@@ -94,3 +94,65 @@ test('agent 进程死了：下次说话重新拉起（不崩、不静默吞）',
   const reply = await brain.onMessage(message('你好'), ctx);
   assert.match(reply ?? '', /你好，/, `重启后应当能正常回答：${reply}`);
 });
+
+test('C1 allow-list：命中白名单才放行，其他一律拒绝（并说出命中/理由）', async (t) => {
+  const brain = brainWith({
+    permission: 'allow-list',
+    allowList: ['Read'],
+    promptTimeoutMs: 15_000,
+  });
+  t.after(() => brain.close());   // 失败也必须收摊，否则假 agent 活着把整轮挂住
+
+  const ok = makeCtx();
+  const r1 = await brain.onMessage(message('__perm:Read hello.txt__ __kind:read__'), ok.ctx);
+  assert.match(r1 ?? '', /（权限=a2）/, '白名单命中 → 选 allow_always');
+  assert.ok(
+    ok.said.some((t) => t.includes('已按白名单批准') && t.includes('Read')),
+    `要说清命中了哪条：${JSON.stringify(ok.said)}`,
+  );
+
+  const denied = makeCtx();
+  const r2 = await brain.onMessage(message('__perm:Bash: rm -rf /__ __kind:execute__'), denied.ctx);
+  assert.match(r2 ?? '', /（权限=r2）/, '不在白名单 → 选 reject_always');
+  assert.ok(denied.said.some((t) => t.includes('不在白名单')), JSON.stringify(denied.said));
+});
+
+test('C1 read-only：kind=read 或内置只读工具放行，execute 一律拒绝', async (t) => {
+  const brain = brainWith({ permission: 'read-only', promptTimeoutMs: 15_000 });
+  t.after(() => brain.close());   // 失败也必须收摊，否则假 agent 活着把整轮挂住
+
+  const byKind = makeCtx();
+  const r1 = await brain.onMessage(message('__perm:某个工具__ __kind:read__'), byKind.ctx);
+  assert.match(r1 ?? '', /（权限=a2）/, 'kind=read 放行');
+  assert.ok(
+    byKind.said.some((t) => t.includes('只读策略批准（kind=read）')),
+    JSON.stringify(byKind.said),
+  );
+
+  const byName = makeCtx();
+  const r2 = await brain.onMessage(message('__perm:Grep 关键词__'), byName.ctx); // 无 kind，靠内置表
+  assert.match(r2 ?? '', /（权限=a2）/, 'Grep 在只读表里 → 放行');
+
+  const denied = makeCtx();
+  const r3 = await brain.onMessage(message('__perm:Bash: echo hi__ __kind:execute__'), denied.ctx);
+  assert.match(r3 ?? '', /（权限=r2）/, 'execute 一律拒绝');
+  assert.ok(
+    denied.said.some((t) => t.includes('只读策略只放行读类操作')),
+    JSON.stringify(denied.said),
+  );
+});
+
+test('C2 沙箱：cwd 必须绝对路径（构造即拒）；目录不在则明确报错', async () => {
+  assert.throws(
+    () => new AcpBrain({ bin: process.execPath, args: [FAKE], cwd: 'relative/dir' }),
+    /必须是绝对路径/,
+  );
+  const brain = new AcpBrain({
+    bin: process.execPath,
+    args: [FAKE],
+    cwd: '/nonexistent-sandbox-dir-xyz',
+  });
+  const { ctx } = makeCtx();
+  await assert.rejects(() => brain.onMessage(message('你好'), ctx), /沙箱目录不存在/);
+  await brain.close();
+});

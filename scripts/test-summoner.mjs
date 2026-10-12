@@ -202,3 +202,39 @@ test('@名字 的边界与转义：中文不打空格也认、@助手2 不误触
   assert.equal(mentionsName('@a.b 在吗', 'a.b'), true, '名字里的正则元字符必须转义');
   assert.equal(mentionsName('@axb 在吗', 'a.b'), false);
 });
+
+test('C4：注册表 allowFrom 按名字收窄（谁有权召唤**这一个**名字）', async () => {
+  const { summoner, spawned } = makeSummoner({
+    registry: {
+      研究助手: { ...REGISTRY['研究助手'], allowFrom: ['aa000001'] },
+    },
+  });
+  const { said, say } = makeSay();
+
+  await summoner.onMessage(ROOM, { from: id64('dd999999'), text: '@研究助手 来一下' }, say);
+  assert.equal(spawned.length, 0, '不在该名字的专属名单里，叫不动');
+  assert.match(said[0] ?? '', /只接受名单内成员的召唤/);
+
+  await summoner.onMessage(ROOM, { from: FROM, text: '@研究助手 来一下' }, say);
+  assert.equal(spawned.length, 1, '名单内的成员照常能叫');
+});
+
+test('C4：全局名单与专属名单同时生效（两道都过才叫得动）', async () => {
+  const { summoner, spawned } = makeSummoner({
+    summonFrom: ['bb000002'],
+    registry: {
+      研究助手: { ...REGISTRY['研究助手'], allowFrom: ['aa000001'] },
+    },
+  });
+  const { said, say } = makeSay();
+
+  // aa000001 过了专属名单，但没过全局 → 仍然叫不动
+  await summoner.onMessage(ROOM, { from: FROM, text: '@研究助手 来一下' }, say);
+  assert.equal(spawned.length, 0);
+  assert.match(said[0] ?? '', /没把 aa000001 加进召唤名单/);
+
+  // bb000002 过了全局，但没过专属 → 也叫不动
+  await summoner.onMessage(ROOM, { from: id64('bb000002'), text: '@研究助手 来一下' }, say);
+  assert.equal(spawned.length, 0, '专属名单同样要过');
+  assert.match(said[1] ?? '', /只接受名单内成员的召唤/);
+});

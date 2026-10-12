@@ -57,9 +57,15 @@ async function prompt(params) {
     sessionId: SESSION,
     update: { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Bash: echo hi', name: 'Bash', status: 'pending' },
   });
+  // C1 策略单测用：prompt 里带 `__perm:Write hello.txt__` / `__kind:edit__` 就换这条权限请求
+  // 的工具（默认还是 Bash: echo hi）—— 这样不必再写第二个假 agent。
+  const permTitle = text.match(/__perm:(.*?)__/)?.[1]?.trim() || 'Bash: echo hi';
+  const permKind = text.match(/__kind:([a-z_]+)__/)?.[1] ?? '';
+  const toolCall = { toolCallId: 't1', title: permTitle, name: permTitle.split(/[:\s]/)[0] || permTitle };
+  if (permKind) toolCall.kind = permKind;
   const permission = await request('session/request_permission', {
     sessionId: SESSION,
-    toolCall: { toolCallId: 't1', title: 'Bash: echo hi' },
+    toolCall,
     options: [
       { optionId: 'a1', name: '允许一次', kind: 'allow_once' },
       { optionId: 'a2', name: '总是允许', kind: 'allow_always' },

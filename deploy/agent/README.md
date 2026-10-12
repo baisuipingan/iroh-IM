@@ -60,7 +60,7 @@ systemctl daemon-reload && systemctl enable --now iroh-agent-pi.service
 
 ```bash
 journalctl -u iroh-agent-pi -n 30 --no-pager   # 应看到 hello + 已进入房间
-# 然后从任意成员 @它（默认昵称 服务器助手）或发 !你好
+# 然后从任意成员 @它（默认昵称 服务器助手）—— 触发方式只有 @（`!` 前缀已删除）
 ```
 
 ## 运维
@@ -73,6 +73,7 @@ journalctl -u iroh-agent-pi -n 30 --no-pager   # 应看到 hello + 已进入房�
 | 运行账号 | 专用系统账号 `iroh-agent`（unit 里 `User=`/`Group=`）。部署时：`useradd --system --home-dir /opt/iroh-agent --shell /usr/sbin/nologin iroh-agent && chown -R iroh-agent:iroh-agent /opt/iroh-agent` |
 | 沙箱 | unit 里 `ProtectSystem=strict` + `ReadWritePaths=/opt/iroh-agent`：除该目录外整机对进程只读（这是"房间里任何人能发文件"的兜底） |
 | 给 agent 加工具 | `ExecStart` 里加 `--tools weather,fetch_url`（两个安全自定义工具）。pi 内置工具（`--pi-tools read-only/all`）能读写文件/执行命令——房间内容不可信，慎开 |
+| 权限 / 沙箱 / 成本（C 期） | 跑 ACP 后端时：`--acp-cwd` 就是沙箱边界（绝对路径 + 必须存在）；权限用 `--acp-permission deny\|allow-list\|read-only\|allow-all`（默认 deny；allow-list 配 `--acp-allow Read,Grep`）；成本用 `--budget-turns N --budget-window-min M`（滑动窗口限轮数，超限不触模型）。细节见 agent-pi/README「配置」 |
 | 身份 | `/opt/iroh-agent/home/identity.key`（删掉=换人；备份它可保持"还是同一个人"） |
 | 停用 | `systemctl disable --now iroh-agent-pi` |
 

@@ -263,3 +263,48 @@ test('id8 必须是完整 8 位：长 id 的前缀不会误触发（边界）', 
   await sleep(150);
   assert.deepEqual(client.said, [], '9 位以上 hex 不该被截成 8 位来匹配');
 });
+
+test('成本闸门（C3）：窗口内的轮数用尽就拦住，并在房间里如实说一句', async () => {
+  const client = makeClient({ sayDelay: 10 });
+  const adapter = makeAdapter(client, { cooldownMs: 0, budgetTurns: 2, budgetWindowMs: 60_000 });
+  adapter.start();
+
+  client.emit('event', message('1', '@小助手 一'));
+  await sleep(120);
+  client.emit('event', message('2', '@小助手 二'));
+  await sleep(120);
+  client.emit('event', message('3', '@小助手 三'));
+  await sleep(150);
+
+  const replies = client.said.filter((t) => !t.includes('预算用尽'));
+  assert.deepEqual(replies, ['一', '二'], '窗口内只该放两轮（第三轮不许打到模型）');
+  assert.ok(
+    client.said.some((t) => t.includes('预算用尽')),
+    `超限必须如实说一句：${JSON.stringify(client.said)}`,
+  );
+});
+
+test('成本闸门（C3）：窗口滑过之后恢复', async () => {
+  const client = makeClient({ sayDelay: 10 });
+  const adapter = makeAdapter(client, { cooldownMs: 0, budgetTurns: 1, budgetWindowMs: 500 });
+  adapter.start();
+
+  client.emit('event', message('1', '@小助手 一'));
+  await sleep(150);
+  client.emit('event', message('2', '@小助手 二'));
+  await sleep(150);
+  assert.deepEqual(
+    client.said.filter((t) => !t.includes('预算用尽')),
+    ['一'],
+    '窗口内只放一轮',
+  );
+
+  await sleep(500); // 500ms 窗口滑过
+  client.emit('event', message('3', '@小助手 三'));
+  await sleep(150);
+  assert.deepEqual(
+    client.said.filter((t) => !t.includes('预算用尽')),
+    ['一', '三'],
+    '窗口滑过后恢复',
+  );
+});
