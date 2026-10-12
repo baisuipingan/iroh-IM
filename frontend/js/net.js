@@ -435,6 +435,11 @@ export const net = {
       case 'protocolMismatch':
         bus.emit(EV.PROTOCOL_MISMATCH, { room: ev.room, ours: ev.ours, theirs: ev.theirs });
         break;
+      // 房间能力自定义事件（`RoomEvent::Plugin`）：核心**不解释**它，
+      // 原样转给插件注册表（`js/plugins.js`）；没人认领也只是计数，不报错。
+      case 'plugin':
+        bus.emit(EV.PLUGIN, { name: ev.name, payload: ev.payload });
+        break;
       // ⚠️ Worker 的 wasm 事件流断了（复检 P3-10）：**入站通道整体失效** ——
       //    再也收不到消息/心跳/邀约，但发送仍然可用、状态还显示"在线"。
       //    这种"静默半死"必须让用户看见，并主动重连（重连会重建节点与事件流）。

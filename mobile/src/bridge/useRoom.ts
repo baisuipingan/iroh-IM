@@ -433,6 +433,15 @@ export function useRoom(transport: Transport | null, defaultNickname = '匿名')
           setProtocolMismatch({ ours: ev.ours, theirs: ev.theirs });
           break;
 
+        // **房间能力自定义事件**（Rust 侧 `RoomEvent::Plugin`）。
+        //
+        // 移动端目前还没有"插件渲染"的注册点，所以这里**显式**接住并只记一条日志 ——
+        // 不写这个 case 的话它会掉进 default 被静默吞掉，将来加插件时会以为
+        // "事件没发出来"（而其实是这里没接）。加插件 UI 时在这里挂注册表即可。
+        case 'plugin':
+          console.log('[plugin]', ev.name, ev.payload);
+          break;
+
         default:
           // fileAccepted / fileQueryAsked 是**发送方**才关心的（谁接受了我发的文件）。
           // v1 移动端只能收，不处理。

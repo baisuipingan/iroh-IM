@@ -89,4 +89,6 @@ run_case "sidebar-pages"   scripts/e2e/sidebar-pages.py
 # 它钉死的 116px / 220px 需要有人守。
 run_case "redesign"        scripts/e2e/redesign.py
 run_case "relay-enabled"   scripts/e2e/relay-enabled.py
+# 前端插件通道：新能力的事件要被认领；没人认领也不能出事 —— "万物皆插件"的客户端半边
+run_case "plugin-channel"  scripts/e2e/plugin-channel.py
 exit "$fail"

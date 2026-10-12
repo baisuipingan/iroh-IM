@@ -22,6 +22,7 @@
 import { composer } from './ui/composer.js';
 import { fileTransfer, canTransferFiles, installTransferTestHooks } from './ui/filetransfer.js';
 import { net } from './net.js';
+import { roomPlugins } from './plugins.js';
 import { notify } from './ui/notify.js';
 import { sidebar } from './ui/sidebar.js';
 import { store } from './store.js';
@@ -127,6 +128,15 @@ export function installTestHooks({ openRoom, composerInternals: ci, readers } = 
   window.__iroh_openTheme = () => theme.toggle();
   /** 直接操作网络层（模拟掉线、强制重连等） */
   window.__iroh_net = net;
+  /**
+   * 前端插件注册表（`js/plugins.js`）。
+   *
+   * 有了它，测"新能力的事件能不能被插件认领"就**不需要真的实现一个插件**：
+   *   __iroh_plugins.register('demo', {onEvent: p => window.__got = p})
+   *   __iroh_net._dispatch({type: 'plugin', name: 'demo', payload: {n: 1}})
+   * 第二条走的正是 Worker 事件到达时那条真路径（`net._dispatch`），不是测试专用旁路。
+   */
+  window.__iroh_plugins = roomPlugins;
 
   /**
    * 主题的调试/测试接口：设偏好，不带参数则返回当前状态。

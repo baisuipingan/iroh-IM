@@ -201,6 +201,7 @@ trait RoomCapability: Send + Sync {
 | v5 切换 | ✅ 已完成 | `docs/release-2026-10-10-protocol-v5.md`；roomd `7280433a…`、前端 `e152e816-…`（`BUILD=v15`）；Rust 71；`verify.sh all` 退出码 0（23 组浏览器套件全 0 失败）；线上哈希逐一相等 |
 | 补齐交付链（同窗口） | ✅ 已完成 | 六期改动入库：分支 `codex/protocol-v5` / [PR #1](https://github.com/baisuipingan/iroh-IM/pull/1)；Release `agent-v1.2.0`（6 平台 14 资产），服务器上的 agent **用它装的**（`c18a09277c025a0a…`）；顺带修掉 `install-release.sh` 的默认版本 |
 | 交付链修链（同窗口） | ✅ 已完成 | Release `android-v0.2.0`（v5 的 `.so`，`dbbe0b75…`）；`latest` 改为**按产物族 tag 前缀**解析（`bc9dfcf`）—— `releases/latest` 是全局的，两条产物线互相砸对方的安装路径，两个方向都实测复现过。修完之后**脚本不再依赖全局 Latest**：实测 `agent-v → agent-v1.2.0`、`android- → android-v0.2.0`，与谁被标成 Latest 无关 |
+| 前端插件通道（客户端半边） | ✅ 已完成 | `docs/release-2026-10-12-plugin-channel.md`；`RoomEvent::Plugin` → `js/plugins.js` 注册表；新用例 `plugin-channel` 11/11；`check-web-event-names` 处理数 13→14（`plugin` 离开未处理名单）；`verify.sh all` 退出码 0；前端 `2909e983-…` |
 | 阶段 E（多历史提供者） | ⏳ 暂缓 | 需先确认隐私边界 |
 
 ## 11. 当前架构（2026-10-11 的"定妆照"）
@@ -231,3 +232,7 @@ trait RoomCapability: Send + Sync {
 
 **刻意不做的边界**（写在这就是不许被"顺手"越过的）：消息格式与签名**不**插件化（协议底座）；
 不做动态库加载式插件；插件不许绕过自己的资源闸门；历史**明文**存常驻节点（不做端到端加密历史）。
+
+**客户端的插件半边（2026-10-12 补齐）**：`RoomEvent::Plugin` 现在会被前端接住并按名字分发 ——
+插件只需 `roomPlugins.register('名字', { onEvent })`（见 `frontend/js/plugins.js`）。
+之前事件到了浏览器会被丢掉，所以"加一个能力"总还得改核心几个文件；现在不用了。

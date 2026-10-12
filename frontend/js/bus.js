@@ -84,4 +84,7 @@ export const EV = {
   // ⚠️ 这是**页面级**的条件，不是房间级的 —— 可能在任何进房动作之前就到，
   //    所以别按"只认当前房间"的方式过滤（那样会把它丢掉）。
   PROTOCOL_MISMATCH: 'protocol-mismatch',   // { room, ours, theirs }
+  // **房间能力自定义的事件**（Rust 侧 `RoomEvent::Plugin{name,payload}`）。
+  // 核心不理解内容，只负责原样端过来；谁认领由 `js/plugins.js` 的注册表决定。
+  PLUGIN: 'plugin',                 // { name, payload }
 };

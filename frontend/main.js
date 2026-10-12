@@ -25,6 +25,12 @@ import { motion } from './js/ui/motion.js';
 import { topology } from './js/ui/topology.js';
 import { notify } from './js/ui/notify.js';
 import { fileTransfer, canTransferFiles } from './js/ui/filetransfer.js';
+// 前端插件宿主：**只为一件事**——在启动时订阅总线上的 `EV.PLUGIN`，
+// 把"房间能力自定义事件"按名字分发给注册过的插件（见 js/plugins.js）。
+//
+// ⚠️ 这一行不能挪进 test-hooks.js：那样"去掉测试钩子"就会顺手把插件通道也拆掉，
+//    而插件是**产品能力**、不是测试设施。（已经踩过这个位置一次。）
+import './js/plugins.js';
 //自动化钩子（`window.__state` / `__iroh_*`）全部收在 test-hooks.js，
 // 由下面的 installTestHooks() 显式装一次。见文件末尾的说明。
 import { installTestHooks, markBooted } from './js/test-hooks.js';
