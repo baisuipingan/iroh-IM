@@ -54,6 +54,7 @@ fn sqlite_page_heap_is_bounded_before_deserialization() {
         let entry = ChatMessage {
             id: String::new(), from: key.public().to_string(), nickname: "test".into(),
             text: "x".repeat(400 * 1024), ts: index, sig: String::new(), file: None,
+            mentions: Vec::new(),
         }.sign(&key, "large");
         transaction.execute("INSERT INTO messages VALUES(?1,?2,?3,?4)",
             params!["large", index as i64, entry.id, serde_json::to_vec(&entry).unwrap()],

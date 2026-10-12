@@ -128,7 +128,7 @@ install_binary() {
   elif [ -z "$BASE_URL" ]; then
     # 没显式给版本、也没给镜像地址 ⇒ 取**最新的 agent-* Release**（不是 GitHub 的 Latest）
     V="$(latest_tag agent-v)"
-    [ -n "$V" ] || die "没能从 GitHub 解析出 agent 的 Release（网络？）—— 也可以显式指定：AGENT_VERSION=agent-v1.2.0 $0"
+    [ -n "$V" ] || die "没能从 GitHub 解析出 agent 的 Release（网络？）—— 也可以显式指定：AGENT_VERSION=agent-v1.3.0 $0"
     ok "latest → $V"
     BASE_URL="https://github.com/$REPO/releases/download/$V"
   fi

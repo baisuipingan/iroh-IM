@@ -49,10 +49,13 @@ function makeSummoner(opts = {}) {
 
 function makeSay() {
   const said = [];
+  const sent = [];
   return {
     said,
-    say: async (text) => {
+    sent,
+    say: async (text, mentions) => {
       said.push(text);
+      sent.push({ text, mentions });
       return { id: `m${said.length}`, ts: Date.now() };
     },
   };
@@ -162,7 +165,7 @@ test('已在场：不重复拉起；被 @ 或被自己说话都刷新回收计�
 
 test('@<id8> 再召唤：名册里学到的对照表，离开后照样叫得回来（原话重说）', async () => {
   const { summoner, spawned } = makeSummoner();
-  const { said, say } = makeSay();
+  const { said, sent, say } = makeSay();
 
   await summoner.onMessage(ROOM, { from: FROM, text: '@研究助手 帮我查一下' }, say);
   await summoner.onRoster(ROOM, [peer('cc222222', '研究助手')], say); // 学到 cc222222 → 研究助手
@@ -179,6 +182,11 @@ test('@<id8> 再召唤：名册里学到的对照表，离开后照样叫得回�
   // 原话重说：token 不变（身份没变就还能命中）
   await summoner.onRoster(ROOM, [peer('cc222222', '研究助手')], say);
   assert.equal(said.at(-1), '@cc222222 接着查');
+  assert.deepEqual(
+    sent.at(-1).mentions,
+    [id64('cc222222')],
+    '转交必须带结构化 mentions（V6 的寻址真相）',
+  );
 });
 
 test('一条消息能叫多个注册名（各自一条"去叫了"）', async () => {

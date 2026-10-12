@@ -899,7 +899,7 @@ self.onmessage = async (e) => {
           value = null;
           break;
         case 'send':
-          value = await node.send(args[0]);
+          value = await node.send(args[0], args[1] ?? []);
           break;
         case 'history':
           // ⚠️ 第三个参数是**复合游标** `"<ts>:<id>"`（字符串），不是毫秒时间戳。

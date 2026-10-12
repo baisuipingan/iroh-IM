@@ -6,6 +6,7 @@ import {
   validateRelayConfig,
 } from '../frontend/js/relay-model.js';
 import { withTimeout } from '../frontend/js/util.js';
+import { mentionsMe, resolveDraft } from '../frontend/js/mention.js';
 import { loadRelayConfig, probeRelay } from '../frontend/js/probe.js';
 
 const relay = { id: 'hk-1', url: 'https://relay.example:15443', enabled: true };
@@ -150,4 +151,30 @@ test('configuration fallback validates both network and cache without caching ma
     if (originalStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = originalStorage;
   }
+});
+
+test('V6：resolveDraft 产出结构化 mentions（寻址的真相），文本 token 只是渲染锚点', () => {
+  const roster = [
+    { id: 'aa'.repeat(32), nickname: '小助手' },
+    { id: 'bb'.repeat(32), nickname: '另一个人' },
+  ];
+
+  // 裸 @昵称 唯一匹配 → 文本改写成 token + 收集完整 EndpointId
+  const r = resolveDraft('@小助手 帮我看看', roster);
+  assert.equal(r.text, '@aaaaaaaa 帮我看看');
+  assert.deepEqual(r.mentions, ['aa'.repeat(32)]);
+  assert.deepEqual(r.ambiguous, []);
+  assert.deepEqual(r.unresolved, []);
+
+  // 点名不存在的人：文本原样保留、mentions 为空（如实回报给调用方）
+  const u = resolveDraft('@路人 你好', roster);
+  assert.equal(u.text, '@路人 你好');
+  assert.deepEqual(u.mentions, []);
+  assert.deepEqual(u.unresolved, ['路人']);
+
+  // mentionsMe：结构化命中优先；没有 mentions（v5 旧消息）按文本 token 兜底
+  const mine = 'aa'.repeat(32);
+  assert.equal(mentionsMe('随便什么文本', mine, ['aa'.repeat(32)]), true);
+  assert.equal(mentionsMe('@aaaaaaaa 在吗', mine, []), true);
+  assert.equal(mentionsMe('无关消息', mine, []), false);
 });

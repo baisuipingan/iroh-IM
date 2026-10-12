@@ -643,11 +643,12 @@ export const net = {
     return this._nick || store.nick();
   },
 
-  async send(text) {
+  async send(text, mentions = []) {
     // ⚠️ 离线时不要把请求丢进黑洞：直接抛一个可读的错误，
     //    让 UI 走"发送失败 + 保留输入"的分支，而不是卡住不动。
     if (!this.canSend) throw new Error(this.phase === 'online' ? '还没进入房间' : '网络未连接');
-    return JSON.parse(await this.client.call('send', text));
+    // V6：mentions = @ 的完整端点 id 列表（寻址的真相；文本 token 只是渲染锚点）
+    return JSON.parse(await this.client.call('send', text, mentions));
   },
 
   /**

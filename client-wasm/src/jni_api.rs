@@ -677,7 +677,9 @@ pub extern "system" fn Java_vip_editor_irohchat_nativebridge_IrohNative_nativeSe
     let Ok(rt) = h.rt() else {
         return throw(&mut env, "运行时已释放");
     };
-    match rt.block_on(async { h.node.send(&text).await }) {
+    // ⚠️ JNI 不动签名（Android App 还是旧 APK）：结构化 mentions 走不了这条路，
+    //    v6 里 Android 端用文本 `@<id8>` token 兜底（服务端与其它端都能读它）。
+    match rt.block_on(async { h.node.send(&text, Vec::new()).await }) {
         Ok(m) => ret_str(&mut env, m.id),
         Err(e) => throw(&mut env, &format!("发送失败：{e:#}")),
     }

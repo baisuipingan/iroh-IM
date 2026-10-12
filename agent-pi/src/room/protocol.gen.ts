@@ -10,9 +10,9 @@
  *    详见 client-wasm/src/ts_export.rs 顶部说明。
  * ==========================================================================*/
 
-/// 聊天协议版本（Rust 侧 `sigfmt::PROTO_V5`）。三端必须一致；
-/// v5 切换时**只改 Rust**，然后重跑 scripts/gen-protocol-types.sh。
-export const CHAT_PROTOCOL = "v5";
+/// 聊天协议版本（Rust 侧 `sigfmt::PROTO_V6`；升级换代只改 Rust 这一处）。
+/// 三端必须一致；切换时**只改 Rust**，然后重跑 scripts/gen-protocol-types.sh。
+export const CHAT_PROTOCOL = "v6";
 
 /**
  * 「文件存在的证明」——**只记元信息，不含内容**。
@@ -64,7 +64,13 @@ export type ChatMessage = { id: string, from: string, nickname: string, text: st
 /**
  * `Some` = 这是一条「文件证明」，客户端应渲染成文件卡片而不是文本气泡
  */
-file: FileRef | null, };
+file: FileRef | null, 
+/**
+ * **V6**：这条消息 @ 了谁（端点 id 列表；进签名前会**去重 + 排序**）。
+ * 文本里的 `@<id8>` token 只是给人的**渲染锚点** —— 寻址以这个字段为准。
+ * 空列表不序列化（老端读到未知字段会忽略，读得进来、只是验签不认）。
+ */
+mentions?: Array<string>, };
 
 export type PeerInfo = { id: string, nickname: string, lastSeenMs: number, 
 /**

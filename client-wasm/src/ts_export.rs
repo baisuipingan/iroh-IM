@@ -64,12 +64,12 @@ pub fn render() -> Result<String, ts_rs::ExportError> {
     let cfg = Config::new().with_large_int("number".to_owned());
     let mut out = String::from(HEADER);
     // 协议版本串也一起生成：它同样是"必须三端一致"的常量，
-    // 手抄一份就多一个 v5 切换时会漏改的地方（Rust 是 `sigfmt::PROTO_V5`）。
+    // 手抄一份就多一个换代时会漏改的地方（Rust 是 `sigfmt::PROTO_V6`）。
     out.push_str(&format!(
-        "/// 聊天协议版本（Rust 侧 `sigfmt::PROTO_V5`）。三端必须一致；\n\
-         /// v5 切换时**只改 Rust**，然后重跑 scripts/gen-protocol-types.sh。\n\
+        "/// 聊天协议版本（Rust 侧 `sigfmt::PROTO_V6`；升级换代只改 Rust 这一处）。\n\
+         /// 三端必须一致；切换时**只改 Rust**，然后重跑 scripts/gen-protocol-types.sh。\n\
          export const CHAT_PROTOCOL = \"{}\";\n\n",
-        crate::sigfmt::PROTO_V5
+        crate::sigfmt::PROTO_V6
     ));
     for (_name, body) in export_all(&cfg)? {
         for line in body.lines() {
@@ -134,13 +134,13 @@ mod tests {
         assert!(!ts.contains("bigint"), "不该出现 bigint");
     }
 
-    /// 协议版本常量必须与 Rust 一致（它是 v5 切换时最容易漏改的一处）
+    /// 协议版本常量必须与 Rust 一致（它是换代时最容易漏改的一处）
     #[test]
     fn generated_chat_protocol_matches_rust() {
         let ts = render().expect("导出失败");
         assert!(
-            ts.contains(&format!("export const CHAT_PROTOCOL = \"{}\";", crate::sigfmt::PROTO_V5)),
-            "生成的 CHAT_PROTOCOL 与 sigfmt::PROTO_V5 不一致"
+            ts.contains(&format!("export const CHAT_PROTOCOL = \"{}\";", crate::sigfmt::PROTO_V6)),
+            "生成的 CHAT_PROTOCOL 与 sigfmt::PROTO_V6 不一致"
         );
     }
 

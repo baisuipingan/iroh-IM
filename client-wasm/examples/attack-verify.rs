@@ -19,6 +19,7 @@ fn message(key: &SecretKey, nickname: &str, text: &str, ts: u64, room: &str) -> 
         ts,
         sig: String::new(),
         file: None,
+        mentions: Vec::new(),
     }
     .sign(key, room)
 }

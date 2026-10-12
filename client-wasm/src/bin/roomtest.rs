@@ -180,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     println!("\n=== 发一条消息试试 ===");
-    match tokio::time::timeout(Duration::from_secs(15), node.send("hello from native roomtest")).await {
+    match tokio::time::timeout(Duration::from_secs(15), node.send("hello from native roomtest", Vec::new())).await {
         Ok(Ok(m)) => println!("✅ 已广播，id={} ts={}", m.id, m.ts),
         Ok(Err(e)) => println!("❌ 发送失败: {e:#}"),
         Err(_) => println!("❌ 发送 15s 超时"),
@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
             println!("\n=== 大消息测试：{kb}KB ===");
             let payload = "X".repeat(size);
             let t0 = std::time::Instant::now();
-            match tokio::time::timeout(Duration::from_secs(60), node.send(&payload)).await {
+            match tokio::time::timeout(Duration::from_secs(60), node.send(&payload, Vec::new())).await {
                 Ok(Ok(m)) => println!(
                     "✅ {kb}KB 发送成功，耗时 {:?}，id={}",
                     t0.elapsed(),

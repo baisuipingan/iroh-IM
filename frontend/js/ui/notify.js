@@ -115,7 +115,7 @@ export const notify = {
     const base = alias || room || '新消息';
     // 被 @ 了要在标题上体现（R1）：正文仍然受「显示消息内容」开关约束，
     // 而"有人 @ 你"这件事本身不算内容泄露 —— 它只是寻址信息。
-    const title = mentionsMe(message?.text, myId) ? `${base} · 有人 @ 你` : base;
+    const title = mentionsMe(message?.text, myId, message?.mentions) ? `${base} · 有人 @ 你` : base;
     const nick = message?.nickname || '有人';
     const text = String(message?.text || '').slice(0, MAX_BODY);
     const body = prefs.notifyContent === false || !text ? '新消息' : `${nick}: ${text}`;

@@ -87,10 +87,16 @@ impl RoomNode {
     }
 
     /// 在房间里发言（自动签名）。
-    /// 返回**整条消息的 JSON**（含 id / ts / sig），让前端可以立刻乐观渲染，
+    ///
+    /// `mentions`：这条消息 @ 的**端点 id 列表**（V6；可省略 = 没有 @ 任何人）。
+    /// 返回**整条消息的 JSON**（含 id / ts / sig / mentions），让前端可以立刻乐观渲染，
     /// 之后 gossip 回环回来的同一条消息按 id 去重即可。
-    pub async fn send(&self, text: String) -> Result<String, JsError> {
-        let m = self.inner.send(&text).await.map_err(to_js_err)?;
+    pub async fn send(&self, text: String, mentions: Option<Vec<String>>) -> Result<String, JsError> {
+        let m = self
+            .inner
+            .send(&text, mentions.unwrap_or_default())
+            .await
+            .map_err(to_js_err)?;
         serde_json::to_string(&m).map_err(|e| JsError::new(&e.to_string()))
     }
 

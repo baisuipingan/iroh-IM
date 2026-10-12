@@ -2,9 +2,10 @@
  * adapter.ts · 触发策略 + 去重 + 冷却 —— 把「房间里的消息」接到「brain」
  *
  * 触发规则（任一命中就调 brain；可在 CLI 上关掉）：
- *   1. **@我的 id8**：`@9b45b7ef 在吗`（R1 起的规范寻址；剥离 token 后作为 {text}）
- *   2. @昵称：`@小助手 在吗`（**兼容兜底**，`--no-mention` 可关）
- *   3. respondToAll：所有消息都算触发（噪音大，慎用）
+ *   1. **结构化 mentions（V6 起）**：`message.mentions` 里有我的 EndpointId —— 寻址的真相
+ *   2. @我的 id8：`@9b45b7ef 在吗`（v5 消息 / 人手打的 token；剥离后作为 {text}）
+ *   3. @昵称：`@小助手 在吗`（**兼容兜底**，`--no-mention` 可关）
+ *   4. respondToAll：所有消息都算触发（噪音大，慎用）
  *
  * ⚠️ 这里**没有** `!前缀` 那条 —— 2026-10-12 已整个删除（agent 是房间里的成员，
  *    不是命令行工具；前缀还会跟真人聊天里的感叹号撞车）。别再加回来。
@@ -284,7 +285,7 @@ export class ChatAdapter {
     if (ignorePrefixes.some((prefix) => message.nickname.startsWith(prefix))) return;
     if (!this.#remember(message.id)) return;
 
-    const triggered = this.#extract(message.text);
+    const triggered = this.#extract(message);
     if (triggered === null) return;
 
     const cooldownMs = this.#opts.cooldownMs ?? 3000;
@@ -391,23 +392,33 @@ export class ChatAdapter {
    *    而且前缀会跟真人聊天里的感叹号撞车（"！这也太离谱了"被当成命令）。
    *    要"谁都触发"，那是 `respondToAll`（显式开关），不是前缀。
    */
-  #extract(text: string): string | null {
-    const trimmed = text.trim();
-    // ① **规范方式**：`@<我的 id8>` —— id8 = 我自己的 EndpointId 前 8 位（R1）。
-    //    这是唯一可靠的寻址：改名、同名都不影响（昵称只是给人看的）。
-    const myId8 = this.#myId8();
-    if (myId8) {
-      const re = new RegExp(`@${myId8}(?![0-9a-f])`, 'g');
-      const stripped = trimmed.replace(re, '');
-      if (stripped !== trimmed) return stripped.trim();
+  #extract(message: ChatMessage): string | null {
+    const trimmed = String(message.text ?? '').trim();
+    // ① **结构化 mentions（V6 起）**：`mentions` 里有我的 EndpointId 就直接触发 ——
+    //    这是寻址的真相（昵称只给人看）。命中后剥掉渲染锚点 token（如果有），
+    //    brain 拿到纯正文。
+    const myId = String(this.#opts.client?.hello?.endpointId ?? '');
+    if (myId && Array.isArray(message.mentions) && message.mentions.includes(myId)) {
+      return this.#stripMyIdToken(trimmed);
     }
-    // ② 兼容兜底：`@昵称`（人手打的、或老客户端）—— `--no-mention` 可关掉
+    // ② **规范 token**：`@<我的 id8>` —— v5 消息 / 人手打的（过渡期兜底）。
+    //    改名、同名都不影响（昵称只是给人看的）。
+    const stripped = this.#stripMyIdToken(trimmed);
+    if (stripped !== trimmed) return stripped;
+    // ③ 兼容兜底：`@昵称`（人手打的、或老客户端）—— `--no-mention` 可关掉
     const mention = this.#opts.mention ?? null;
     if (mention && trimmed.includes(`@${mention}`)) {
       return trimmed.replaceAll(`@${mention}`, '').trim();
     }
     if (this.#opts.respondToAll) return trimmed;
     return null;
+  }
+
+  /** 剥掉 `@<我的 id8>`（渲染锚点）。没有它就原样返回。 */
+  #stripMyIdToken(text: string): string {
+    const myId8 = this.#myId8();
+    if (!myId8) return text;
+    return text.replace(new RegExp(`@${myId8}(?![0-9a-f])`, 'g'), '').trim();
   }
 
   /** 我自己的 id8（EndpointId 前 8 位小写 hex）；hello 还没到时为空串 */

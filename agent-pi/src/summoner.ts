@@ -23,6 +23,7 @@
  * 2. **`@<id8>`**（规范 token，R1）：只要名册里见过这个 id 对应的是谁（注册成员），
  *    照样把人叫回来；等它进房后**用它在名册里的当前 id8 重新指向**（旧 token 剥掉）。
  *    为什么需要这条：翻历史回一条旧消息、或空闲回收之后再叫，手里只有 token。
+ *    转交时说两样：文本 `@<id8>`（渲染锚点）+ **结构化 mentions**（V6 的寻址真相）。
  *
  * ## 闸门（硬约束：能力自带资源闸门）
  *
@@ -220,7 +221,7 @@ export class Summoner {
   async onRoster(
     room: string,
     peers: { id: string; nickname: string }[],
-    say: (text: string) => Promise<unknown> | unknown,
+    say: (text: string, mentions?: string[]) => Promise<unknown> | unknown,
   ): Promise<void> {
     for (const peer of peers) {
       const name = String(peer.nickname ?? '');
@@ -240,7 +241,8 @@ export class Summoner {
       const id8 = String(hit.id ?? '')
         .slice(0, 8)
         .toLowerCase();
-      await say(`@${id8} ${request}`); // 规范 token（R1）：昵称只给人看
+      // 规范 token（R1）当**渲染锚点** + 结构化 mentions（V6）当**寻址真相**
+      await say(`@${id8} ${request}`, [String(hit.id)]);
       this.#log(`已把请求转交给「${name}」（@${id8}）`);
     }
   }
@@ -387,7 +389,7 @@ async function startRoom(
   adapter.start();
   client.on('event', (ev: RoomEvent) => {
     if (ev.type !== 'presence') return;
-    void summoner.onRoster(room, ev.peers, (text) => client.say(text));
+    void summoner.onRoster(room, ev.peers, (text, mentions) => client.say(text, mentions));
   });
   log(`已在 ${room} 待命（昵称 ${opts.nick}）：@ 注册表里的名字就能把它叫来`);
 }

@@ -72,9 +72,9 @@ pi 适配器（TS，supervisor）
 - **单行上限 1 MiB**：超过则整行丢弃并回 `badRequest`（防止误把大文件贴进 stdin 打爆内存）。
 - daemon 启动后**必须先发 `hello`**；客户端（TS）应在收到 hello 之后再发命令。
 - 信封公共字段 `v`（协议版本，当前 `1`）。命令可省略（默认 1）；**不认识主版本号必须拒绝**，
-  尤其 `chatProtocol`（聊天协议当前 **v5**）——跨版本互认的结果是验签失败静默丢消息。
+  尤其 `chatProtocol`（聊天协议当前 **v6**）——跨版本互认的结果是验签失败静默丢消息。
   （v5 起服务端会在能力响应里带上自己的版本，所以"不一致"能变成一条**看得见**的提示；
-  见 `docs/release-2026-10-10-protocol-v5.md`。）
+  v6 起聊天消息带**结构化 mentions**、验证端**双读** v5 旧签名 —— 见 `docs/release-2026-10-12-protocol-v6.md`。）
 - **stdout 写入策略**：专用线程 + `sync_channel(4096)` + 逐行 flush。队列满时：
   只允许丢 `fileProgress`；`reply` / `message` / 其它事件反压等待（宁可慢，不可丢）。
   真正的消费端卡死属于 TS 的 bug，不为此增加复杂度。
@@ -85,8 +85,8 @@ pi 适配器（TS，supervisor）
 ## 3. hello（daemon → 客户端，握手）
 
 ```json
-{"v":1,"type":"hello","agent":"iroh-agent/0.2.0","endpointId":"<64位hex>",
- "chatProtocol":"v5","nickname":"小助手",
+{"v":1,"type":"hello","agent":"iroh-agent/0.3.0","endpointId":"<64位hex>",
+ "chatProtocol":"v6","nickname":"小助手",
  "relay":{"url":"https://iroh1.editor.vip:15443","connected":true}}
 ```
 
@@ -94,7 +94,7 @@ pi 适配器（TS，supervisor）
 |---|---|
 | `agent` | 二进制版本（= `client-wasm` 的 `CARGO_PKG_VERSION`；npm 包/安装脚本据此做兼容检查） |
 | `endpointId` | 本身份公钥（展示"它是谁"；也是签名验证的公钥） |
-| `chatProtocol` | 聊天协议版本（`sigfmt::PROTO_V5`）。不匹配 → TS 应拒绝启动并提示升级 |
+| `chatProtocol` | 聊天协议版本（`sigfmt::PROTO_V6`）。不匹配 → TS 应拒绝启动并提示升级 |
 | `relay` | 当前 home relay（可能为 `null`，还没握手完成） |
 
 ---
@@ -104,7 +104,7 @@ pi 适配器（TS，supervisor）
 通用信封，每个命令**恰好一个 reply**（可能很晚；事件与 reply 会交错，按 `id` 关联）：
 
 ```json
-{"v":1,"id":"c1","cmd":"say","text":"你好"}
+{"v":1,"id":"c1","cmd":"say","text":"@9b45b7ef 你好","mentions":["9b45b7ef…（完整 EndpointId）"]}
 ```
 
 - `id`：字符串，TS 自己生成（建议单调递增）。缺失 → `badRequest`；
@@ -113,7 +113,7 @@ pi 适配器（TS，supervisor）
 | cmd | 参数 | reply.value | 说明 |
 |---|---|---|---|
 | `join` | `{room, nickname?}` | `{room}` | 进房/换房。成功后另有 `joined` 事件；**状态以事件为准** |
-| `say` | `{text}` | `{id, ts}` | 文本消息（自动签名）。`id` 即消息 id，用于回环去重 |
+| `say` | `{text, mentions?}` | `{id, ts}` | 文本消息（自动签名）。`id` 即消息 id，用于回环去重；`mentions` = 这条消息 @ 的**端点 id 列表**（V6 起：寻址的真相，文本里的 `@<id8>` 只是渲染锚点） |
 | `send_file` | `{path, name?, mime?}` | `{fileId, name, size, chunkSize, rootHash}` | 发布文件（整读算 blake3 后广播邀约）；有人接收后 daemon **自动推送** |
 | `unpublish` | `{fileId}` | `{}` | 从"可提供"清单撤下（更新心跳）；已在途的推送不中断 |
 | `list_files` | `{}` | `{files:[{fileId,name,size}]}` | 当前货架 |
@@ -262,7 +262,7 @@ pi 适配器（TS，supervisor）
 ## 10. 示例会话（黄金转录的雏形）
 
 ```
-daemon → {"v":1,"type":"hello","agent":"iroh-agent/0.2.0","endpointId":"ab12…","chatProtocol":"v5","nickname":"小助手","relay":{"url":"https://iroh1.editor.vip:15443","connected":true}}
+daemon → {"v":1,"type":"hello","agent":"iroh-agent/0.3.0","endpointId":"ab12…","chatProtocol":"v6","nickname":"小助手","relay":{"url":"https://iroh1.editor.vip:15443","connected":true}}
 TS     → {"v":1,"id":"1","cmd":"join","room":"派大星","nickname":"小助手"}
 daemon → {"v":1,"type":"reply","id":"1","ok":true,"value":{"room":"派大星"}}
 daemon → {"v":1,"type":"event","seq":1,"event":{"type":"joined","room":"派大星","clearedFiles":[]}}

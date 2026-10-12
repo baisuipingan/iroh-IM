@@ -36,6 +36,7 @@ fn message(key: &SecretKey, room: &str, timestamp: u64, text: String) -> ChatMes
     ChatMessage {
         id: String::new(), from: key.public().to_string(), nickname: "test".into(),
         text, ts: timestamp, sig: String::new(), file: None,
+        mentions: Vec::new(),
     }.sign(key, room)
 }
 

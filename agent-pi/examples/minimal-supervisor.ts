@@ -32,7 +32,7 @@ const arg = (name: string, fallback: string) => {
 const bin = process.env.IROH_AGENT_BIN ?? 'iroh-agent';
 const room = arg('room', 'lobby');
 const nick = arg('nick', '最小助手');
-const SUPPORTED = 'v5'; // 这份示例支持的聊天协议版本（Rust 侧 sigfmt::PROTO_V5）
+const SUPPORTED = 'v6'; // 这份示例支持的聊天协议版本（Rust 侧 sigfmt::PROTO_V6）
 
 const child = spawn(bin, ['serve', '--room', room, '--nick', nick], {
   stdio: ['pipe', 'pipe', 'inherit'],   // 日志走 stderr（继承），stdout 只跑协议
@@ -41,6 +41,7 @@ const say = (text: string) =>
   child.stdin.write(`${JSON.stringify({ v: 1, id: String(++seq), cmd: 'say', text })}\n`);
 
 let seq = 0;
+let myId = '';
 let myId8 = '';
 
 createInterface({ input: child.stdout }).on('line', (line) => {
@@ -58,7 +59,8 @@ createInterface({ input: child.stdout }).on('line', (line) => {
       child.kill();
       process.exit(1);
     }
-    myId8 = String(frame.endpointId).slice(0, 8).toLowerCase();
+    myId = String(frame.endpointId);
+    myId8 = myId.slice(0, 8).toLowerCase();
     console.error(`[最小示例] 就绪：${frame.nickname}（@${myId8}）已在房间 ${room}`);
     return;
   }
@@ -71,9 +73,12 @@ createInterface({ input: child.stdout }).on('line', (line) => {
   if (frame.type === 'event' && frame.event?.type === 'message') {
     const m = frame.event.message ?? {};
     const text = String(m.text ?? '');
-    // 触发：**只认 @<我的 id8>**（规范寻址；昵称只给人看 —— 见方案 §4 R1）
-    if (m.mine || !myId8 || !text.includes(`@${myId8}`)) return;
-    const body = text.replace(`@${myId8}`, '').trim();
+    // 触发：**先看结构化 mentions（V6 的寻址真相）**，其次才是文本 `@<我的 id8>`
+    // （v5 消息 / 人手打的 token）。昵称只给人看 —— 见方案 §4 R1。
+    const mentions = Array.isArray(m.mentions) ? m.mentions : [];
+    const hit = (myId && mentions.includes(myId)) || (myId8 && text.includes(`@${myId8}`));
+    if (m.mine || !hit) return;
+    const body = myId8 ? text.replace(`@${myId8}`, '').trim() : text.trim();
     say(body ? `收到：${body}` : '收到');
   }
 });

@@ -587,7 +587,8 @@ async fn cmd_whoami(cfg: &Config, key: &SecretKey) -> Result<()> {
 }
 
 async fn cmd_say(node: &RoomNode, text: &str) -> Result<()> {
-    let msg = node.send(text).await.context("发送失败")?;
+    // 一次性 CLI 的 `say` 不带结构化 mentions（要 @ 请打 @<id8> token 走文本兜底）
+    let msg = node.send(text, Vec::new()).await.context("发送失败")?;
     println!("已发送 id={}", msg.id);
     Ok(())
 }
@@ -718,7 +719,7 @@ async fn cmd_watch(node: &Arc<RoomNode>, key: &SecretKey, room: &str) -> Result<
                         Err(e) => println!("❌ 读文件失败：{e:#}"),
                     }
                 } else {
-                    match node.send(line).await {
+                    match node.send(line, Vec::new()).await {
                         Ok(m) => println!("   已发送 {}", &m.id[..8.min(m.id.len())]),
                         Err(e) => println!("❌ 发送失败：{e:#}"),
                     }
@@ -1032,8 +1033,30 @@ fn serve_handle_line(ctx: &Arc<ServeCtx>, line: String) {
                 ctx.reply_err(&id, "badRequest", "缺少 text");
                 return;
             };
+            // V6：可选的 mentions（@ 的端点 id 列表）。缺省 = 没有 @ 任何人。
+            // 传了非数组（含 null）→ 直接报错，别静默当空 —— 宁可让调用方发现。
+            let mentions: Vec<String> = match v.get("mentions") {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(serde_json::Value::Array(items)) => {
+                    let mut out = Vec::with_capacity(items.len());
+                    for it in items {
+                        match it.as_str() {
+                            Some(s) => out.push(s.to_string()),
+                            None => {
+                                ctx.reply_err(&id, "badRequest", "mentions 里的每一项都必须是字符串");
+                                return;
+                            }
+                        }
+                    }
+                    out
+                }
+                Some(_) => {
+                    ctx.reply_err(&id, "badRequest", "mentions 必须是字符串数组");
+                    return;
+                }
+            };
             let c = ctx.clone();
-            tokio::spawn(async move { serve_do_say(c, id, text).await });
+            tokio::spawn(async move { serve_do_say(c, id, text, mentions).await });
         }
         "send_file" => {
             let Some(path) = req_str(&v, "path") else {
@@ -1091,7 +1114,7 @@ async fn serve_do_join(ctx: Arc<ServeCtx>, id: String, room: String, nickname: O
     }
 }
 
-async fn serve_do_say(ctx: Arc<ServeCtx>, id: String, text: String) {
+async fn serve_do_say(ctx: Arc<ServeCtx>, id: String, text: String, mentions: Vec<String>) {
     if text.len() > IPC_MAX_SAY_BYTES {
         ctx.reply_err(
             &id,
@@ -1104,7 +1127,7 @@ async fn serve_do_say(ctx: Arc<ServeCtx>, id: String, text: String) {
         ctx.reply_err(&id, "notJoined", "还没进房间（先发 join）");
         return;
     }
-    match ctx.node.send(&text).await {
+    match ctx.node.send(&text, mentions).await {
         Ok(m) => ctx.reply_ok(&id, json!({"id": m.id, "ts": m.ts})),
         Err(e) => ctx.reply_err(&id, "internal", &format!("{e:#}")),
     }
@@ -1622,7 +1645,7 @@ async fn cmd_serve(cfg: &Config, key: &SecretKey, auto_room: &str) -> Result<()>
         "type": "hello",
         "agent": format!("iroh-agent/{}", env!("CARGO_PKG_VERSION")),
         "endpointId": node.endpoint_id(),
-        "chatProtocol": iroh_web::sigfmt::PROTO_V5,
+        "chatProtocol": iroh_web::sigfmt::PROTO_V6,
         "nickname": cfg.nickname,
         "relay": relay,
     }));

@@ -150,6 +150,11 @@ pub struct ChatMessage {
     /// `Some` = 这是一条「文件证明」，客户端应渲染成文件卡片而不是文本气泡
     #[serde(default)]
     pub file: Option<FileRef>,
+    /// **V6**：这条消息 @ 了谁（端点 id 列表；进签名前会**去重 + 排序**）。
+    /// 文本里的 `@<id8>` token 只是给人的**渲染锚点** —— 寻址以这个字段为准。
+    /// 空列表不序列化（老端读到未知字段会忽略，读得进来、只是验签不认）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<String>,
 }
 
 impl ChatMessage {
@@ -158,12 +163,32 @@ impl ChatMessage {
     /// **包含 `id`** —— 这一点是 v3 的核心：id 不在签名载荷里的话，
     /// 别人能拿着你的有效签名随便改 id 反复重放。
     /// 没有文件时那几个字段填空串/0（不搞"两种拼法"，验签处要分支就容易出 bug）。
+    /// **V6**：v6 起在旧字段之后追加 **mentions 段**（先计数 `nmentions`，
+    /// 再逐项独立编码 —— 照 `Presence::files` 的做法，绝不 join，避免 `a,b` 歧义）。
     pub fn canonical(&self, room: &str) -> String {
+        self.canonical_with(room, crate::sigfmt::PROTO_V6, true)
+    }
+
+    /// **v5 规范**（双读用）：没有 mentions 段、标签是 v5。旧消息/旧端签的是它。
+    pub fn canonical_legacy(&self, room: &str) -> String {
+        self.canonical_with(room, crate::sigfmt::PROTO_V5, false)
+    }
+
+    /// 规范化 mentions：去重 + 排序 + 丢空串。
+    /// **签名从这里走** —— 同一集合无论书写顺序，签出同一串、验得过。
+    pub fn normalize_mentions(mentions: &[String]) -> Vec<String> {
+        let mut v: Vec<String> = mentions.iter().filter(|m| !m.is_empty()).cloned().collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    fn canonical_with(&self, room: &str, proto: &str, with_mentions: bool) -> String {
         let f = self.file.as_ref();
         let ts = self.ts.to_string();
         let size = f.map(|x| x.size).unwrap_or(0).to_string();
-        crate::sigfmt::encode_fields(&[
-            crate::sigfmt::PROTO_V5,
+        let mut out = crate::sigfmt::encode_fields(&[
+            proto,
             // ⚠️ **房间标识必须进签名载荷**（v4，缺陷 F6）。
             //    否则任何能进目标房间 B 的人，都能把他在房间 A 抓到的
             //    **合法签名消息原样转发进 B** —— 接收方验签通过、id 校验通过，
@@ -189,7 +214,16 @@ impl ChatMessage {
             size.as_str(),
             "mime",
             f.map(|x| x.mime.as_str()).unwrap_or(""),
-        ])
+        ]);
+        if with_mentions {
+            let mentions = Self::normalize_mentions(&self.mentions);
+            let n = mentions.len().to_string();
+            out.push_str(&crate::sigfmt::encode_fields(&["nmentions", n.as_str()]));
+            for m in &mentions {
+                out.push_str(&crate::sigfmt::encode_fields(&[m.as_str()]));
+            }
+        }
+        out
     }
 
     /// 消息 id —— **由签名载荷派生**，所以它天然被签名覆盖。
@@ -239,8 +273,12 @@ impl ChatMessage {
         let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else {
             return false;
         };
+        // **双读（V6）**：先按 v6 规范验；失败再按 v5 规范验（旧消息/旧端是 v5 签的）。
+        // 先验 v6（当前规范）保证正常路径只算一次；v5 只在回退时才试。
         pk.verify(self.canonical(room).as_bytes(), &Signature::from_bytes(&arr))
             .is_ok()
+            || pk.verify(self.canonical_legacy(room).as_bytes(), &Signature::from_bytes(&arr))
+                .is_ok()
     }
 
     pub fn sign(mut self, key: &SecretKey, room: &str) -> Self {
@@ -555,7 +593,7 @@ pub struct RendezvousResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HistoryResponse {
     pub room: String,
-    /// **服务端自己的协议版本**（阶段 v5 的握手，见 [`crate::sigfmt::PROTO_V5`]）。
+    /// **服务端自己的协议版本**（握手版本；v6 起是 [`crate::sigfmt::PROTO_V6`]）。
     ///
     /// 客户端拿它和自己比：不一致就**明确提示刷新**，而不是让消息静默验签失败。
     /// `#[serde(default)]` 是为了让"新客户端 × 旧服务端"这种情况能解析出来 ——
@@ -1177,17 +1215,17 @@ fn valid_history_request(request: &HistoryRequest) -> bool {
         })
 }
 
-/// **服务端侧**的版本握手（v5）：记下对端报来的协议版本，不一致就 `warn!`。
+/// **服务端侧**的版本握手（v6）：记下对端报来的协议版本，不一致就 `warn!`。
 ///
-/// 为什么只记日志、**不拒绝**：v5 的破坏性在于签名载荷里的版本串变了，
-/// 旧客户端发来的消息会在**别的端**验签失败。服务端自己只是转发者 + 存储者，
-/// 拒掉它对谁都没好处，反而会把"有一个旧客户端在说话"这条线索一起吞掉。
-/// 我们要的是**可见**，不是拦截。
+/// 为什么只记日志、**不拒绝**：服务端自己只是转发者 + 存储者，
+/// 拒掉它对谁都没好处，反而会把"还有一个旧端在说话"这条线索一起吞掉。
+/// 我们要的是**可见**，不是拦截。v6 起本端对旧签名**双读**（旧端发的消息照读），
+/// 但旧端读不到 v6 的新聊天消息 —— 这条 warn 就是给运维看的"还有旧端，建议它升级"。
 ///
 /// 每个 (能力, 版本) 只报一次 —— 旧客户端每次开页面都会敲三下，
 /// 不去的重会把日志刷成噪音，而"是不是还有旧版在跑"这个判断一次就够。
 fn note_client_protocol(theirs: &str, capability: &str) {
-    if theirs == crate::sigfmt::PROTO_V5 {
+    if theirs == crate::sigfmt::PROTO_V6 {
         return;
     }
     static SEEN: std::sync::OnceLock<Mutex<std::collections::HashSet<String>>> =
@@ -1202,8 +1240,8 @@ fn note_client_protocol(theirs: &str, capability: &str) {
     }
     let label = if theirs.is_empty() { "未上报（旧版）" } else { theirs };
     warn!(
-        "{capability}: 对端协议版本是 {label}（本端 {}）—— 它发来的消息在别的端会验签失败",
-        crate::sigfmt::PROTO_V5
+        "{capability}: 对端协议版本是 {label}（本端 {}）—— 本端可双读它的消息，但它读不到 v6 的聊天消息，建议对端刷新/升级",
+        crate::sigfmt::PROTO_V6
     );
 }
 
@@ -1704,7 +1742,7 @@ impl ProtocolHandler for HistoryService {
         };
         let resp = HistoryResponse {
             room: req.room.clone(),
-            protocol: crate::sigfmt::PROTO_V5.to_string(),
+            protocol: crate::sigfmt::PROTO_V6.to_string(),
             messages,
             // 顺带把房间快照给客户端 —— 他进房就能看到"屋里都有谁、谁能提供哪些文件"
             snapshot,
@@ -1802,7 +1840,7 @@ impl ProtocolHandler for AnnounceService {
         let _ = self.join_tx.try_send(req.room.clone());
 
         let body = serde_json::to_vec(&AnnounceResponse {
-            protocol: crate::sigfmt::PROTO_V5.to_string(),
+            protocol: crate::sigfmt::PROTO_V6.to_string(),
             ok: true,
         })
         .map_err(AcceptError::from_err)?;
@@ -1898,7 +1936,7 @@ impl ProtocolHandler for RendezvousService {
         let members: Vec<String> = all.into_iter().take(MAX_RENDEZVOUS_MEMBERS).collect();
 
         let body = serde_json::to_vec(&RendezvousResponse {
-            protocol: crate::sigfmt::PROTO_V5.to_string(),
+            protocol: crate::sigfmt::PROTO_V6.to_string(),
             members,
             truncated,
         })
@@ -2475,7 +2513,7 @@ impl RoomNode {
                 let (mut send, mut recv) = conn.open_bi().await?;
                 let req = AnnounceRequest {
                     room: room.to_string(),
-                    protocol: crate::sigfmt::PROTO_V5.to_string(),
+                    protocol: crate::sigfmt::PROTO_V6.to_string(),
                 };
                 send.write_all(&serde_json::to_vec(&req)?).await?;
                 send.finish()?;
@@ -2514,7 +2552,7 @@ impl RoomNode {
             let (mut send, mut recv) = conn.open_bi().await?;
             let req = RendezvousRequest {
                 room: room.to_string(),
-                protocol: crate::sigfmt::PROTO_V5.to_string(),
+                protocol: crate::sigfmt::PROTO_V6.to_string(),
             };
             send.write_all(&serde_json::to_vec(&req)?).await?;
             send.finish()?;
@@ -3131,7 +3169,10 @@ impl RoomNode {
     }
 
     /// 广播一条消息（自动签名、自动存本地历史）。
-    pub async fn send(&self, text: &str) -> Result<ChatMessage> {
+    ///
+    /// `mentions`：这条消息 @ 的**端点 id**（V6 起这是寻址的真相；文本里的 token
+    /// 只是给人的渲染锚点）。签名前会规范化（去重 + 排序），调用方传什么顺序都行。
+    pub async fn send(&self, text: &str, mentions: Vec<String>) -> Result<ChatMessage> {
         let (nickname, sender, room) = {
             let g = self.inner.lock().unwrap();
             match g.joined.as_ref() {
@@ -3141,6 +3182,7 @@ impl RoomNode {
         };
         let ts = now_ms();
         let from = self.endpoint.id().to_string();
+        let mentions = ChatMessage::normalize_mentions(&mentions);
         let msg = ChatMessage {
             id: ChatMessage::compute_id(&from, ts, text, "", &room),
             from,
@@ -3150,6 +3192,7 @@ impl RoomNode {
             sig: String::new(),
             // 普通文本消息没有文件证明
             file: None,
+            mentions,
         }
         .sign(&self.secret_key, &room);
 
@@ -3166,7 +3209,7 @@ impl RoomNode {
         self.fetch_history_before(room, limit, None).await
     }
 
-    /// **协议版本握手**（v5）：对端报来的版本和我方不一致就明确告诉 UI。
+    /// **协议版本握手**（v6）：对端报来的版本和我方不一致就明确告诉 UI。
     ///
     /// 为什么非要有这条：v5 之前，版本不匹配的表现是**消息静默验签失败**
     /// （只有日志，用户侧什么都看不到）—— 用户看到的是"消息丢了"，排查时
@@ -3178,7 +3221,7 @@ impl RoomNode {
     ///
     /// 同一个版本只报一次：拉历史/问入口都是高频动作，重复提示会变成噪音。
     async fn note_peer_protocol(&self, theirs: &str, room: &str) {
-        let ours = crate::sigfmt::PROTO_V5;
+        let ours = crate::sigfmt::PROTO_V6;
         if theirs == ours {
             return;
         }
@@ -3220,7 +3263,7 @@ impl RoomNode {
             return Ok(HistoryResponse {
                 room: room.to_string(),
                 // 本端版本（没有对端可比 —— 这条路径是"根本没配置历史提供者"）
-                protocol: crate::sigfmt::PROTO_V5.to_string(),
+                protocol: crate::sigfmt::PROTO_V6.to_string(),
                 messages: Vec::new(),
                 snapshot: None,
             });
@@ -3235,7 +3278,7 @@ impl RoomNode {
                 let (mut send, mut recv) = conn.open_bi().await?;
                 let req = HistoryRequest {
                     room: room.to_string(),
-                    protocol: crate::sigfmt::PROTO_V5.to_string(),
+                    protocol: crate::sigfmt::PROTO_V6.to_string(),
                     limit,
                     before,
                 };
@@ -3483,6 +3526,8 @@ impl RoomNode {
                 size: meta.size,
                 mime: meta.mime.clone(),
             }),
+            // 文件证明没有 @ 任何人
+            mentions: Vec::new(),
         }
         .sign(&self.secret_key, &room);
         let bytes = serde_json::to_vec(&Wire::Message { m: msg.clone() })?;
@@ -3860,6 +3905,7 @@ mod security_tests {
             ts: 1_700_000_000_000,
             sig: String::new(),
             file: None,
+            mentions: Vec::new(),
         }
         .sign(&k, ROOM)
     }
@@ -3896,6 +3942,57 @@ mod security_tests {
         assert!(!tampered.verify(ROOM));
     }
 
+    // ── V6：结构化 mentions 与双读 ──────────────────────────────────
+
+    #[test]
+    fn v6_mentions_规范化后进签名() {
+        let k = kp();
+        let mut m = msg("Alice", "你好");
+        // 乱序 + 重复 + 空串：规范化 = 去重 + 排序 + 丢空
+        m.mentions = vec!["b".repeat(64), "a".repeat(64), "a".repeat(64), String::new()];
+        let m = m.sign(&k, ROOM);
+        assert!(m.verify(ROOM), "v6 签名自洽");
+
+        // 同一集合换书写顺序 → 规范化后载荷相同 → 验得过（mentions 的语义就是集合）
+        let mut reordered = m.clone();
+        reordered.mentions = vec!["a".repeat(64), "b".repeat(64)];
+        assert!(reordered.verify(ROOM), "同一 mentions 集合与顺序/重复无关");
+
+        // 动了集合（少一个 / 多一个）→ 验不过
+        let mut tampered = m.clone();
+        tampered.mentions = vec!["a".repeat(64)];
+        assert!(!tampered.verify(ROOM), "mentions 被改必须验不过");
+        let mut extra = m.clone();
+        extra.mentions.push("c".repeat(64));
+        assert!(!extra.verify(ROOM), "偷偷加一个 @ 也要验不过");
+    }
+
+    #[test]
+    fn v6_双读_v5旧签名仍然验得过() {
+        let k = kp();
+        let mut m = msg("Alice", "旧世界的消息");
+        // 模拟"旧端"：按 v5 规范签（无 mentions 段、标签 v5）
+        let legacy_sig = k.sign(m.canonical_legacy(ROOM).as_bytes());
+        m.sig = hex::encode(legacy_sig.to_bytes());
+        assert!(m.verify(ROOM), "双读：v5 旧签名必须仍然验得过（历史不清空）");
+
+        // 改一个字（两个规范都救不了）→ 验不过
+        let mut tampered = m.clone();
+        tampered.text = "被动过".into();
+        assert!(!tampered.verify(ROOM));
+    }
+
+    #[test]
+    fn v6_旧_json_缺mentions字段也读得进来() {
+        // v5 的 JSON 没有 mentions 字段 → serde default 兜底，读得进来
+        let json = r#"{"id":"x","from":"y","nickname":"n","text":"t","ts":1,"sig":"","file":null}"#;
+        let m: ChatMessage = serde_json::from_str(json).unwrap();
+        assert!(m.mentions.is_empty());
+        // 空 mentions 的 v6 消息序列化时**不带**这个字段（老端读得进去，只是验签不认）
+        let round = serde_json::to_string(&msg("Alice", "hi")).unwrap();
+        assert!(!round.contains("mentions"), "空 mentions 不该出现在线上 JSON 里：{round}");
+    }
+
     // ── P1-2：消息 id 必须在签名载荷里 ──────────────────────────────
     #[test]
     fn 改消息id无法重放() {
@@ -3919,6 +4016,7 @@ mod security_tests {
             ts: 123,
             sig: String::new(),
             file: None,
+            mentions: Vec::new(),
         }
         .sign(&k, ROOM);
         assert!(!m.id.is_empty());
@@ -3944,6 +4042,7 @@ mod security_tests {
                     size: 10,
                     mime: String::new(),
                 }),
+                mentions: Vec::new(),
             }
             .sign(&k, ROOM)
         };
@@ -3976,6 +4075,7 @@ mod security_tests {
                 ts: 1,
                 sig: String::new(),
                 file: None,
+                mentions: Vec::new(),
             }
             .sign(&key, room);
             assert!(store.append(room, m));
@@ -4009,6 +4109,7 @@ mod security_tests {
                     ts: i,
                     sig: String::new(),
                     file: None,
+                    mentions: Vec::new(),
                 }
                 .sign(&key, ROOM);
                 assert!(store.append(ROOM, m));
@@ -4053,6 +4154,7 @@ mod security_tests {
                 ts: i,
                 sig: String::new(),
                 file: None,
+                mentions: Vec::new(),
             }
             .sign(&key, ROOM);
             let enc = serde_json::to_vec(&m).unwrap();
@@ -4071,6 +4173,7 @@ mod security_tests {
             ts: 100,
             sig: String::new(),
             file: None,
+            mentions: Vec::new(),
         }
         .sign(&key, ROOM);
         let enc = serde_json::to_vec(&m).unwrap();
@@ -4195,6 +4298,7 @@ mod security_tests {
                 ts: 1_700_000_000_000 + i,
                 sig: String::new(),
                 file: None,
+                mentions: Vec::new(),
             };
             m = m.sign(&k, ROOM);
             msgs.push(m);
@@ -4231,6 +4335,7 @@ mod security_tests {
                 ts: index,
                 sig: String::new(),
                 file: None,
+                mentions: Vec::new(),
             }
             .sign(&key, ROOM);
             assert!(store.append(ROOM, message));
@@ -4256,6 +4361,7 @@ mod security_tests {
                 ts: index,
                 sig: String::new(),
                 file: None,
+                mentions: Vec::new(),
             }
             .sign(&key, ROOM);
             assert!(store.append(ROOM, message));
@@ -4272,7 +4378,7 @@ mod security_tests {
     fn 历史请求字段限制拒绝控制字符与过长游标() {
         let valid = HistoryRequest {
             room: "room".into(),
-            protocol: crate::sigfmt::PROTO_V5.into(),
+            protocol: crate::sigfmt::PROTO_V6.into(),
             limit: usize::MAX,
             before: Some((1, "id".into())),
         };
@@ -4308,6 +4414,7 @@ mod security_tests {
                 ts,
                 sig: String::new(),
                 file: None,
+                mentions: Vec::new(),
             }
             .sign(&key, ROOM)
         };
@@ -4377,7 +4484,7 @@ mod security_tests {
     fn valid_history_request_fixture() -> HistoryRequest {
         HistoryRequest {
             room: "room".into(),
-            protocol: crate::sigfmt::PROTO_V5.into(),
+            protocol: crate::sigfmt::PROTO_V6.into(),
             limit: 50,
             before: None,
         }
@@ -4395,6 +4502,7 @@ mod security_tests {
             ts: 1_700_000_000_000,
             sig: String::new(),
             file: None,
+            mentions: Vec::new(),
         }
         .sign(&kp(), ROOM);
         assert!(m.verify(ROOM), "正常消息应当通过");
@@ -4842,7 +4950,7 @@ mod multi_peer_tests {
         })
         .await
         .context("等「协议不一致」事件超时")?;
-        assert_eq!(mismatch.0, crate::sigfmt::PROTO_V5, "本端版本应当是当前协议");
+        assert_eq!(mismatch.0, crate::sigfmt::PROTO_V6, "本端版本应当是当前协议");
         assert_eq!(mismatch.1, "", "旧版对端根本没上报版本，不要凭空造一个");
         assert_eq!(mismatch.2, "mismatch-room");
 
@@ -4914,7 +5022,7 @@ mod multi_peer_tests {
             n0_future::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        client.send("hello-from-announce").await?;
+        client.send("hello-from-announce", Vec::new()).await?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while store.count(room).unwrap_or(0) < 1 {
             if std::time::Instant::now() > deadline {
@@ -4962,6 +5070,7 @@ mod multi_peer_tests {
         let message = ChatMessage {
             id: String::new(), from: author.public().to_string(), nickname: "author".into(),
             text: "persisted".into(), ts: 1, sig: String::new(), file: None,
+            mentions: Vec::new(),
         }.sign(&author, room);
         assert!(anchor.store.append_async(room.into(), message.clone()).await);
         assert_eq!(client.fetch_history(room, 50).await?.messages, vec![message.clone()]);
@@ -5000,8 +5109,8 @@ mod multi_peer_tests {
         anchor.join(room, "anchor").await?;
         first.join(room, "first").await?;
         second.join(room, "second").await?;
-        assert!(first.send(&"长".repeat(180_000)).await.is_err());
-        assert!(first.send(&"\u{0001}".repeat(MAX_MESSAGE_SIZE / 5)).await.is_err());
+        assert!(first.send(&"长".repeat(180_000), Vec::new()).await.is_err());
+        assert!(first.send(&"\u{0001}".repeat(MAX_MESSAGE_SIZE / 5), Vec::new()).await.is_err());
         assert!(second.join(&"长".repeat(90), "second").await.is_err());
         assert_eq!(second.current_room().as_deref(), Some(room));
         let initial_epoch = first.inner.lock().unwrap().joined.as_ref().unwrap().epoch;
@@ -5010,7 +5119,7 @@ mod multi_peer_tests {
         assert!(renamed_epoch > initial_epoch);
         first.set_available_files(vec!["1".repeat(32)]);
         assert!(first.inner.lock().unwrap().joined.as_ref().unwrap().epoch > renamed_epoch);
-        let initial = first.send("before-third").await?;
+        let initial = first.send("before-third", Vec::new()).await?;
         tokio::time::timeout(Duration::from_secs(10), async {
             while anchor.store.count(room).unwrap() < 1 || snapshot_get(&anchor.snaps, room).map(|s| s.members.len()).unwrap_or(0) < 2 {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -5024,7 +5133,7 @@ mod multi_peer_tests {
         }
         let mut sent = Vec::new();
         for user in users {
-            sent.push(user.send(&format!("from-{}", user.endpoint_id())).await?);
+            sent.push(user.send(&format!("from-{}", user.endpoint_id()), Vec::new()).await?);
         }
         for (index, receiver) in events.iter().enumerate() {
             let expected: HashSet<_> = sent.iter().enumerate()
@@ -5042,7 +5151,7 @@ mod multi_peer_tests {
             }).await?;
         }
         second.leave_room().await;
-        let after_leave = first.send("remaining-users").await?;
+        let after_leave = first.send("remaining-users", Vec::new()).await?;
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Ok(RoomEvent::Message { message, .. }) = events[2].recv().await {

@@ -43,7 +43,7 @@ const message = (id, text, nickname = '甲') => ({
   type: 'message',
   room: 'r',
   mine: false,
-  message: { id, from: `peer-${id}`, nickname, text, ts: Date.now(), sig: '', file: null },
+  message: { id, from: `peer-${id}`, nickname, text, ts: Date.now(), sig: '', file: null, mentions: [] },
 });
 
 const invite = (fileId, size, sender = 'peer-1') => ({
@@ -282,6 +282,35 @@ test('成本闸门（C3）：窗口内的轮数用尽就拦住，并在房间里
     client.said.some((t) => t.includes('预算用尽')),
     `超限必须如实说一句：${JSON.stringify(client.said)}`,
   );
+});
+
+
+test('V6 结构化 mentions：命中我的 id 就触发（文本里没有 token 也行）', async () => {
+  const client = makeClient({ sayDelay: 10 });
+  const adapter = makeAdapter(client, { cooldownMs: 0, mention: null });
+  adapter.start();
+
+  // 我的完整 EndpointId（hello.endpointId）
+  const myId = client.hello.endpointId;
+  const ev = message('1', '这条没有 token，只有结构化 mentions');
+  ev.message.mentions = [myId];
+  client.emit('event', ev);
+  await sleep(150);
+  assert.deepEqual(client.said, ['这条没有 token，只有结构化 mentions'], '结构化 mentions 必须触发');
+
+  // 别人被 @（mentions 里没有我）→ 不触发
+  const other = message('2', '叫的是别人');
+  other.message.mentions = ['deadbeef'.repeat(8)];
+  client.emit('event', other);
+  await sleep(150);
+  assert.deepEqual(client.said, ['这条没有 token，只有结构化 mentions'], '别人的 mentions 不该触发我');
+
+  // 命中 + 带渲染锚点 token：token 要被剥掉，brain 拿纯正文
+  const anchored = message('3', `@${myId.slice(0, 8)} 你好呀`);
+  anchored.message.mentions = [myId];
+  client.emit('event', anchored);
+  await sleep(150);
+  assert.deepEqual(client.said.at(-1), '你好呀', '锚点 token 要剥掉');
 });
 
 test('成本闸门（C3）：窗口滑过之后恢复', async () => {

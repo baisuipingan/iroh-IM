@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 
 // 用常量而不是字面量：`chatProtocol` 是**外壳的一部分**，改一次要同时重录黄金转录
 // （下面的 fixture 里也有它），手抄的 "v4" 会在这两处之间漂移。
-use iroh_web::sigfmt::PROTO_V5;
+use iroh_web::sigfmt::PROTO_V6;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const IPC_MAX_LINE_BYTES: usize = 1024 * 1024;
@@ -229,7 +229,7 @@ fn serve_黄金转录不漂移() {
 
     // ---- hello ----
     let hello = s.wait_line(|v| v["type"] == "hello", "hello");
-    assert_eq!(hello["chatProtocol"], PROTO_V5);
+    assert_eq!(hello["chatProtocol"], PROTO_V6);
     assert_eq!(hello["nickname"], "录音机");
     assert_eq!(hello["v"], 1);
 

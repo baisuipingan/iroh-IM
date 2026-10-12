@@ -12,6 +12,10 @@
  *       唯一匹配 → token；`@昵称#id8` / `@id8` → token；
  *       同名歧义或匹配不到 → **原样保留**（当普通文本），并如实回报给调用方提示用户
  *
+ *   · **V6 起**：改写的同时产出 `mentions: [完整 EndpointId]`（进签名、进消息）——
+ *     它才是寻址的真相；文本里的 token 降级为**渲染锚点**（历史/别人看到的名字
+ *     仍然由渲染时查名册决定）。读旧消息（无 mentions 字段）时仍然解析文本 token。
+ *
  * ## 为什么不是昵称寻址
  *
  * 同名、改名、昵称为空，都会让"这条消息到底在 @ 谁"变得不确定；
@@ -72,8 +76,15 @@ export function segments(text, members = currentMembers(), self = null) {
   return out;
 }
 
-/** 这条消息是否 @ 了我 */
-export function mentionsMe(text, myId) {
+/**
+ * 这条消息是否 @ 了我。
+ * V6 起**优先看结构化 mentions**（寻址的真相）；文本 token 是 v5 消息的兜底。
+ */
+export function mentionsMe(text, myId, mentions = []) {
+  const full = String(myId ?? '').toLowerCase();
+  if (full && Array.isArray(mentions) && mentions.some((m) => String(m).toLowerCase() === full)) {
+    return true;
+  }
   const mine = id8Of(myId);
   if (!mine) return false;
   for (const m of String(text ?? '').matchAll(TOKEN_RE)) {
@@ -127,12 +138,25 @@ const LEADING = "(^|[\\s，。！？、；：,.!?;:()\\[\\]{}\"「」“”'’]
 export function resolveDraft(text, roster = members) {
   const ambiguous = [];
   const unresolved = [];
+  // V6：改写成 token 的同时，把这几个 token 对应的**完整端点 id** 收进 mentions ——
+  // 它才是寻址的真相；文本里的 token 只是渲染锚点。找不到完整 id（成员不在名册里）
+  // 就不收：文本 token 兜底（v6 端仍认 token）。
+  const mentions = [];
+  const addMention = (fullId) => {
+    const s = String(fullId ?? '').toLowerCase();
+    if (s && !mentions.includes(s)) mentions.push(s);
+  };
+  const fullIdByPrefix = (prefix) =>
+    roster.find((p) => String(p.id).toLowerCase().startsWith(prefix))?.id ?? '';
 
   // ① 显式带 id 的两种写法 → 规范 token（人打的，或补全菜单插入的消歧形式）
   //    `@昵称#id8` / `@id8` 都归一到 `@id8`
   let out = String(text ?? '').replace(
     new RegExp(`${LEADING}@([^\\s@#]{1,40})?#([0-9a-f]{8})(?![0-9a-f])`, 'g'),
-    (_m, lead, _nick, id) => `${lead}${tokenFor(id)}`,
+    (_m, lead, _nick, id) => {
+      addMention(fullIdByPrefix(String(id).toLowerCase()));
+      return `${lead}${tokenFor(id)}`;
+    },
   );
 
   // ② 裸 `@昵称` → 只有**唯一**匹配才改写
@@ -140,11 +164,14 @@ export function resolveDraft(text, roster = members) {
     new RegExp(`${LEADING}@([^\\s@#]{1,40})`, 'g'),
     (whole, lead, nick) => {
       const hits = roster.filter((p) => p.nickname === nick);
-      if (hits.length === 1) return `${lead}${tokenFor(hits[0].id)}`;
+      if (hits.length === 1) {
+        addMention(hits[0].id);
+        return `${lead}${tokenFor(hits[0].id)}`;
+      }
       if (hits.length > 1) { ambiguous.push(nick); return whole; }
       unresolved.push(nick);
       return whole;
     },
   );
-  return { text: out, ambiguous, unresolved };
+  return { text: out, mentions, ambiguous, unresolved };
 }

@@ -138,8 +138,15 @@ export class AgentClient extends EventEmitter {
     });
   }
 
-  say(text: string): Promise<{ id: string; ts: number }> {
-    return this.request('say', { text }, 60_000) as Promise<{ id: string; ts: number }>;
+  /**
+   * 发言（自动签名）。
+   *
+   * `mentions`：这条消息 @ 的**端点 id 列表**（V6 起结构化寻址就靠它；
+   * 文本里的 `@<id8>` 只是渲染锚点）。不传 = 没有 @ 任何人。
+   */
+  say(text: string, mentions?: string[]): Promise<{ id: string; ts: number }> {
+    const body = mentions?.length ? { text, mentions } : { text };
+    return this.request('say', body, 60_000) as Promise<{ id: string; ts: number }>;
   }
 
   /**

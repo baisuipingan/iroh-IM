@@ -484,7 +484,7 @@ export const composer = {
       //    红色气泡（同一条消息在时间线上出现两次，一次正常一次标红）。
       let textOk = true;
       if (body) {
-        const r = await this._push(body, room);
+        const r = await this._push(body, room, resolved.mentions);
         textOk = r.ok;
         if (!r.ok) {
           failReason = r.reason;
@@ -539,8 +539,9 @@ export const composer = {
 
   /** 直接发一段文字（重发气泡用），成功返回 true */
   async pushText(text) {
-    // 与 send() 同一条规则：重发也要把 `@昵称` 改写成规范 token
-    const r = await this._push(resolveDraft(String(text)).text);
+    // 与 send() 同一条规则：重发也要把 `@昵称` 改写成规范 token（并带上结构化 mentions）
+    const resolved = resolveDraft(String(text));
+    const r = await this._push(resolved.text, undefined, resolved.mentions);
     if (!r.ok) {
       bus.emit(EV.SEND_FAILED, { text, reason: r.reason, failed: { el: null } });
       return false;
@@ -564,9 +565,9 @@ export const composer = {
    * `room` 由调用方传入并**在 await 之前定好**：这一步要等网络往返，
    * 期间用户可能已经切房间，用 `this.room` 会把消息渲染进错误的时间线（P3-14）。
    */
-  async _push(payload, room) {
+  async _push(payload, room, mentions = []) {
     try {
-      const m = await net.send(payload);
+      const m = await net.send(payload, mentions);
       bus.emit(EV.MSG, { room: room ?? this.room, message: m, mine: true, isHistory: false });
       return { ok: true, reason: '' };
     } catch (e) {
