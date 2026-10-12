@@ -24,7 +24,8 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
   --nick NAME           房间里的显示名（同时作为默认 @提及名）
   --agent-bin PATH      iroh-agent 二进制（默认 $IROH_AGENT_BIN 或 PATH 里的 iroh-agent）
   --agent-args JSON     追加给 serve 的参数（如 '["--nick","覆盖名"]'）
-  --brain rule|command  大脑类型（默认 rule）
+  --brain rule|command|pi-sdk|acp
+                        大脑类型（默认 rule）
   --mention NAME        @提及触发（默认用 --nick；--no-mention 关掉）
                         ⚠️ 触发方式只有 @ —— 原来的 ! 前缀已于 2026-10-12 删除
   --respond-to-all      所有消息都触发（噪音大，慎用）
@@ -95,6 +96,12 @@ const VALUE_FLAGS = new Set([
   'pi-append-prompt',
   'pi-prompt-template',
   'pi-cwd',
+  'acp-bin',
+  'acp-args',
+  'acp-cwd',
+  'acp-permission',
+  'acp-narrate',
+  'acp-timeout-ms',
   'pi-tools',
   'pi-model',
   'tools',
@@ -132,6 +139,12 @@ interface Flags {
   piCwd?: string;
   piTools?: string;
   piModel?: string;
+  acpBin?: string;
+  acpArgs?: string;
+  acpCwd?: string;
+  acpPermission?: string;
+  acpNarrate?: string;
+  acpTimeoutMs?: string;
   tools?: string;
   fetchAllow?: string;
   files?: string;
@@ -254,7 +267,35 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
       });
     });
   }
-  throw new Error(`未知 brain：${kind}（支持 rule | command | pi-sdk；SDK 接法见 README）`);
+  if (kind === 'acp') {
+    // ACP 后端（首选接入方式，见 docs/agent-as-member-plan.md §1 ⑦）：
+    // 我们是 ACP 客户端，agent 是 ACP 服务端 —— 换 agent 只换这一份 spawn 配置。
+    return new AsyncBrain(async () => {
+      // ⚠️ 动态 import：没装 ACP agent 时，其它三条路照常能用
+      const { createAcpBrain } = await import('./agent-io/acp.ts');
+      const cwd = flags.acpCwd ?? process.cwd();
+      const permission = flags.acpPermission === 'allow-all' ? 'allow-all' : 'deny';
+      if (permission === 'allow-all') {
+        // 不阻止（用户明确要求），但必须说出来 —— 房间里任何人都可能诱导它执行命令
+        log('[cli] ⚠️ --acp-permission=allow-all：agent 的工具调用**一律放行**。' +
+            '这只适合"先把功能对出来"，别长期这么跑（约束另开一期）');
+      }
+      log(
+        `[cli] acp 后端：bin=${flags.acpBin ?? 'claude-code-acp'} cwd=${cwd} ` +
+          `permission=${permission} narrate=${flags.acpNarrate === 'off' ? 'off' : 'tools'}`,
+      );
+      return await createAcpBrain({
+        bin: flags.acpBin ?? 'claude-code-acp',
+        args: flags.acpArgs ? (parseJsonArray(flags.acpArgs, '--acp-args') as string[]) : [],
+        cwd,
+        permission,
+        narrate: flags.acpNarrate === 'off' ? 'off' : 'tools',
+        promptTimeoutMs: num(flags.acpTimeoutMs, 5 * 60 * 1000),
+        log: (...args2: unknown[]) => log(args2.map(String).join(' ')),
+      });
+    });
+  }
+  throw new Error(`未知 brain：${kind}（支持 rule | command | pi-sdk | acp）`);
 }
 
 /** `--pi-tools` 解析：none / read-only / all / 逗号名单（如 read,weather）。 */

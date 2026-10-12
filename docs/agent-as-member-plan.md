@@ -202,5 +202,6 @@ iOS 端实现；UI 改版；性能压测；把 `!` 加回来（任何形式）�
 | B1（契约扶正） | ✅ 已完成 | `docs/release-2026-10-12-adapter-contract-split.md`；`docs/agent-daemon-protocol.md` 改成**适配器契约**（"必须做/实现自由"两栏表；状态更新为"黄金转录 + TS 适配器都已落地"） |
 | B2（room / agent-io 拆分） | ✅ 已完成 | 全部 `git mv`（保历史）：`src/room/`（协议+客户端+成员策略）与 `src/agent-io/`（`index.ts` 接口 + rule/command/pi-sdk/tools）；零行为变化（tsc / 11 项单测 / 协议闸门 / 活体验证全过）；顺带修掉 `adapter.ts` 里"还写着 `!` 前缀"的过时注释 |
 | B5（非 Rust 示例） | ✅ 已完成（提前） | `agent-pi/examples/minimal-supervisor.ts`：**40 行、不 import 仓库任何代码**，只按契约起 daemon/等 hello/校验版本/@id8 回话；活体验证：另一个房间 `@89cc2cec ping` → 回 `收到：ping` |
-| B3（ACP 后端）/ B4（过程可见） | ⏳ 待做 | 下一期：`agent-io/acp.ts`（spawn `claude-code-acp`，权限 `allow-all` 开关默认关）+ 把 `session/update` 的工具调用/权限请求映射进房间（复用 `Plugin` 事件通道） |
+| B3（ACP 后端）+ B4（过程可见） | ✅ 已完成 | `docs/release-2026-10-12-acp-backend.md`；`agent-io/acp.ts` + `--brain acp`（spawn 配置一组开关）；权限默认**拒绝**、`allow-all` 显式开；工具调用/权限请求**在房间里看得见**；假 ACP agent + 5 条确定性单测；**真实 `claude-code-acp` 端到端**：`🔧 Terminal`→答复、`🔧 Write`→`⚠️ 已按 allow-all 批准`→沙箱里真的出现 `hello.txt`；`verify.sh all` 退出码 0。**未上线**（线上仍是 pi-sdk；换不换是产品决定） |
+| B 期收尾 | ✅ 已完成 | B1/B2/B5/B3/B4 全部完成 → **B 期结束** |
 | A / C / V6 | ⏳ 待做 | —— |

@@ -1,0 +1,107 @@
+#!/usr/bin/env node
+/* ============================================================================
+ * fake-acp-agent.mjs · 一个**最小的 ACP agent**（只为测客户端，不接任何模型）
+ *
+ * 为什么要有它：ACP 客户端的逻辑（流式拼接、工具调用播报、权限决策、超时取消、
+ * 进程死了重建）如果只能靠真实 agent 来测，那就**又慢又贵还不可控**。
+ * 这个假 agent 把它们变成确定性的单测（`scripts/test-acp-test` 那套：
+ * `scripts/test-acp-brain.mjs`）。
+ *
+ * 行为（判据全在 prompt 文本里，方便测试挑）：
+ *   · initialize → 回 protocolVersion + agentInfo
+ *   · session/new → 回 sessionId
+ *   · session/prompt →
+ *       1) 流式发两条 agent_message_chunk
+ *       2) 发一个 tool_call（客户端应当播报）
+ *       3) 反向请求 session/request_permission（客户端必须回 outcome）
+ *       4) 把它的决定**写进回复文本**（`（权限=…）`），这样测试只用看返回值
+ *       5) 回 {stopReason:'end_turn'}
+ *   · prompt 含 `__die__` → 直接退出（测"下次说话时重新拉起"）
+ *   · prompt 含 `__slow__` → 一直不回；收到 `session/cancel` 后回 cancelled 并说明
+ * ==========================================================================*/
+import { createInterface } from 'node:readline';
+
+let nextId = 1;
+const pending = new Map();
+const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+const notify = (method, params) => send({ jsonrpc: '2.0', method, params });
+const request = (method, params) =>
+  new Promise((resolve) => {
+    const id = nextId++;
+    pending.set(id, resolve);
+    send({ jsonrpc: '2.0', id, method, params });
+  });
+
+const SESSION = 'fake-session-1';
+let cancelled = false;
+
+async function prompt(params) {
+  const text = String(params?.prompt?.[0]?.text ?? '');
+  if (text.includes('__die__')) {
+    process.stderr.write('[fake-acp] 按指示退出\n');
+    process.exit(3);
+  }
+  const chunk = (t) =>
+    notify('session/update', { sessionId: SESSION, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: t } } });
+
+  if (text.includes('__slow__')) {
+    cancelled = false;
+    while (!cancelled) await new Promise((r) => setTimeout(r, 50));
+    chunk('（已按取消停止）');
+    return { stopReason: 'cancelled' };
+  }
+
+  chunk('你好，');
+  chunk('我是假 agent。');
+  notify('session/update', {
+    sessionId: SESSION,
+    update: { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Bash: echo hi', name: 'Bash', status: 'pending' },
+  });
+  const permission = await request('session/request_permission', {
+    sessionId: SESSION,
+    toolCall: { toolCallId: 't1', title: 'Bash: echo hi' },
+    options: [
+      { optionId: 'a1', name: '允许一次', kind: 'allow_once' },
+      { optionId: 'a2', name: '总是允许', kind: 'allow_always' },
+      { optionId: 'r1', name: '拒绝一次', kind: 'reject_once' },
+      { optionId: 'r2', name: '总是拒绝', kind: 'reject_always' },
+    ],
+  });
+  const outcome = permission?.result?.outcome ?? permission?.outcome ?? {};
+  chunk(`（权限=${outcome.outcome === 'selected' ? outcome.optionId : outcome.outcome ?? '无'}）`);
+  return { stopReason: 'end_turn' };
+}
+
+createInterface({ input: process.stdin }).on('line', async (line) => {
+  let frame;
+  try {
+    frame = JSON.parse(line);
+  } catch {
+    return;
+  }
+  // 我们发出去的请求的回执
+  if (frame.id !== undefined && (frame.result !== undefined || frame.error !== undefined) && pending.has(Number(frame.id))) {
+    pending.get(Number(frame.id))(frame);
+    pending.delete(Number(frame.id));
+    return;
+  }
+  if (frame.method === 'session/cancel') {
+    cancelled = true;
+    process.stderr.write('[fake-acp] 收到 session/cancel\n');
+    return;
+  }
+  if (frame.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: frame.id, result: { protocolVersion: 1, agentInfo: { name: 'fake-acp', version: '1' }, agentCapabilities: {} } });
+    return;
+  }
+  if (frame.method === 'session/new') {
+    send({ jsonrpc: '2.0', id: frame.id, result: { sessionId: SESSION } });
+    return;
+  }
+  if (frame.method === 'session/prompt') {
+    const result = await prompt(frame.params);
+    send({ jsonrpc: '2.0', id: frame.id, result });
+    return;
+  }
+  send({ jsonrpc: '2.0', id: frame.id, error: { code: -32601, message: `不认识 ${frame.method}` } });
+});
