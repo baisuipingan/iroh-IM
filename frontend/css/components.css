@@ -812,6 +812,18 @@ select.dialog__field {
 .roster__top { display: flex; align-items: baseline; gap: 6px; }
 .roster__name { font-size: var(--fs-md); }
 .roster__id { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--fg-faint); }
+/* A4：成员状态（在线 / 忙碌 / 离线）—— 在线=在场；忙碌=名片标签「忙碌」；离线=最近说过但不在场 */
+.roster__status {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-caption); color: var(--ok-text);
+}
+.roster__status::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+.roster__status[data-status='busy'] { color: var(--c-warn); }
+.roster__status[data-status='offline'] { color: var(--fg-faint); }
+.roster__row--offline { opacity: .85; }
 .roster__bio-line { margin-top: 2px; font-size: var(--fs-sm); color: var(--fg-muted); line-height: 1.55; }
 .roster__bio { display: block; word-break: break-word; }
 .roster__tags { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }

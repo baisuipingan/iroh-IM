@@ -116,6 +116,63 @@ time.sleep(0.8)
 recent = b.ev("JSON.stringify([...document.querySelectorAll('.roster__recent')].map(e => e.textContent))")
 tt.check("能展开看他在这个房间说过什么", SENTENCE in recent, recent[:220])
 
+# ── F. A4：成员状态（在线 / 忙碌 / 离线）在花名册可见 ────────────────
+rows = json.loads(roster_text(b))
+row_a = next((r for r in rows if BIO in r), "")
+tt.check("花名册把在场成员标成「在线」", "在线" in row_a, row_a[:200])
+
+# B 把名片标签加上「忙碌」→ A 的花名册里 B 那行显示"忙碌"（标签约定，零协议变更）
+b.ev("window.__iroh_openSettings()")
+time.sleep(0.9)
+b.ev("document.querySelector('.set-row[data-act=\"profile\"]').click()")
+time.sleep(0.5)
+b.ev("(() => { document.getElementById('dlg-bio').value = %s; document.getElementById('dlg-tags').value = %s; return 1; })()"
+     % (json.dumps("在跑任务，回复会慢"), json.dumps("忙碌 ts")))
+b.ev("document.getElementById('dlg-ok').click()")
+time.sleep(2.5)
+row_b = ""
+for _ in range(20):
+    rows = json.loads(roster_text(a))
+    row_b = next((r for r in rows if "在跑任务，回复会慢" in r), "")
+    if "忙碌" in row_b:
+        break
+    time.sleep(1)
+tt.check("名片的「忙碌」标签 → 花名册显示忙碌状态", "忙碌" in row_b, row_b[:200])
+
+# 离线：E 说一句后离开（广播 leaveRoom）→ A 的花名册出现"离线"分组 + 一键 @
+tab_e, e = boot('e' * 64, 'e')
+E_SAY = "我说一句就走"
+send(e, E_SAY)
+e_msg = None
+for _ in range(20):
+    time.sleep(1)
+    e_msg = next((m for m in history(a) if m.get("text") == E_SAY), None)
+    if e_msg:
+        break
+tt.check("前提：离线前的话题已经到达 A 的时间线", e_msg is not None)
+E_ID8 = str((e_msg or {}).get("from", ""))[:8].lower()
+e.ev("(async () => { await window.__iroh_net.client.call('leaveRoom'); return 1; })()", timeout=30)
+
+offline_row = ""
+rows = []
+for _ in range(60):
+    time.sleep(1)
+    rows = json.loads(roster_text(a))
+    offline_row = next((r for r in rows if "离线" in r and E_ID8 in r), "")
+    if offline_row:
+        break
+tt.check("离线成员出现在花名册（状态=离线）", bool(offline_row),
+         json.dumps(rows, ensure_ascii=False)[:220])
+tt.check("在线分组里没有把他算进去", not any("在线" in r and E_ID8 in r for r in rows))
+
+# 一键 @ 离线成员：插入带 #id8 的草稿（发送前会被归一成规范 token）
+a.ev("(() => { const row = [...document.querySelectorAll('.roster__row')].find(r => r.dataset.offline && r.textContent.includes(%s)); "
+     "row?.querySelector('button[data-act=\"mention-offline\"]')?.click(); return 1; })()" % json.dumps(E_ID8))
+time.sleep(0.5)
+draft = a.ev("document.getElementById('input').value")
+tt.check("离线成员可以一键 @（草稿带 #id8，发送时归一成 token）", E_ID8 in draft and "#" in draft, draft)
+a.ev("document.getElementById('input').value = ''")
+
 # ── C2. 新进房的人也能看到（这一条才是验收标准）─────────────────────
 tab_c, c = boot('c' * 64, 'c')
 seen = False
