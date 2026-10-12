@@ -87,4 +87,7 @@ export const EV = {
   // **房间能力自定义的事件**（Rust 侧 `RoomEvent::Plugin{name,payload}`）。
   // 核心不理解内容，只负责原样端过来；谁认领由 `js/plugins.js` 的注册表决定。
   PLUGIN: 'plugin',                 // { name, payload }
+  // 名片表有更新（R2a）：从历史/实时消息里学到某个成员的新名片。
+  // ⚠️ 事件只带 room —— 具体内容问 `js/profile.js`（它才是那份状态的持有者）。
+  PROFILES: 'profiles',             // { room }
 };

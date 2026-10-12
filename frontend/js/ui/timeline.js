@@ -12,6 +12,7 @@ import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
 import { segments, currentMembers } from '../mention.js';
+import { isProfileText, parseProfile, learn as learnProfiles } from '../profile.js';
 import { avatar } from './primitives.js';
 import * as U from '../util.js';
 
@@ -43,6 +44,8 @@ export const timeline = {
   _oldestMessage: null,
   _filePositions: new Map(),
   _prepending: false,
+  /** 本次加载过的最近消息（花名册的"他最近说过什么"用；上限 200 条） */
+  _recent: [],
 
   /**
    * 现在「几何上是不是真的在底部」—— **实时算**。
@@ -152,6 +155,7 @@ export const timeline = {
     this._syncedMessage = null;
     this._oldestMessage = null;
     this._filePositions.clear();
+    this._recent = [];      // 换房要清：花名册的"最近说过什么"只该看当前房间
     this.room = room;
     this.me = me;
     this.seen.clear();
@@ -287,6 +291,20 @@ export const timeline = {
       if (card) this._insertMessage(card, m);
       return;
     }
+
+    // 「名片」：一条**约定格式的签名消息**（见 js/profile.js）—— 它不是发言，
+    // 所以不插聊天气泡，只插一行紧凑提示；同时把名片记进本地表（花名册要用）。
+    // 与文件分支同理：仍然要推进"最新消息位置"，否则后面那条真消息会算错时间分隔线。
+    if (isProfileText(m.text)) {
+      learnProfiles(this.room, [m]);
+      this._insertMessage(this._profileLine(m), m);
+      return;
+    }
+
+    // 花名册的"他最近说过什么"要用：留一份**本次加载过的**最近消息（上限 200 条）。
+    // ⚠️ 只覆盖本次会话加载到的历史，不是全部历史 —— 卡片上要如实说明。
+    this._recent.push(m);
+    if (this._recent.length > 200) this._recent.shift();
 
     // 不在底部时收到实时消息 → 记下第一条，插"新消息"分隔线
     // ⚠️ 用 `atBottom`（用户意图，sticky），**不是**实时几何 ——
@@ -986,6 +1004,23 @@ export const timeline = {
     for (const box of document.querySelectorAll('.bubble[data-mention-src]')) {
       this._fillMentions(box, box.dataset.mentionSrc);
     }
+  },
+
+  /** 名片更新渲染成一行紧凑提示（它不是发言，别占一个气泡） */
+  _profileLine(m) {
+    const p = parseProfile(m.text) ?? { bio: '', tags: [] };
+    const el = document.createElement('div');
+    el.className = 'tl-profile';
+    const who = document.createElement('span');
+    who.className = 'tl-profile__who';
+    who.textContent = m.nickname || '有人';
+    const what = document.createElement('span');
+    const parts = [];
+    if (p.bio) parts.push(p.bio);
+    if (p.tags.length) parts.push(p.tags.map((t) => `#${t}`).join(' '));
+    what.textContent = parts.length ? `更新了名片：${parts.join('　')}` : '更新了名片（清空了）';
+    el.append(who, what);
+    return el;
   },
 
   /** 点图片放大：全屏遮罩，点任意处关闭（微信的行为） */

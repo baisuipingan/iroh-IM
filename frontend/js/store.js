@@ -20,6 +20,8 @@ const KEYS = {
   /** room -> 未读数 */
   unread: `${NS}unread`,
   hidden: `${NS}hidden-messages`,
+  /** room -> { memberId: {bio, tags, ts} }：从历史里学到的名片（R2a） */
+  profiles: `${NS}profiles`,
 };
 
 const sessionValues = new Map();
@@ -224,6 +226,7 @@ export const store = {
     setValue(KEYS.lastRoom, null);
     setValue(KEYS.prefs, null);
     setValue(KEYS.hidden, null);
+    setValue(KEYS.profiles, null);
     store.clearPreviews();
     store.clearUnread();
   },
@@ -235,5 +238,18 @@ export const store = {
   },
   isHidden(room, id) {
     return (readJSON(KEYS.hidden, {})[room] || []).includes(id);
+  },
+
+  /**
+   * 名片表：`{ room: { memberId: {bio, tags, ts} } }`（R2a）。
+   *
+   * 为什么要持久化：名片是从**历史消息**里学来的，而历史每次进房都要重新拉 ——
+   * 不存一份的话，刷新页面后"某人上次说的简介"就丢了，得等他再发一次。
+   */
+  profiles() {
+    return readJSON(KEYS.profiles, {});
+  },
+  setProfiles(map) {
+    writeJSON(KEYS.profiles, map ?? {});
   },
 };

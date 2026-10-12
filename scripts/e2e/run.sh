@@ -93,4 +93,6 @@ run_case "relay-enabled"   scripts/e2e/relay-enabled.py
 run_case "plugin-channel"  scripts/e2e/plugin-channel.py
 # R1：@ 按 id 寻址（昵称只给人看）—— 同名/改名都不该 @ 错人
 run_case "mention-id"      scripts/e2e/mention-id.py
+# R2a：名片 = 签名消息 + 本地聚合（能力发现靠名字/简介/发言，不靠清单）
+run_case "profile"         scripts/e2e/profile.py
 exit "$fail"

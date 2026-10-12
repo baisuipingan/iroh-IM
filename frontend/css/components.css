@@ -779,6 +779,55 @@ select.dialog__field {
   font-weight: 500;
 }
 
+/* --------------------------------------------------------------------------
+ * 名片（R2a）
+ *
+ *   名片 = 一条约定格式的**签名消息**（见 js/profile.js）。它不是发言，
+ *   所以在时间线上只占一行紧凑提示，不占一个聊天气泡。
+ * ------------------------------------------------------------------------ */
+.tl-profile {
+  align-self: center;
+  max-width: 86%;
+  margin: 2px 0;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--c-brand) 8%, transparent);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.tl-profile__who { color: var(--fg); font-weight: 600; margin: 0 4px; }
+
+/* --------------------------------------------------------------------------
+ * 花名册（R2a）：房间里的人 + 名片 + 最近说过什么
+ * ------------------------------------------------------------------------ */
+.roster__hint { font-size: var(--fs-sm); color: var(--fg-muted); margin-bottom: 10px; line-height: 1.6; }
+.roster__row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 9px 4px;
+  border-top: 1px solid var(--line);
+}
+.roster__row:first-of-type { border-top: none; }
+.roster__main { flex: 1; min-width: 0; }
+.roster__top { display: flex; align-items: baseline; gap: 6px; }
+.roster__name { font-size: var(--fs-md); }
+.roster__id { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--fg-faint); }
+.roster__bio-line { margin-top: 2px; font-size: var(--fs-sm); color: var(--fg-muted); line-height: 1.55; }
+.roster__bio { display: block; word-break: break-word; }
+.roster__tags { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.roster__tag {
+  font-style: normal; font-size: var(--fs-caption);
+  padding: 1px 7px; border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--c-brand) 12%, transparent); color: var(--c-brand);
+}
+.roster__none { color: var(--fg-faint); }
+.roster__acts { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.roster__recent { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--line); }
+.roster__msg {
+  font-size: var(--fs-sm); color: var(--fg-muted); line-height: 1.5;
+  padding: 1px 0; word-break: break-word;
+}
+
 .msg--me { align-self: flex-end; flex-direction: row-reverse; }
 .msg--me .msg__meta { padding-left: 0; padding-right: 2px; justify-content: flex-end; }
 .msg--me .bubble {

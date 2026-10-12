@@ -21,6 +21,7 @@ import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
 import { dialog } from './dialog.js';
+import { roster } from './roster.js';
 import { collectRelayModel } from '../relay-model.js';
 
 const $ = (id) => document.getElementById(id);
@@ -80,7 +81,9 @@ export const motion = {
     // 成员药丸 → 成员页（没进房时它是隐藏的，不会点到这里）
     const members = $('room-members');
     // 「在线成员」页已合并进连接状态页（名单收在「在线成员」那一行下面）
-    if (members) members.onclick = () => this.host.show('status');
+    // 点"人数"看花名册（R2a）：谁在场、各自的名片、最近说过什么、一键 @。
+    // 节点连接状态仍在花名册之外（侧栏"连接状态"页），两者是不同的问题。
+    if (members) members.onclick = () => roster.open();
 
     // 提示音开关：直接改真实偏好（设置页里那个开关的另一个入口）
     const sound = $('btn-head-sound');

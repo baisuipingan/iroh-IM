@@ -27,6 +27,8 @@ import { theme } from '../theme.js';
 import { permission as notifyPermission } from '../notify.js';
 import * as U from '../../util.js';
 import { avatar, ico, WALLPAPERS } from '../primitives.js';
+import { roster } from '../roster.js';
+import { of as profileOf } from '../../profile.js';
 
 /* ------------------------------------------------------------------ 行构造器
  *
@@ -104,6 +106,8 @@ function renderGroups(hit) {
       label: '资料', icon: 'card',
       rows: [
         rowNav('nick', '昵称', store.nick(), '房间里别人看到的名字'),
+        // ⚠️ 说明文字必须能在一行内放下（面板只有 268~300px）——见 redesign.py 的守卫
+        rowNav('profile', '我的名片', profileLine(), '一句话介绍自己能做什么'),
         rowField(
           '发送快捷键', '回车直接发送',
           `<select class="mini-select" data-pref="sendKey">
@@ -259,6 +263,18 @@ let themeHintReader = () => '';
 
 function sidebarState() {
   return stateReader();
+}
+
+/** 「我的名片」那一行右侧显示什么（没填就如实说"未填写"） */
+function profileLine() {
+  const room = net.desiredRoom();
+  const p = room ? profileOf(room, net.endpoint_id()) : null;
+  // 右侧取值那一列是 `flex: none`（不收缩）—— 太长会把左边的说明挤到折行，
+  // 所以这里截断显示；完整简介点进去看。
+  const short = (s) => (s.length > 12 ? `${s.slice(0, 12)}…` : s);
+  if (p?.bio) return short(p.bio);
+  if (p?.tags?.length) return p.tags.map((t) => `#${t}`).join(' ');
+  return '未填写';
 }
 function themeHint() {
   return themeHintReader();
@@ -451,6 +467,7 @@ export function settingsAction(host, act, el) {
     bus.emit(EV.TIP, '已导出');
     return;
   }
+  if (act === 'profile') return roster.editMine();
   if (act === 'nick') {
     return dialog.ask({
       title: '设置昵称',
