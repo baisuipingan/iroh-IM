@@ -521,6 +521,7 @@ where
             Err(_) => anyhow::bail!("对端长时间无响应（可能已离开或刷新了页面）"),
         }
         t_write_ms += crate::room::now_ms().saturating_sub(t1);
+        note_transfer_activity();
 
         // 诊断：周期性打印 QUIC 连接统计（RTT / 拥塞窗口 / 丢包 / 在途字节）。
         // 这是判断"慢"到底卡在拥塞窗口还是带宽的唯一直接证据。
@@ -623,6 +624,22 @@ where
 /// 那条管"传输中停顿"，这条管"连开始都没开始"。
 pub const RECV_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// **传输活动信号**：任何一块数据读写都会刷新它（见 [`note_transfer_activity`]）。
+///
+/// 房间侧用它做两件事（都是为对抗"慢链路把心跳拖过 TTL"这个实测现象）：
+///   1. 传输在途时把**掉线判定 TTL 放宽到 3×**（`room.rs::effective_presence_ttl`）；
+///   2. 传输在途时**心跳节奏 10s → 3s**（`room.rs` 的心跳任务）。
+///
+/// 背景（2026-10-12，用户报障）：relay-only 的慢上行传大文件时，心跳被拖过 35s
+/// TTL，房间里成员互相"退出又进来"。presence 是软状态，晚判没有正确性代价。
+pub static LAST_TRANSFER_ACTIVITY_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// 记一次"传输还在动"。发送/接收每块都调（成本：一次原子写）。
+pub fn note_transfer_activity() {
+    LAST_TRANSFER_ACTIVITY_MS.store(crate::room::now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 接收一个文件：消费 `FileService` 派发过来的块流，写进 `sink`，
 /// 校验后把结果通过 `ack_tx` 回给服务层（服务层再转达给发送方）。
 ///
@@ -670,6 +687,7 @@ where
                 done += 1;
                 got_bytes += bytes.len() as u64;
                 on_progress(done, n_chunks, got_bytes);
+                note_transfer_activity();
             }
             FileChunk::End { ok, reason } => {
                 if !ok {

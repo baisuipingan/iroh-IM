@@ -98,6 +98,41 @@ const PRESENCE_TTL_MS: u64 = 35_000;
 /// 同时完全不影响成员表的 10s/35s。
 const FILE_HB_MS: u64 = 3_000;
 // 注："文件清单多久算过期"是**接收侧**的判定，放在前端（FILE_TTL_MS）。
+
+/// "传输在途"的判定窗口：最后一块数据之后 60 秒内都算。
+const TRANSFER_ACTIVE_WINDOW_MS: u64 = 60_000;
+/// **传输在途时**的成员心跳间隔（更快；见下面 `member_due` 的注释）。
+const TRANSFER_PRESENCE_INTERVAL: Duration = Duration::from_secs(3);
+
+/// 掉线判定该用的 TTL（纯函数，便于单测）：**传输在途时放宽到 3×**。
+///
+/// 背景（2026-10-12 用户报障"传文件时成员频繁退出又进来"）：relay-only 的慢上行
+/// 会把链路打满，实测心跳会被拖过默认 35s → 双方互相误判掉线。presence 本来就是
+/// 软状态（见 `RoomSnapshot` 的注释），**晚一点判掉线没有正确性代价**；
+/// 传输静默 60 秒后自动恢复原值，不影响正常场景的掉线检测速度。
+fn effective_presence_ttl(now: u64, last_transfer_ms: u64) -> u64 {
+    if last_transfer_ms != 0 && now.saturating_sub(last_transfer_ms) < TRANSFER_ACTIVE_WINDOW_MS {
+        PRESENCE_TTL_MS * 3
+    } else {
+        PRESENCE_TTL_MS
+    }
+}
+
+/// 读传输活动信号、算出这一拍该用的 TTL。
+fn presence_ttl_now(now: u64) -> u64 {
+    effective_presence_ttl(
+        now,
+        crate::transfer_orchestrator::LAST_TRANSFER_ACTIVITY_MS
+            .load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// 是否"传输在途"（同一个窗口；心跳节奏用它）。
+fn transfer_active(now: u64) -> bool {
+    let last = crate::transfer_orchestrator::LAST_TRANSFER_ACTIVITY_MS
+        .load(std::sync::atomic::Ordering::Relaxed);
+    last != 0 && now.saturating_sub(last) < TRANSFER_ACTIVE_WINDOW_MS
+}
 // 这里不定义，避免同一个数字在两边各写一份、日后漂移。
 /// 心跳任务的内部 tick。1 秒一跳，用来分别给"成员心跳"和"文件心跳"计时。
 const HB_TICK: Duration = Duration::from_secs(1);
@@ -1160,6 +1195,18 @@ pub fn new_snapshots() -> Snapshots {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// 任何**验签通过**的帧都是"他还活着"的证据 → 刷新 `last_seen_ms`（只刷已知成员）。
+///
+/// 为什么需要：掉线判定原来只看 presence 心跳；拥塞/传输期间心跳可能被拖住，
+/// 而消息、文件控制、名片帧照样在流 —— 它们同样是生命证据，别把人误判成掉线。
+fn touch_peer(inner: &Mutex<Inner>, id: &str, now: u64) {
+    if let Ok(mut g) = inner.lock() {
+        if let Some(entry) = g.peers.get_mut(id) {
+            entry.last_seen_ms = entry.last_seen_ms.max(now);
+        }
+    }
+}
+
 /// 记一个人（或刷新他的状态），并顺手清掉已经超时的成员。
 pub fn snapshot_upsert(snaps: &Snapshots, room: &str, m: MemberSnapshot) {
     let now = now_ms();
@@ -1170,7 +1217,7 @@ pub fn snapshot_upsert(snaps: &Snapshots, room: &str, m: MemberSnapshot) {
     }
     s.at = now;
     s.members
-        .retain(|x| x.id != m.id && now.saturating_sub(x.last_seen_ms) < PRESENCE_TTL_MS);
+        .retain(|x| x.id != m.id && now.saturating_sub(x.last_seen_ms) < presence_ttl_now(now));
     s.members.push(m);
 }
 
@@ -1189,7 +1236,7 @@ pub fn snapshot_get(snaps: &Snapshots, room: &str) -> Option<RoomSnapshot> {
     let mut g = snaps.lock().unwrap();
     let s = g.get_mut(room)?;
     s.members
-        .retain(|x| now.saturating_sub(x.last_seen_ms) < PRESENCE_TTL_MS);
+        .retain(|x| now.saturating_sub(x.last_seen_ms) < presence_ttl_now(now));
     if s.members.is_empty() {
         return None;
     }
@@ -2936,6 +2983,8 @@ impl RoomNode {
                                         warn!("签名无效的消息，丢弃（或来自其它房间）");
                                         continue;
                                     }
+                                    // 验签通过的帧 = 生命证据（拥塞期间心跳可能被拖住，但消息照样在流）
+                                    touch_peer(&inner, &m.from, now_ms());
                                     let mine = m.from == me;
                                     let current = inner
                                         .lock()
@@ -2962,6 +3011,7 @@ impl RoomNode {
                                         warn!("名片帧签名无效，丢弃（或来自其它房间）");
                                         continue;
                                     }
+                                    touch_peer(&inner, &u.from, now_ms());
                                     events
                                         .send(RoomEvent::Profile {
                                             room: room_s.clone(),
@@ -2973,6 +3023,8 @@ impl RoomNode {
                                 Wire::File { c } => {
                                     // 文件控制消息：验签后转成 UI 事件（内容走独立数据流）
                                     if let Some(ctrl) = c.verify(&room_s) {
+                                        // 发送方在 SignedCtrl 上（`ctrl` 是解出来的 FileCtrl，没有 from）
+                                        touch_peer(&inner, &c.from, now_ms());
                                         // ⚠️ **只用 `if let Some(...)` 跳过非法消息**。
                                         //    这里绝不能出现 `return` —— 它位于消费任务的
                                         //    `async move` 体内，`return` 会结束整个房间的
@@ -3093,6 +3145,7 @@ impl RoomNode {
                                     if !q.verify(&room_s) {
                                         continue;
                                     }
+                                    touch_peer(&inner, &q.from, now_ms());
                                     let should_claim = q.want == me
                                         && {
                                             let g = inner.lock().unwrap();
@@ -3176,7 +3229,14 @@ impl RoomNode {
                         }
                     };
                     let now = now_ms();
-                    let member_due = now.saturating_sub(last_member) >= PRESENCE_INTERVAL.as_millis() as u64;
+                    // 传输在途时心跳更快（3s）：慢链路会把普通节奏拖过对端的 TTL，
+                    // 提速让"我们还活着"这句话在拥塞里更容易挤过去（见 FX4 那组常量的注释）。
+                    let member_gap = if transfer_active(now) {
+                        TRANSFER_PRESENCE_INTERVAL.as_millis() as u64
+                    } else {
+                        PRESENCE_INTERVAL.as_millis() as u64
+                    };
+                    let member_due = now.saturating_sub(last_member) >= member_gap;
                     let file_due = !files.is_empty()
                         && now.saturating_sub(last_file) >= FILE_HB_MS;
                     if member_due || file_due {
@@ -3201,7 +3261,8 @@ impl RoomNode {
                     }
                     {
                         let mut g = inner.lock().unwrap();
-                        g.peers.retain(|_, i| now.saturating_sub(i.last_seen_ms) < PRESENCE_TTL_MS);
+                        g.peers
+                            .retain(|_, i| now.saturating_sub(i.last_seen_ms) < presence_ttl_now(now));
                     }
                     {
                         let peers: Vec<PeerInfo> =
@@ -4222,6 +4283,24 @@ mod security_tests {
     }
 
     // ── V6.2：名片状态帧 ──────────────────────────────────────────
+
+    // ── 传输期间的 presence 鲁棒性（2026-10-12 用户报障）──────────────
+
+    #[test]
+    fn 传输期间掉线判定放宽到三倍() {
+        let now = now_ms();
+        assert_eq!(effective_presence_ttl(now, 0), PRESENCE_TTL_MS, "没有传输 = 原值");
+        assert_eq!(
+            effective_presence_ttl(now, now.saturating_sub(5_000)),
+            PRESENCE_TTL_MS * 3,
+            "传输在途 = 放宽到 3×"
+        );
+        assert_eq!(
+            effective_presence_ttl(now, now.saturating_sub(TRANSFER_ACTIVE_WINDOW_MS + 1)),
+            PRESENCE_TTL_MS,
+            "传输静默超过窗口 = 恢复原值"
+        );
+    }
 
     #[test]
     fn v62_名片帧_签名与房间绑定() {

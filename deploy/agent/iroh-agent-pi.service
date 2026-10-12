@@ -37,6 +37,11 @@ Environment=PI_CODING_AGENT_DIR=/opt/iroh-agent/pi-agent
 # 房间/昵称/大脑/文件策略都在这一行里改；改完 daemon-reload + restart
 # ⚠️ `--room` 必须与你实际用的房间**完全一致**：房间名就是命名空间，
 #    进错房间 = 谁也看不见谁（实测踩过：部署到 lobby、人在 patrick）。
+# ⚠️ 文件接收：**当前部署是关的**（`--files off`，2026-10-12 所有者要求：
+#    暂不做"发文件给 agent"）。此前是 `--files accept`（+ 64 MiB / 512 MiB / 落盘目录），
+#    房间里任何人发文件都会被自动接收落盘。要开回来：把 `--files off` 换回
+#    `--files accept --files-max-mb 64 --files-max-total-mb 512 --files-dir /opt/iroh-agent/received`，
+#    并先确认沙箱/权限/落盘分区（见 README「运维」）。
 ExecStart=/opt/node22/bin/node src/cli.ts \
   --room patrick \
   --nick 服务器助手 \
@@ -44,10 +49,7 @@ ExecStart=/opt/node22/bin/node src/cli.ts \
   --pi-model hahacode/gpt-6.1-sol \
   --agent-bin /opt/iroh-agent/bin/agent \
   --tools weather,fetch_url \
-  --files accept \
-  --files-max-mb 64 \
-  --files-max-total-mb 512 \
-  --files-dir /opt/iroh-agent/received
+  --files off
 
 Restart=always
 RestartSec=5
