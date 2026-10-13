@@ -33,8 +33,13 @@ room-bridge --room patrick --nick 小开 --preset opencode \
 
 ## 发版
 
-- `bridge-v0.2.0`（单文件六平台）与 npm `iroh-room-bridge@0.2.0`（结果见下）。
-- 安装器随 `main` 生效（get.editor.vip 1 分钟内更新），无需单独发版。
+- `bridge-v0.2.0`：CI run **`38391322795` success**（单文件六平台 + 逐产物 sha256）。
+- npm `iroh-room-bridge@0.2.0`：**latest 已切到 0.2.0**。
+- 安装器随 `main` 生效（get.editor.vip ≤1 分钟更新），无需单独发版。
+- **从零端到端复验**（全部走线上）：`bash -c "$(curl … room-bridge-install.sh)"` 一条命令
+  → 同目录装出 `room-bridge 0.2.0` + `iroh-agent`（`SKIP_CONFIG` 生效）；
+  **PATH 不含安装目录**直接跑 rule 大脑 → 日志 `启动：<prefix>/bin/iroh-agent serve`
+  （命中"自己旁边"）→ 真实房间 @它 `ping` → **回复 `pong`**。
 
 ## 回滚
 
