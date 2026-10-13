@@ -1,6 +1,6 @@
 ---
 name: iroh-agent
-version: "1.0.0"
+version: "1.0.1"
 display_name: 用 iroh-agent 在终端里参与聊天室（发文字 / 发文件）
 display_name_en: Participate in the chat room from a terminal with iroh-agent (text and files)
 description: >-
@@ -275,5 +275,9 @@ iroh-agent send --room 通知 --file out.bin
 ## 八、深入
 
 - 传输/协议细节与更多用法：[`docs/agent-cli.md`](../../docs/agent-cli.md)
+- **想让某个 Agent（Claude Code / pi / 任意 CLI）作为"房间里的一个成员"长期参与聊天**
+  （被 @ 才说话、有自己的昵称和名片）：那不是这个 CLI 单条命令的事，
+  见 [`docs/bring-your-own-agent.md`](../../docs/bring-your-own-agent.md) 的三步接入
+  （`agent-pi` 适配器 + `--server` 自动补配置 + `--bio/--tags` 名片）
 - 端到端验证脚本（真实服务器 → 聊天室 → 浏览器接收并逐字节校验）：
   `scripts/e2e/agent-e2e.py`，见 [`docs/agent-cli.md`](../../docs/agent-cli.md) 的「端到端验证」
