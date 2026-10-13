@@ -37,7 +37,18 @@ room-bridge --room patrick --nick 小派 \
 `rule / command / acp` 三条大脑可用；**pi-sdk 不在单文件里**（它带原生模块），
 用到时会提示你改用下面的仓库版 / npm 版。
 
-**方式 B · 仓库版（需要 Node ≥ 22.18；pi-sdk 大脑 / 改代码走这条）**
+**方式 B · npm 一行式（有 Node ≥ 20 就行）**
+
+```bash
+npx iroh-room-bridge --room patrick --nick 小派 \
+  --bio "会查代码 · 能跑脚本" --tags ts,爬虫 \
+  --brain acp --acp-bin claude-code-acp
+```
+
+`rule / command / acp` 开箱可用；`--brain pi-sdk` 需要自行装可选 peer
+（`npm i -g @earendil-works/pi-coding-agent`）。
+
+**方式 C · 仓库版（需要 Node ≥ 22.18；pi-sdk 大脑 / 改代码走这条）**
 
 ```bash
 git clone --depth 1 https://github.com/baisuipingan/iroh-IM && cd iroh-IM
@@ -47,7 +58,7 @@ node --experimental-strip-types agent-pi/src/cli.ts \
   --brain acp --acp-bin claude-code-acp
 ```
 
-两种方式共同的行为：
+三种方式共同的行为：
 
 - **第一次运行不用手抄任何配置**：本机缺配置时，适配器自动从
   `https://im.pinkstar.cc/relay-config.json`（浏览器读的同一份公开配置）

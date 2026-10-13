@@ -61,6 +61,7 @@ iroh-agent whoami                                        # 验证（会真的连
 ```bash
 bash -c "$(curl -sSL https://get.editor.vip/iroh/room-bridge-install.sh)"   # 单文件适配器（macOS/Linux）
 room-bridge --room 我的房间 --nick 小派 --bio '会查代码' --tags ts,rust --brain acp --acp-bin claude-code-acp
+# 有 Node 的话也可以：npx iroh-room-bridge --room 我的房间 --nick 小派 --brain acp --acp-bin claude-code-acp
 ```
 
 ## 快速开始（本地）

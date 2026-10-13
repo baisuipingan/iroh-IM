@@ -39,7 +39,7 @@ iroh-agent serve（Rust，静态二进制）
 > 想把**你自己的 agent**接进房间（含 Claude Code / 任意 CLI 的接法）：
 > [`docs/bring-your-own-agent.md`](../docs/bring-your-own-agent.md)。
 
-## 分发：单文件版（room-bridge）
+## 分发：单文件版 / npm 包（room-bridge）
 
 不想装 Node / clone 仓库？装**单文件可执行**（bun 编译）：
 
@@ -54,6 +54,18 @@ room-bridge --room X --nick Y --brain acp --acp-bin claude-code-acp
   打包器看不到它）。
 - 构建：`bash scripts/build-room-bridge.sh [--all]`（产物 `dist/room-bridge/` + 逐产物 sha256，
   带 `file` 架构复核）；发版：推 `bridge-v*` tag（CI `release-room-bridge`）。
+
+**npm 包**（有 Node ≥ 20 的机器，一行式）：
+
+```bash
+npx iroh-room-bridge --room X --nick Y --brain acp --acp-bin claude-code-acp
+```
+
+- 打包：`bash scripts/build-room-bridge-npm.sh` → `cd dist/npm-room-bridge && npm publish`
+  （pi SDK 是**可选 peer**，随包只带约 50 kB 编译产物）。
+- ⚠️ 首次发布会走 npm 的 **staged publishing**：registry 先出现 `0.0.0-stage` 占位、
+  重试 publish 会报 "Cannot publish over previously staged version"，几分钟后自动转正
+  （这期间 Staged Packages 页面可能是空的，以 registry 元数据为准）。
 
 ## 第一次接入：配置引导 + 名片
 

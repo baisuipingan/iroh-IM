@@ -45,7 +45,7 @@ room-bridge --room patrick --nick 小派 --bio '会查代码' --tags ts,rust --b
 | 默认规则回归 | `test-agent-adapter.mjs` 新增"ping→pong 真的触发"断言（含大小写、不匹配返回 null） |
 | get.editor.vip 部署 | 重新部署（`b0441930-dc78-4fd8-a63b-37e60b2f0919`）：`/healthz`、`/iroh/install.sh`、`/iroh/agent-install.sh`、`/iroh/agent-install.ps1` 均 **200**；room-bridge 两条路径在脚本推送进 main 后复验 |
 | `verify.sh all` | 全部浏览器套件绿：file-history 17/17、multi-peer 19/19、review-frontend 19/19、dm-removed 15/15、redesign **128/128**、mention-id 18/18、profile 20/20、nickname-fallback 9/9、plugin-channel 11/11 …；`file-recipients` 首轮偶发超时（与本次改动面无关的已知抖动），**单跑复验 34/34** |
-| npm 包（预演） | `scripts/build-room-bridge-npm.sh` 产出 20.7 kB tarball；本机 `npm i <tarball>` 后 `room-bridge --help` 正常，且用它跑 `byoa-join.py` **6/6**（真实链路） |
+| npm 包（**已发布**） | `iroh-room-bridge@0.1.0` 已在 registry.npmjs.org 上线（`latest`=0.1.0，20.8 kB / 6 文件）；**从 registry 真装**后 `room-bridge --help` 正常，且用它跑 `byoa-join.py` **6/6**（真实链路） |
 
 ## 发版与回滚
 
@@ -57,8 +57,14 @@ room-bridge --room patrick --nick 小派 --bio '会查代码' --tags ts,rust --b
   安装 + 提示齐全；用这颗**从 Release 装出来的**二进制跑 `byoa-join.py`：**6/6**（真实链路）。
 - `get.editor.vip` 五条路径全部 200：`/iroh/install.sh`、`/iroh/agent-install.sh`、
   `/iroh/agent-install.ps1`、`/iroh/room-bridge-install.sh`、`/iroh/room-bridge-install.ps1`。
-- **npm 分发（`iroh-room-bridge`）已备好**：本地预演全过；正式发布需要 npm 账号
-  （本机 registry 现指向 npmmirror 镜像，发布要切回 registry.npmjs.org）。
+- **npm 包 `iroh-room-bridge@0.1.0` 已发布**（registry.npmjs.org）。
+  - 一行式：`npx iroh-room-bridge --room X --nick Y --brain acp --acp-bin claude-code-acp`。
+  - ⚠️ 首次发布踩到 npm 新的 **staged publishing**：`npm publish` 输出 `+ iroh-room-bridge@0.1.0`
+    但 registry 先出现 `0.0.0-stage` 占位（"Temporary package placeholder for staged publishing"），
+    重试 publish 报 `409 Cannot publish over previously staged version "0.1.0"`，
+    而 `npm stage list` / 网页 Staged Packages 都是空 —— **几分钟后自动转正**（`latest`=0.1.0）。
+    下次发新版本直接 publish 即可（这条坑记在 agent-pi/README 与本节）。
+  - 本机 registry 默认指向 npmmirror 镜像：发布/查看最新版要带 `--registry=https://registry.npmjs.org`。
 - 无需前端/roomd 改动；get.editor.vip Worker 已部署新版本。
 - 回滚：Worker = 回上一版本（或把 `UPSTREAMS` 改回单条）；脚本 = `git revert`；
   Release 产物可保留（旧版本仍可按 `VERSION=` 钉住安装）。
