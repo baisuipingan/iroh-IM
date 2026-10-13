@@ -63,9 +63,9 @@ function rowHtml(p) {
     : '';
   return (
     `<div class="roster__row" data-member="${U.esc(id)}">` +
-    avatar(p.nickname || '?', 'avatar--sm') +
+    avatar(U.displayName(p.nickname, p.id), 'avatar--sm') +
     `<div class="roster__main">` +
-    `<div class="roster__top"><b class="roster__name">${U.esc(p.nickname || '(无名)')}</b>` +
+    `<div class="roster__top"><b class="roster__name">${U.esc(U.displayName(p.nickname, p.id))}</b>` +
     `<span class="roster__id">${id8Of(id)}</span>` +
     statusHtml(id) +
     `</div>` +
@@ -99,9 +99,9 @@ function offlineMembers(limit = 8) {
 function offlineRowHtml(p) {
   return (
     `<div class="roster__row roster__row--offline" data-offline="${U.esc(p.id)}">` +
-    avatar(p.nickname || '?', 'avatar--sm') +
+    avatar(U.displayName(p.nickname, p.id), 'avatar--sm') +
     `<div class="roster__main">` +
-    `<div class="roster__top"><b class="roster__name">${U.esc(p.nickname || '(无名)')}</b>` +
+    `<div class="roster__top"><b class="roster__name">${U.esc(U.displayName(p.nickname, p.id))}</b>` +
     `<span class="roster__id">${id8Of(p.id)}</span>` +
     `<span class="roster__status" data-status="offline">离线</span></div>` +
     `</div>` +

@@ -28,6 +28,7 @@ import { bus, EV } from '../bus.js';
 import { net } from '../net.js';
 import { store } from '../store.js';
 import { mentionsMe } from '../mention.js';
+import * as U from '../util.js';
 
 /** 通知正文的最大长度（超过就省略号） */
 const MAX_BODY = 60;
@@ -116,7 +117,7 @@ export const notify = {
     // 被 @ 了要在标题上体现（R1）：正文仍然受「显示消息内容」开关约束，
     // 而"有人 @ 你"这件事本身不算内容泄露 —— 它只是寻址信息。
     const title = mentionsMe(message?.text, myId, message?.mentions) ? `${base} · 有人 @ 你` : base;
-    const nick = message?.nickname || '有人';
+    const nick = U.displayName(message?.nickname, message?.from);
     const text = String(message?.text || '').slice(0, MAX_BODY);
     const body = prefs.notifyContent === false || !text ? '新消息' : `${nick}: ${text}`;
     return { title, body };

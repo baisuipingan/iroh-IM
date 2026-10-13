@@ -583,7 +583,8 @@ export const timeline = {
         cancelled: '— 已取消',
         failed: '接收失败',
       }[recipient.state] || '等待接收';
-      const name = recipient.nickname ? `${recipient.nickname} · ${String(recipient.id).slice(0, 6)}` : `用户 ${String(recipient.id).slice(0, 8)}`;
+      const display = U.displayName(recipient.nickname, recipient.id);
+      const name = recipient.nickname ? `${display} · ${String(recipient.id).slice(0, 6)}` : display;
       row.innerHTML = `<div class="filecard__recipient-head"><span class="filecard__recipient-name" title="${U.esc(`${name} · ${recipient.id}`)}">${U.esc(name)}</span><span class="filecard__recipient-state">${U.esc(status)}</span></div>`;
       if (recipient.state === 'sending') {
         const progress = document.createElement('progress');
@@ -870,13 +871,16 @@ export const timeline = {
     el.dataset.id = m.id || '';
     // 微信的排版：头像在左（自己则在右），昵称与时间在气泡**上方**，
     // 且**只在收到消息时**显示昵称（自己发的没必要重复写自己名字）。
+    // ⚠️ 昵称是发送方签进来的，**可能为空**（老/外部客户端以空昵称进房，实测踩到）——
+    //    空名字 + "?" 头像等于认不出是谁，统一兜底成 `用户+id8`。
+    const who = U.displayName(m.nickname, m.from);
     el.innerHTML =
-      avatar(m.nickname) +
+      avatar(who) +
       `<div class="msg__body">
          <div class="msg__meta">${
            mine
              ? `<span class="msg__time">${U.clockTime(m.ts)}</span>`
-             : `${U.esc(m.nickname)}<span class="msg__time">${U.clockTime(m.ts)}</span>`
+             : `${U.esc(who)}<span class="msg__time">${U.clockTime(m.ts)}</span>`
          }</div>
          <div class="bubble"></div>
        </div>`;
@@ -990,8 +994,10 @@ export const timeline = {
         const chip = document.createElement('span');
         chip.className = `mention${s.known ? '' : ' mention--unknown'}`;
         chip.dataset.mentionId8 = s.id8;
-        chip.textContent = `@${s.nickname ?? s.id8}`;
-        chip.title = s.nickname ? `@${s.nickname}（${s.id8}）` : `成员不在场（${s.id8}）`;
+        // ⚠️ `??` 兜不住空串：名册里的成员可能昵称为空（老客户端），会渲染成光秃秃的 `@`
+        const label = s.known ? U.displayName(s.nickname, s.id8) : s.id8;
+        chip.textContent = `@${label}`;
+        chip.title = s.known ? `@${label}（${s.id8}）` : `成员不在场（${s.id8}）`;
         return chip;
       }),
     );
@@ -1013,7 +1019,7 @@ export const timeline = {
     el.className = 'tl-profile';
     const who = document.createElement('span');
     who.className = 'tl-profile__who';
-    who.textContent = m.nickname || '有人';
+    who.textContent = U.displayName(m.nickname, m.from);
     const what = document.createElement('span');
     const parts = [];
     if (p.bio) parts.push(p.bio);

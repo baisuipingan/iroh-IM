@@ -95,4 +95,6 @@ run_case "plugin-channel"  scripts/e2e/plugin-channel.py
 run_case "mention-id"      scripts/e2e/mention-id.py
 # R2a：名片 = 签名消息 + 本地聚合（能力发现靠名字/简介/发言，不靠清单）
 run_case "profile"         scripts/e2e/profile.py
+# 昵称兜底：空昵称的消息/成员不能再显示成"空白名字 + ? 头像"（只兜显示层，不动协议）
+run_case "nickname-fallback" scripts/e2e/nickname-fallback.py
 exit "$fail"

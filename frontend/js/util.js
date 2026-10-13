@@ -49,6 +49,21 @@ export function shortId(id, chars = 8) {
   return id ? String(id).slice(0, chars) : '';
 }
 
+/**
+ * 显示名兜底：昵称为空（或纯空白）时用 `用户 + id8`。
+ *
+ * 昵称是发送方**签进消息里**的，老/外部客户端可能以空昵称进房 ——
+ * 直接渲染就是"空白名字 + `?` 头像"，根本认不出是谁（线上实测踩到：
+ * 一条 `nickname=""` 的消息显示成棕色 `?`）。
+ * 寻址永远用 EndpointId、昵称只给人看，所以这里只兜显示名、不动协议。
+ */
+export function displayName(nickname, id) {
+  const n = String(nickname ?? '').trim();
+  if (n) return n;
+  const id8 = shortId(id, 8);
+  return id8 ? `用户${id8}` : '有人';
+}
+
 export function clockTime(ts) {
   const d = new Date(ts);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

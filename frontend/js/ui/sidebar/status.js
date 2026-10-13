@@ -75,7 +75,7 @@ function avatarStack(host) {
   //    重新声明 —— 删掉成员页时漏了它，整个状态页会抛 ReferenceError 变空白（踩过）。
   const anchor = anchorId ? host.peers.find((p) => p.id === anchorId) : null;
   const others = host.peers.filter((p) => p.id !== anchorId && p.id !== net.endpoint_id());
-  const names = [store.nick(), ...others.map((p) => p.nickname)].filter(Boolean);
+  const names = [store.nick(), ...others.map((p) => U.displayName(p.nickname, p.id))].filter(Boolean);
   const avatars =
     names.slice(0, 3).map((n) => `<span class="avstack__i" style="background:${U.colorOf(n)}">${U.esc(U.initial(n))}</span>`).join('') +
     (names.length > 3 ? `<span class="avstack__i is-more">+${names.length - 3}</span>` : '');
@@ -185,9 +185,9 @@ export function renderStatus(host, q = '') {
 
   const membersBody =
     (others.length
-      ? others.map((p) => memberRow(p.nickname, p.id, `${U.shortId(p.id, 10)} · ${U.relTime(p.lastSeenMs)}`)).join('')
+      ? others.map((p) => memberRow(U.displayName(p.nickname, p.id), p.id, `${U.shortId(p.id, 10)} · ${U.relTime(p.lastSeenMs)}`)).join('')
       : '<div class="members__empty">房间里还没有其他人在线</div>') +
-    memberRow(store.nick(), myId, `${U.shortId(myId, 10)} · 我自己`);
+    memberRow(U.displayName(store.nick(), myId), myId, `${U.shortId(myId, 10)} · 我自己`);
 
   const membersHtml = `<div class="members${host._membersOpen ? ' is-open' : ''}" id="status-members">
       <div class="members__hint">依据近期心跳估计，异常退出可能延迟约 45 秒更新。</div>
