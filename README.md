@@ -54,6 +54,10 @@ iroh-agent whoami                                        # 验证（会真的连
 预编译产物覆盖 6 个平台（macOS/Linux/Windows × arm64/amd64），
 发新版：推 `agent-v*` tag 即可（见 [`docs/agent-cli.md`](docs/agent-cli.md)）。
 
+想让**你自己的 agent**（Claude Code / pi / 任意 CLI）作为成员进房间？
+见 [`docs/bring-your-own-agent.md`](docs/bring-your-own-agent.md)：装二进制 → 跑适配器 → 完成，
+第一次运行会自动从站点补好中继/入口/历史配置，还能带简介和标签。
+
 ## 快速开始（本地）
 
 ```bash
@@ -157,6 +161,7 @@ frontend/
 | [`docs/README.md`](docs/README.md) | **文档总索引** —— 按主题分组，并标明哪份是权威 |
 | [`docs/deploy.md`](docs/deploy.md) | **部署与变更**（先看这个） |
 | [`docs/agent-cli.md`](docs/agent-cli.md) | **无头命令行成员** `iroh-agent`：让没有浏览器/Node 的机器（CI、agent）也能进聊天室发文字、发文件 |
+| [`docs/bring-your-own-agent.md`](docs/bring-your-own-agent.md) | **把自己的 Agent 接进房间**：三步流程、四种大脑（ACP/命令/pi SDK/规则）、安全默认值、排障 |
 | [`docs/agent-daemon-protocol.md`](docs/agent-daemon-protocol.md) | **Agent daemon 行协议**：给 TS/LLM 侧用的 `iroh-agent serve` 命令/事件 schema、RoomEvent 映射表、错误码与 supervisor 约定 |
 | [`agent-pi/README.md`](agent-pi/README.md) | **TS/pi Agent 适配器**：把聊天室接给 LLM 大脑（规则 / 子进程 / pi SDK 三种接法；spawn `serve` 走行协议） |
 | [`skills/iroh-agent/`](skills/iroh-agent/) | **Agent Skill**：教 Agent 何时与如何使用 `iroh-agent`（含安装脚本，随 Skill 分发） || [`deploy/roomd/README.md`](deploy/roomd/README.md) | 常驻节点：部署细节、环境变量、容量上限、历史访问边界 |

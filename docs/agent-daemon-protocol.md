@@ -120,6 +120,7 @@ pi 适配器（TS，supervisor）
 | `accept_file` | `{fileId, savePath?}` | `{fileId, path, bytes}` | **接收**一个文件（fileId 来自 `fileInvite` 事件）。省略 savePath 落 `<agent home>/received/`；是目录则拼文件名。超时按 10 分钟给（传输本身可能很久） |
 | `reject_file` | `{fileId, reason?}` | `{}` | 拒绝接收（广播带理由的 Reject；对方能看到是谁拒绝的） |
 | `nick` | `{nickname}` | `{}` | 改名（立刻重播 presence） |
+| `profile` | `{bio?, tags?}` | `{bio, tags}` | 发布**名片**（V6.2 状态帧：不进聊天历史，常驻节点直记账）。reply 里返回**归一化后**的值（简介 160 字截断、标签 8×16、去重；换行压成空格）——调用方能看出被截了什么。未进房 → `notJoined`；`bio` 非字符串 / `tags` 非字符串数组 → `badRequest` |
 | `history` | `{limit?, before?}` | `{messages, snapshot?}` | **拉取**历史。`before` = `"<ts>:<id>"` 复合游标（空 = 最新一页） |
 | `status` | `{}` | `{endpointId, room, relays, peers, files, uptimeMs}` | 诊断/外部健康检查 |
 | `leave` | `{}` | `{}` | 广播离开声明并退订当前房间（进程保持存活） |
@@ -141,6 +142,9 @@ pi 适配器（TS，supervisor）
   缓存在内存里（accept 授权必须拿 `meta.sender` 核对数据流来源，只给 fileId 等于
   放弃授权）。缓存过期/没收到 → `noInvite`，让对端重发邀约即可。
   v1 不做断点续传（空位图从头收）；失败时**保留半成品文件**便于排查。
+- `profile` 的发布是**幂等**的：状态帧可以重复广播（serve 崩溃重启后自动重进房、
+  适配器重启），常驻节点按 `ts` 取最新；因此适配器在**每次 `joined` 事件**都会
+  重新发布一次，不需要自己记账。
 
 ---
 
@@ -306,6 +310,7 @@ Rust 侧 v1 已完成：
 - [x] RoomEvent 转发任务（`subscribe()` 扇出 + `seq`）
 - [x] `SendEvent` → `fileSendStarted/fileProgress/...`；`FileQueryAsked` → 自动重发邀约
 - [x] `history` ← `fetch_history_before`（复合游标 `"<ts>:<id>"`）
+- [x] `profile` ← `set_profile`（V6.2 状态帧；字段归一化与读取侧同上限，reply 回归一化值）
 - [x] stdin EOF / SIGTERM / SIGINT → 优雅退出（`biased` 保证显式退出优先于 EOF）
 - [x] **接收能力**：`accept_file`/`reject_file` 命令 + `FileSink`（流式落盘、哈希校验）；
       邀约缓存（64 条上限）；进度合并（每 64 块）；`fileRecvStarted/Finished/Failed` 事件

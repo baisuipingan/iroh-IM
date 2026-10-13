@@ -206,6 +206,11 @@ fn normalize_value(value: &mut Value) {
                     "relays" => *val = json!("<relays>"),
                     "ts" | "lastSeenMs" | "uptimeMs" => *val = json!(0),
                     "seq" => *val = json!(0),
+                    // 端点 id（64 位 hex）：名片事件 / peerUp 里的 "id" 也是身份，
+                    // 每次运行身份都不同 —— 不归一化黄金转录会跨运行漂移
+                    "id" if val.as_str().is_some_and(|s| is_hex(s, 64)) => {
+                        *val = json!("<id>");
+                    }
                     // 消息 id（24 位 hex，blake3 截断）；命令 id（"1".."18"）不会命中
                     "id" if val.as_str().is_some_and(|s| is_hex(s, 24)) => {
                         *val = json!("<msgid>");
@@ -271,6 +276,10 @@ fn serve_黄金转录不漂移() {
         &s.send_cmd("rf0", "reject_file", json!({"fileId": "x"})),
         "notJoined",
     );
+    expect_error(
+        &s.send_cmd("pf0", "profile", json!({"bio": "还没进房"})),
+        "notJoined",
+    );
 
     // ---- 进房（离线：无 anchor，gossip 本地订阅即可）----
     let join = s.send_cmd("7", "join", json!({"room": "golden-room", "nickname": "录音机"}));
@@ -310,6 +319,36 @@ fn serve_黄金转录不漂移() {
     // ---- 昵称 / 货架 / 文件接收 / 离开 ----
     let nick = s.send_cmd("12", "nick", json!({"nickname": "录音机2"}));
     assert_eq!(nick["ok"], true);
+
+    // ---- 名片（V6.2 状态帧）：归一化 + 本端 profile 事件 + 参数校验 ----
+    let profile = s.send_cmd(
+        "pf1",
+        "profile",
+        json!({"bio": "  会查代码 · 能跑脚本  ", "tags": ["ts", " ts ", "rust"]}),
+    );
+    assert_eq!(profile["ok"], true);
+    assert_eq!(profile["value"]["bio"], "会查代码 · 能跑脚本");
+    assert_eq!(profile["value"]["tags"], json!(["ts", "rust"]));
+    s.wait_line(
+        |v| v["type"] == "event" && v["event"]["type"] == "profile",
+        "profile 事件",
+    );
+    // 超长简介签名前截断（与读取侧上限一致：160 字）
+    let capped = s.send_cmd("pf2", "profile", json!({"bio": "字".repeat(200)}));
+    assert_eq!(capped["ok"], true);
+    assert_eq!(
+        capped["value"]["bio"].as_str().unwrap().chars().count(),
+        160,
+        "超过 160 字的简介必须被截断"
+    );
+    expect_error(
+        &s.send_cmd("pf3", "profile", json!({"tags": "不是数组"})),
+        "badRequest",
+    );
+    expect_error(
+        &s.send_cmd("pf4", "profile", json!({"tags": [1]})),
+        "badRequest",
+    );
 
     let list = s.send_cmd("13", "list_files", json!({}));
     assert_eq!(list["ok"], true);

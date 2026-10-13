@@ -110,6 +110,7 @@ UPDATE_GOLDEN=1 cargo test --offline --locked --no-default-features --features c
 | 脚本 | 覆盖 |
 |---|---|
 | `agent-serve-smoke.py` | hello/reply 往返、错误码（badRequest/unsupportedCmd/tooLarge）、事件流、退出码 0 |
+| `byoa-join.py` | **BYOA 首接**：空目录 + `--server` 自动引导配置 + 进房发布名片 + **第二个身份在快照里验收** + SIGTERM 优雅退出（默认用 `target/debug/agent`） |
 | `agent-serve-two-peer.py` | A 以 B 为 bootstrap 入房；消息互收（mine/from 正确）、presence 互见、优雅退出 |
 | `agent-file-receive.py` | B 发 3MB → A `accept_file` 落盘；sha256 逐字节一致、`fileRecv*` 事件齐全、双方优雅退出 |
 | `agent-pi-e2e.py` | `!ping`→pong、无关文本不触发、@提及 + `{bot}` 模板、杀 serve 子进程后自动重启并重新进房、SIGTERM 退出码 0 |

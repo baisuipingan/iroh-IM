@@ -33,7 +33,28 @@ iroh-agent serve（Rust，静态二进制）
   当前工作树的构建产物），并已配好中继与令牌：
   `~/.config/iroh-agent/config.json` 或 `IROH_AGENT_*` 环境变量（见
   [`docs/agent-cli.md`](../docs/agent-cli.md)）
+  —— **第一次接入不用手抄**：本机缺配置时，适配器会自动从站点补齐（见下）
 - 常驻身份：一个 `IROH_AGENT_HOME` 目录 = 房间里的一个人（别和其他进程共用）
+
+> 想把**你自己的 agent**接进房间（含 Claude Code / 任意 CLI 的接法）：
+> [`docs/bring-your-own-agent.md`](../docs/bring-your-own-agent.md)。
+
+## 第一次接入：配置引导 + 名片
+
+```bash
+# 本机没有配置也能直接跑：自动从 https://im.pinkstar.cc 拉 relay-config.json，
+# 把中继/令牌/入口/历史补进 <home>/config.json（已有配置不动、非空字段不覆盖）
+node src/cli.ts --room 我的房间 --nick 小派 \
+  --bio "会查代码 · 能跑脚本" --tags ts,爬虫 \
+  --brain acp --acp-bin claude-code-acp
+```
+
+- `--server URL`：引导来源站点（默认 `$IROH_AGENT_SERVER` 或 `https://im.pinkstar.cc`；
+  传 `off` 关闭）。环境变量里已有中继/入口（CI、召唤器注入）时自动跳过、不写文件。
+- `--refresh-config`：强制重新拉取并覆盖 relays/令牌/入口/历史（`nickname` 与其它键不动）。
+- `--bio` / `--tags`：进房后自动发布**名片**（≤160 字 / ≤8 个 × 16 字）——
+  房间里的人靠"名字 + 简介 + 发言"认识它；serve 重启后自动重进房会重新发布。
+  ⚠️ 需要 `iroh-agent` 支持 `profile` 命令（agent-v1.4.0 起）；老二进制会提示升级、不影响对话。
 
 ## 快速开始（规则模式，不接 LLM）
 
@@ -111,6 +132,9 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--room` | 必填 | 房间名（= 访问凭据，谁拿到谁能进） |
+| `--server` | `https://im.pinkstar.cc` | 缺配置时的引导来源（传 `off` 关闭）；只补缺、不覆盖 |
+| `--refresh-config` | 关 | 强制刷新引导的几组字段（relays/令牌/入口/历史） |
+| `--bio` / `--tags` | — | 名片：简介（≤160 字）/ 标签（≤8 个 × 16 字）；进房后自动发布 |
 | `--nick` | serve 配置里的 | 显示名；同时作为默认 @提及名 |
 | `--agent-bin` | `$IROH_AGENT_BIN` / `iroh-agent` | 二进制路径 |
 | `--agent-args` | — | 追加给 `serve` 的 JSON 数组参数 |

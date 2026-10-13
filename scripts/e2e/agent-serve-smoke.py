@@ -110,6 +110,12 @@ print(f"✅ join → ok={r['ok']} value={r.get('value')} error={r.get('error')}"
 r = cmd("c4", {"cmd": "say", "text": "你好（serve 冒烟测试）"})
 print(f"✅ say → ok={r['ok']} value={r.get('value')} error={r.get('error')}")
 
+r = cmd("c4b", {"cmd": "profile", "bio": "  烟雾测试简介  ", "tags": ["smoke", " smoke ", "profile"]})
+assert r["ok"], r
+assert r["value"]["bio"] == "烟雾测试简介", r
+assert r["value"]["tags"] == ["smoke", "profile"], r
+print(f"✅ profile → {r['value']}")
+
 r = cmd("c5", {"cmd": "list_files"})
 print(f"✅ list_files → {r['value']}")
 
@@ -148,6 +154,7 @@ types = [e.get("event", {}).get("type") for e in events if e.get("type") == "eve
 print(f"收到事件序列：{types}")
 assert "joined" in types, "必须收到 joined 事件"
 assert "presence" in types, "进房后应收到 presence 事件"
+assert "profile" in types, "发布名片后应收到 profile 事件"
 # 注：发送者不会收到自己消息的回环（gossip broadcast 只推给邻居）——
 #     message 事件需要第二个成员，见 serve-smoke2.py 的双进程用例。
 seqs = [e.get("seq") for e in events if e.get("type") == "event"]

@@ -1028,6 +1028,40 @@ fn serve_handle_line(ctx: &Arc<ServeCtx>, line: String) {
             let c = ctx.clone();
             tokio::spawn(async move { serve_do_join(c, id, room, nickname).await });
         }
+        "profile" => {
+            // 发布名片（V6.2 状态帧）：房间里的人靠"名字 / 简介 / 发言"认识每个成员，
+            // 无头接入的 agent 也得能自己写简介 —— 否则花名册里只有名字没有能力信息。
+            let bio = match v.get("bio") {
+                None | Some(serde_json::Value::Null) => String::new(),
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(_) => {
+                    ctx.reply_err(&id, "badRequest", "bio 必须是字符串");
+                    return;
+                }
+            };
+            let tags: Vec<String> = match v.get("tags") {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(serde_json::Value::Array(items)) => {
+                    let mut out = Vec::with_capacity(items.len());
+                    for it in items {
+                        match it.as_str() {
+                            Some(s) => out.push(s.to_string()),
+                            None => {
+                                ctx.reply_err(&id, "badRequest", "tags 里的每一项都必须是字符串");
+                                return;
+                            }
+                        }
+                    }
+                    out
+                }
+                Some(_) => {
+                    ctx.reply_err(&id, "badRequest", "tags 必须是字符串数组");
+                    return;
+                }
+            };
+            let c = ctx.clone();
+            tokio::spawn(async move { serve_do_profile(c, id, bio, tags).await });
+        }
         "say" => {
             let Some(text) = v.get("text").and_then(|x| x.as_str()).map(str::to_string) else {
                 ctx.reply_err(&id, "badRequest", "缺少 text");
@@ -1111,6 +1145,42 @@ async fn serve_do_join(ctx: Arc<ServeCtx>, id: String, room: String, nickname: O
         Ok(Ok(())) => ctx.reply_ok(&id, json!({"room": room})),
         Ok(Err(e)) => ctx.reply_err(&id, "joinFailed", &format!("{e:#}")),
         Err(_) => ctx.reply_err(&id, "joinFailed", "进房超时（核心已重试 4 次）"),
+    }
+}
+
+/// 名片字段归一化：与读取侧（`parse_profile`）和前端（`MAX_BIO`/`MAX_TAGS`）同一套上限 ——
+/// 简介 160 字、标签 8 个 × 16 字。签名前截断，保证"发出去的就是别人看到的上限内内容"。
+fn normalize_profile_fields(bio: String, tags: Vec<String>) -> (String, Vec<String>) {
+    let bio = bio
+        .replace(['\r', '\n'], " ")
+        .trim()
+        .chars()
+        .take(160)
+        .collect::<String>();
+    let mut out: Vec<String> = Vec::new();
+    for tag in tags {
+        let tag = tag.trim().chars().take(16).collect::<String>();
+        if tag.is_empty() || out.contains(&tag) {
+            continue;
+        }
+        out.push(tag);
+        if out.len() >= 8 {
+            break;
+        }
+    }
+    (bio, out)
+}
+
+async fn serve_do_profile(ctx: Arc<ServeCtx>, id: String, bio: String, tags: Vec<String>) {
+    if ctx.node.current_room().is_none() {
+        ctx.reply_err(&id, "notJoined", "还没进房间（先发 join）");
+        return;
+    }
+    let (bio, tags) = normalize_profile_fields(bio, tags);
+    match ctx.node.set_profile(bio.clone(), tags.clone()).await {
+        // reply 里回**归一化后的值**：调用方能看出被截了什么，而不是"以为发出去了"
+        Ok(_frame) => ctx.reply_ok(&id, json!({"bio": bio, "tags": tags})),
+        Err(e) => ctx.reply_err(&id, "internal", &format!("{e:#}")),
     }
 }
 

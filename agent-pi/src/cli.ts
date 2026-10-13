@@ -13,6 +13,14 @@ import type { AgentBrain } from './agent-io/index.ts';
 import { AgentClient } from './room/client.ts';
 import { CommandBrain } from './agent-io/command.ts';
 import { defaultRules, parseRuleSpecs, RuleBrain } from './agent-io/rule.ts';
+import { ensureLocalConfig } from './room/bootstrap.ts';
+import { announceProfileOnJoin } from './room/profile.ts';
+
+/**
+ * 默认接入站点：本机缺配置时从这里拉 relay-config.json。
+ * `--server off`（或空串）关闭引导；环境变量 `IROH_AGENT_SERVER` 可换默认值。
+ */
+const DEFAULT_SERVER = 'https://im.pinkstar.cc';
 
 const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
 
@@ -31,6 +39,16 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
   --respond-to-all      所有消息都触发（噪音大，慎用）
   --cooldown-ms 3000    两次回复的最小间隔
   --ping-interval-ms 45000  serve 看门狗（0 = 关）
+
+接入引导（第一次用建议带着）：
+  --server URL          本机缺配置时，从这个站点拉 relay-config.json 自动补好
+                        中继/令牌/入口/历史（默认 $IROH_AGENT_SERVER 或
+                        https://im.pinkstar.cc；传 off 关闭）
+  --refresh-config      强制重新拉取并覆盖中继/令牌/入口/历史（nickname 不动）
+
+名片（房间里的人靠"名字 / 简介 / 发言"认识它）：
+  --bio TEXT            一句话简介（≤160 字；换行压成空格）
+  --tags a,b,c          标签（≤8 个，每个 ≤16 字）；进房后自动发布
 
 文件接收策略：
   --files off|accept|reject  收到文件邀约怎么办（默认 off = 只记日志不接）
@@ -80,6 +98,10 @@ acp 后端（首选接入口；agent 换一个 = 换一份 spawn 配置）：
   --budget-window-min M 窗口长度（分钟，默认 60）
 
 示例：
+  # 第一次接入（本机没配置也能直接进房）
+  node src/cli.ts --room 我的房间 --nick 小助手 --bio '会查代码' --tags ts,rust \\
+    --brain acp --acp-bin claude-code-acp
+
   # 规则模式（最快冒烟）
   IROH_AGENT_HOME=~/.config/iroh-agent node src/cli.ts --room 我的房间 --nick 小助手 --rules examples/rules.json
 
@@ -124,6 +146,9 @@ const VALUE_FLAGS = new Set([
   'pi-model',
   'tools',
   'fetch-allow',
+  'server',
+  'bio',
+  'tags',
   'files',
   'files-max-mb',
   'files-allow',
@@ -131,7 +156,7 @@ const VALUE_FLAGS = new Set([
   'files-max-concurrent',
   'files-max-total-mb',
 ]);
-const BOOL_FLAGS = new Set(['no-mention', 'respond-to-all', 'help']);
+const BOOL_FLAGS = new Set(['no-mention', 'respond-to-all', 'help', 'refresh-config']);
 
 interface Flags {
   room?: string;
@@ -168,6 +193,10 @@ interface Flags {
   budgetWindowMin?: string;
   tools?: string;
   fetchAllow?: string;
+  server?: string;
+  bio?: string;
+  tags?: string;
+  refreshConfig?: boolean;
   files?: string;
   filesMaxMb?: string;
   filesAllow?: string;
@@ -430,10 +459,36 @@ async function main(): Promise<void> {
     serveArgs.push(...(parseJsonArray(flags.agentArgs, '--agent-args') as string[]));
   }
 
+  // 接入引导：本机缺配置时从站点补一份 relay-config.json 里的必要字段。
+  // ⚠️ 放在 spawn 之前 —— serve 一启动就会读 `<home>/config.json`。
+  const server = flags.server ?? process.env.IROH_AGENT_SERVER?.trim() ?? DEFAULT_SERVER;
+  const bootstrap = await ensureLocalConfig({
+    server,
+    refresh: flags.refreshConfig === true,
+    log,
+  });
+  if (bootstrap.action === 'fetched') {
+    log(`[cli] 已从 ${server} 引导配置（补上：${bootstrap.filled.join('、')}）→ ${bootstrap.path}`);
+  } else if (bootstrap.action === 'failed') {
+    log(`[cli] ⚠️ 配置引导失败：${bootstrap.reason}`);
+    log('[cli]    继续启动；若进房后看不见别人，检查本机配置，或用 --server 指定站点');
+  }
+
   const client = new AgentClient({
     bin,
     args: serveArgs,
     pingIntervalMs: num(flags.pingIntervalMs, 45_000),
+    log,
+  });
+  // 名片：进房即发布（没给 --bio/--tags 就不订阅、不发请求，行为与以前一致）
+  const detachProfile = announceProfileOnJoin(client, {
+    bio: flags.bio,
+    tags: flags.tags
+      ? flags.tags
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [],
     log,
   });
   const hello = await client.start();
@@ -486,6 +541,7 @@ async function main(): Promise<void> {
 
   const signal = await waitForSignal();
   log(`[cli] 收到 ${signal}，优雅退出中…`);
+  detachProfile();
   await adapter.stop();
   await client.stop();
   log('[cli] 已退出');
