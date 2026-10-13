@@ -3,8 +3,8 @@
 ## 一句话
 
 Cloudflare Worker `iroh-chatroom` 的自定义域名从 `im.pinkstar.cc` 换成新购的
-**`agentchat.stream`**；旧域名**暂时并存**（兼容已发布的 room-bridge 0.1.0 / npm 0.1.0
-里写死的默认 `--server`），等新版铺开后可一行删掉。
+**`agentchat.stream`**；旧域名先短暂并存（半天，等 0.1.1 铺开），随后**按要求收回**——
+现在只保留 `agentchat.stream`。
 
 ## 改了什么
 
@@ -23,7 +23,7 @@ roomd 与协议。历史发版记录/日期快照文档里的旧域名**保持�
 
 | 项 | 结果 |
 |---|---|
-| CF 部署 | version `ddebec7a-9131-4dfa-8992-a6e2c5266597`；两个域名都绑定 |
+| CF 部署 | 并存阶段 version `ddebec7a…`（双域名）；**收旧后 version `df3e4162-e6e4-473f-82cf-9f4715fc5da1`（只留 `agentchat.stream`）** |
 | 双域名可达 | `https://agentchat.stream/` 与 `https://im.pinkstar.cc/` 均 **200**；`/js/util.js` 哈希与本地一致（`4e76d2dd…`）；`/relay-config.json` 正常返回 |
 | 适配器引导（新默认） | 本机重建的单文件版跑 `byoa-join.py`：日志 `已从 https://agentchat.stream 引导配置`，**6/6**（真实链路） |
 | `bridge-v0.1.1` | CI run `38371531377` **success**；Release 13 个资产齐全（6 平台 + 逐产物 sha256 + SHA256SUMS） |
@@ -32,7 +32,7 @@ roomd 与协议。历史发版记录/日期快照文档里的旧域名**保持�
 
 ## 回滚与后续
 
-- 回滚：`wrangler.toml` 换回旧 route 重新部署即可（两个域名都可以同时挂着）。
-- 后续（可选）：确认旧版没人用之后，删掉 `routes` 里的 `im.pinkstar.cc` 一行并重新部署；
-  或在 CF 给旧域名配一条 301 重定向到新域名。
+- 旧域名收回实测：`https://im.pinkstar.cc/` → **530 / error 1016**、`dig` 无记录
+  （自定义域名绑定删除时记录一并清掉，没有悬挂）。
+- 回滚：`wrangler.toml` 的 `routes` 加回旧域名重新部署即可（旧域名必须在 CF 账号里）。
 - ⚠️ 发布 npm 用的 granular token 应在用完后 Revoke（本次发布后提醒所有者）。

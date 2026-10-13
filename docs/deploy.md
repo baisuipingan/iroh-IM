@@ -34,7 +34,7 @@ bash scripts/deploy-web.sh                     # → dist/site + 发布到 agent
 
 | | roomd（常驻节点） | 前端（浏览器站点） |
 |---|---|---|
-| 跑在哪 | 服务器 Docker：`root@<SERVER_IP>:22`（key `<SSH_KEY_PATH>`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://agentchat.stream`（`im.pinkstar.cc` 兼容保留） |
+| 跑在哪 | 服务器 Docker：`root@<SERVER_IP>:22`（key `<SSH_KEY_PATH>`），目录 `/opt/iroh/roomd` | Cloudflare Worker，自定义域名 `https://agentchat.stream` |
 | 构建 | `bash scripts/build-wasm.sh native` → `dist/roomd` | `bash scripts/build-wasm.sh release` → `frontend/pkg`，再 `bash scripts/deploy-web.sh` |
 | 数据 | `/opt/iroh/roomd/data`（`identity.key` + SQLite 历史数据库及其 WAL） | 无（状态在浏览器 localStorage / IndexedDB） |
 | 细节文档 | `deploy/roomd/README.md` | `scripts/deploy-web.sh` 头部注释 |
@@ -166,7 +166,7 @@ iroh 会按最近 5 分钟延迟自动选 home relay，所以"不同人落在不
 
 | 域名 | 属于 | 能不能换 |
 |---|---|---|
-| `agentchat.stream` | **前端站点**（Cloudflare Worker 的自定义域名；旧域名 `im.pinkstar.cc` 仍并存） | 能 —— 改 `wrangler.toml` 的 `routes` 重新部署即可 |
+| `agentchat.stream` | **前端站点**（Cloudflare Worker 的自定义域名） | 能 —— 改 `wrangler.toml` 的 `routes` 重新部署即可 |
 | `iroh1/2/3.editor.vip` | **中继**（relay，`15443/tcp`，另一套独立基础设施） | **不能随手改** —— 中继换域名要同时改中继配置、证书、防火墙、`relay-config.json` 与 roomd 的 `ROOMD_RELAYS`，漏一处就全网连不上 |
 
 前端站点与中继**只是碰巧都用过 editor.vip 这个域名**，两套是完全独立的。
