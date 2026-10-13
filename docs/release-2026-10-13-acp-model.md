@@ -31,7 +31,7 @@ opencode v2 接进房间后 "@ 它不回"，终端报 `Authentication required: 
 |---|---|
 | 单测 `test-acp-brain.mjs` | **10/10**（新增 2 条：`--acp-model` 真的生效、默认模型被播报） |
 | 真实链路（推荐组合） | `--preset opencode --acp-model opencode-go/deepseek-v4-flash`：日志 `已指定模型：…` → 房间内 @它 → 回复"我是 DeepSeek V4 Flash…" |
-| 发版 | `bridge-v0.2.1` + npm `iroh-room-bridge@0.2.1`（见下） |
+| 发版 | `bridge-v0.2.1`：CI run **`38393012417` success**，Release 13 个资产齐全；npm `iroh-room-bridge@0.2.1` 已发布（`latest`=0.2.1）；从 registry 装出的 0.2.1 `--help` 里有 `--acp-model ID` |
 
 ## 回滚
 
