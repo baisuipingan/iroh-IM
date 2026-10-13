@@ -1,4 +1,4 @@
-"""线上多用户模拟：在 im.pinkstar.cc 上开 4 个独立身份的浏览器标签，
+"""线上多用户模拟：在线上站点（agentchat.stream）开 4 个独立身份的浏览器标签，
 验证消息归属、互相可见、历史持久化（SQLite 后端）、刷新恢复。
 
 用真实线上站点 + 真实中继 + 真实 roomd（新 SQLite 版）。
@@ -16,7 +16,7 @@ sys.argv = _saved
 #    不带 `?key=<64 位 hex>` 的话，每次开页/刷新都会生成新身份 ——
 #    刷新后那条"自己发的"消息就成了"别人发的"（靠左），
 #    测试会把它误判成 bug。踩过一次。
-SITE = os.environ.get("E2E_SITE", "https://im.pinkstar.cc")
+SITE = os.environ.get("E2E_SITE", "https://agentchat.stream")
 V = int(time.time())
 ROOM = f"mu{V % 100000}"
 print(f"房间: {ROOM}  站点: {SITE}", flush=True)

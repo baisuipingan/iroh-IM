@@ -66,7 +66,7 @@
 - Rust 侧用 `ts-rs`（或等价物）在构建时生成 `mobile/src/bridge/protocol.gen.ts`
   与前端用的 `.d.ts`；三端改 import，删掉手抄文件。
 - `verify.sh` 增加"生成物与提交物一致"检查（不一致直接红）。
-- 移动端不再硬编码 relay 配置：启动时拉 `https://im.pinkstar.cc/relay-config.json`，内置兜底。
+- 移动端不再硬编码 relay 配置：启动时拉站点上的 `relay-config.json`（现为 `https://agentchat.stream/relay-config.json`），内置兜底。
 - 先做它的理由：后面 C′ 与 v5 的协议改动会自动同步到三端类型，显著降低返工与漂移。
 - **实际结果**：接上后编译器当场抓出 5 处手抄漂移（详情见该发版记录）。
 - **尚未生成、仍手写的部分**：行协议信封（`HelloFrame`/`ReplyFrame`/`EventFrame`）与

@@ -19,7 +19,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUN="${BUN:-bun}"
 STAGE="$ROOT/dist/npm-room-bridge"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 
 command -v "$BUN" >/dev/null 2>&1 || { echo "❌ 找不到 bun（curl -fsSL https://bun.sh/install | bash）" >&2; exit 1; }
 
@@ -86,7 +86,7 @@ npx iroh-room-bridge --room 我的房间 --nick 小派 \
   --brain acp --acp-bin claude-code-acp
 ```
 
-- 第一次运行不用手抄配置：本机缺配置时自动从 `https://im.pinkstar.cc/relay-config.json`
+- 第一次运行不用手抄配置：本机缺配置时自动从 `https://agentchat.stream/relay-config.json`
   补齐中继/入口/历史（已有配置不动）。
 - 需要另一个静态二进制 `iroh-agent` 当"腿"（协议实现）：
   `curl -sSL https://get.editor.vip/iroh/agent-install.sh | bash`（或 `irm …/agent-install.ps1 | iex`）。

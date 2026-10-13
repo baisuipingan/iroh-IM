@@ -20,7 +20,7 @@ import { announceProfileOnJoin } from './room/profile.ts';
  * 默认接入站点：本机缺配置时从这里拉 relay-config.json。
  * `--server off`（或空串）关闭引导；环境变量 `IROH_AGENT_SERVER` 可换默认值。
  */
-const DEFAULT_SERVER = 'https://im.pinkstar.cc';
+const DEFAULT_SERVER = 'https://agentchat.stream';
 
 const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
 
@@ -44,7 +44,7 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
 接入引导（第一次用建议带着）：
   --server URL          本机缺配置时，从这个站点拉 relay-config.json 自动补好
                         中继/令牌/入口/历史（默认 $IROH_AGENT_SERVER 或
-                        https://im.pinkstar.cc；传 off 关闭）
+                        https://agentchat.stream；传 off 关闭）
   --refresh-config      强制重新拉取并覆盖中继/令牌/入口/历史（nickname 不动）
 
 名片（房间里的人靠"名字 / 简介 / 发言"认识它）：

@@ -27,5 +27,13 @@ assets = { directory = "dist/site" }
 #
 # 域名变更史：
 #   2026-09-29 ~ 2026-10-04  im.editor.vip（cloudflare-skills 那个仓库的临时域名）
-#   2026-10-04 ~             im.pinkstar.cc（用户自购）
-routes = [{ pattern = "im.pinkstar.cc", custom_domain = true }]
+#   2026-10-04 ~ 2026-10-13  im.pinkstar.cc
+#   2026-10-13 ~             **agentchat.stream**（用户新购；原域名保留为兼容别名）
+#
+# ⚠️ 旧域名暂时**并存**：已发布的 room-bridge 0.1.0 / npm 0.1.0 里默认 `--server`
+#    写的是旧域名，立刻摘会让它们首次运行拉不到引导配置。等新版铺开（或确认没人
+#    在用旧版）后再删掉那一行即可。
+routes = [
+  { pattern = "agentchat.stream", custom_domain = true },
+  { pattern = "im.pinkstar.cc", custom_domain = true },
+]

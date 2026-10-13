@@ -52,7 +52,7 @@ export interface LoadedRelayConfig {
 }
 
 /** 线上配置地址。**只有这一处**写域名（内置兜底里不再重复写一份列表） */
-export const RELAY_CONFIG_URL = 'https://im.pinkstar.cc/relay-config.json';
+export const RELAY_CONFIG_URL = 'https://agentchat.stream/relay-config.json';
 /** 拉取超时：进房页不该为了一个配置文件卡住 */
 export const RELAY_CONFIG_TIMEOUT_MS = 5000;
 

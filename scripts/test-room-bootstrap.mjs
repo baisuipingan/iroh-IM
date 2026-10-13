@@ -67,13 +67,13 @@ test('首次运行（空目录）：从站点补配置并写 0600 的 config.jso
   const home = freshHome();
   const urls = [];
   const result = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: {},
     fetchImpl: siteFetch(urls),
   });
   assert.equal(result.action, 'fetched');
-  assert.deepEqual(urls, ['https://im.pinkstar.cc/relay-config.json']);
+  assert.deepEqual(urls, ['https://agentchat.stream/relay-config.json']);
   assert.deepEqual(result.filled.sort(), ['anchor', 'history', 'relay_token', 'relays', 'rendezvous']);
   const cfg = readCfg(home);
   // enabled: false 的中继必须被剔除（和浏览器读同一份配置的语义一致）
@@ -101,7 +101,7 @@ test('已有完整配置：跳过且不拉取（网络都不用碰）', async ()
   );
   const before = readFileSync(join(home, 'config.json'), 'utf8');
   const result = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: {},
     fetchImpl: async () => {
@@ -124,7 +124,7 @@ test('安装脚本留下的半成品（空 token/空 anchor）：只补缺的，
     }),
   );
   const result = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: {},
     fetchImpl: siteFetch(),
@@ -141,7 +141,7 @@ test('安装脚本留下的半成品（空 token/空 anchor）：只补缺的，
 test('环境变量已提供中继/入口：跳过且不写任何文件', async () => {
   const home = freshHome();
   const result = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: { IROH_AGENT_RELAY: 'https://env.example:15443' },
     fetchImpl: async () => {
@@ -155,7 +155,7 @@ test('环境变量已提供中继/入口：跳过且不写任何文件', async (
 test('拉取失败/站点坏形状：failed，且不动本机文件', async () => {
   const home = freshHome();
   const boom = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: {},
     fetchImpl: async () => {
@@ -165,14 +165,14 @@ test('拉取失败/站点坏形状：failed，且不动本机文件', async () =
   assert.equal(boom.action, 'failed');
   assert.match(boom.reason, /网络炸了/);
   const http500 = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: {},
     fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }),
   });
   assert.equal(http500.action, 'failed');
   const empty = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: {},
     fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ relays: [] }) }),
@@ -195,7 +195,7 @@ test('--refresh-config：覆盖这几组，但其它键（nickname 等）原样�
     }),
   );
   const result = await ensureLocalConfig({
-    server: 'https://im.pinkstar.cc',
+    server: 'https://agentchat.stream',
     homeDir: home,
     env: {},
     refresh: true,

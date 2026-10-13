@@ -20,7 +20,7 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 
 export interface EnsureLocalConfigOptions {
-  /** 站点根地址（如 https://im.pinkstar.cc）；空串或 `off` = 关闭引导 */
+  /** 站点根地址（如 https://agentchat.stream）；空串或 `off` = 关闭引导 */
   server: string;
   /** 强制重新拉取并覆盖 relays/token/入口/历史（nickname 与其它键不动） */
   refresh?: boolean;
