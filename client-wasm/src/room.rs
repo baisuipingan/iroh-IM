@@ -1195,6 +1195,28 @@ pub fn new_snapshots() -> Snapshots {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// 从进房候选里剔除"我自己"（纯函数，便于单测）。
+///
+/// 为什么需要：名册会把你**上一次会话**的 id 报给你（同一身份重进房时）。
+/// 拿它去连等于连自己 —— iroh 直接拒绝，`subscribe_and_join` 只会白等到超时
+/// （实测 8 秒），表现出来就是"进房要等 10 秒、还带一条'暂时联系不上其他人'"。
+fn drop_self(ids: Vec<EndpointId>, me: &EndpointId) -> Vec<EndpointId> {
+    ids.into_iter().filter(|id| id != me).collect()
+}
+
+/// rendezvous 响应的成员列表：**剔除请求者自己**（见 `accept` 里的说明）。
+fn rendezvous_members_for(snapshot: Option<&RoomSnapshot>, requester: &str) -> Vec<String> {
+    snapshot
+        .map(|s| {
+            s.members
+                .iter()
+                .filter(|m| m.id != requester)
+                .map(|m| m.id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 任何**验签通过**的帧都是"他还活着"的证据 → 刷新 `last_seen_ms`（只刷已知成员）。
 ///
 /// 为什么需要：掉线判定原来只看 presence 心跳；拥塞/传输期间心跳可能被拖住，
@@ -1876,6 +1898,8 @@ pub struct HistoryService {
     join_tx: Sender<String>,
     snaps: Snapshots,
     permits: Arc<Semaphore>,
+    /// 常驻节点**自己**的 (id, 昵称)：响应快照里也列上它（见 `with_self`）。
+    self_member: Option<(EndpointId, String)>,
 }
 
 impl HistoryService {
@@ -1887,7 +1911,18 @@ impl HistoryService {
             join_tx,
             snaps,
             permits: Arc::new(Semaphore::new(MAX_HISTORY_CONCURRENT)),
+            self_member: None,
         }
+    }
+
+    /// 带上"我是谁"：**快照里把自己也列上**。
+    ///
+    /// 为什么：客户端进房后 0.5s 就拉首页历史 —— 快照是"屋里现在有谁"最快的来源。
+    /// 快照只记别人时，重进房或刚订阅的房间要等 presence 心跳（10~15s）或 DNS 发现
+    /// （国内实测 5~9s）才"看得见人"。把自己放进去，这条路 0.5s 就通（老客户端也受益）。
+    pub fn with_self(mut self, id: EndpointId, nickname: &str) -> Self {
+        self.self_member = Some((id, nickname.to_string()));
+        self
     }
 }
 
@@ -1950,6 +1985,36 @@ impl ProtocolHandler for HistoryService {
         // ⚠️ **只在首页做**：`latest_profiles` 是按房间扫的（见它的注释），
         //    翻页每次都要跟着扫一遍就不划算了，而名片本来就只在"刚进房"那一下有用。
         let mut snapshot = snapshot_get(&self.snaps, &req.room);
+        // 常驻节点把自己也放进快照：`last_seen` 取**响应时刻**（apply_snapshot 按
+        // 快照 at 与 last_seen 的差判新鲜度），`epoch` 取 0 —— 之后自己的真实心跳
+        // （更大的 epoch）照样能覆盖它。没有别的成员时也造一份快照（"屋里至少有我"）。
+        if let Some((id, nick)) = &self.self_member {
+            let me_snap = MemberSnapshot {
+                id: id.to_string(),
+                nickname: nick.clone(),
+                last_seen_ms: now_ms(),
+                files: Vec::new(),
+                epoch: 0,
+                bio: String::new(),
+                tags: Vec::new(),
+                profile_ts: 0,
+            };
+            match snapshot.as_mut() {
+                Some(snap) => {
+                    if !snap.members.iter().any(|m| m.id == me_snap.id) {
+                        snap.members.push(me_snap);
+                    }
+                }
+                None => {
+                    let mut snap = RoomSnapshot {
+                        at: now_ms(),
+                        members: Vec::new(),
+                    };
+                    snap.members.push(me_snap);
+                    snapshot = Some(snap);
+                }
+            }
+        }
         if req.before.is_none() {
             if let Some(snap) = snapshot.as_mut() {
                 match n0_future::time::timeout(
@@ -2176,9 +2241,19 @@ impl ProtocolHandler for RendezvousService {
         let _ = self.join_tx.try_send(req.room.clone());
 
         let snapshot = snapshot_get(&self.snaps, &req.room);
-        let all: Vec<String> = snapshot
-            .map(|s| s.members.iter().map(|m| m.id.clone()).collect())
-            .unwrap_or_default();
+        // ⚠️ **不要把请求者自己的 id 回给他**：同一身份重进房时名册里会有他上一次
+        //    会话的 id；客户端拿着它去连"自己"会被 iroh 直接拒绝
+        //    （Connecting to ourself is not supported），把进房的等待预算白烧满
+        //    （实测 8s → "进房等 10 秒 + 孤立提示"）。服务端先别报，老客户端也受益。
+        let requester = connection.remote_id().to_string();
+        let mut all = rendezvous_members_for(snapshot.as_ref(), &requester);
+        // 入口把**自己**也列进去（见 `self_id` 字段的注释）：重进房时客户端才有得可拨。
+        if let Some(me) = &self.self_id {
+            let me_s = me.to_string();
+            if !all.contains(&me_s) {
+                all.push(me_s);
+            }
+        }
         // 闸门⑤ 响应规模：只回前 N 个，并如实告知被截断
         let truncated = all.len() > MAX_RENDEZVOUS_MEMBERS;
         let members: Vec<String> = all.into_iter().take(MAX_RENDEZVOUS_MEMBERS).collect();
@@ -2214,6 +2289,13 @@ pub struct RendezvousService {
     join_tx: Sender<String>,
     snaps: Snapshots,
     permits: Arc<Semaphore>,
+    /// 把**自己**（入口/常驻节点）也列进名册响应。
+    ///
+    /// 为什么：入口本来就是"你总能找到的第一个人"。同一身份重进房时，名册里
+    /// 只剩你自己的旧 id（会被剔除，见 `rendezvous_members_for`）——没有这一条，
+    /// 客户端就没有任何候选可拨，只能靠 DNS/pkarr 慢发现（实测要 6~9 秒才看见人）；
+    /// 把自己列上，客户端直接拨我们，1 秒内就接上。
+    self_id: Option<EndpointId>,
 }
 
 impl RendezvousService {
@@ -2222,7 +2304,14 @@ impl RendezvousService {
             join_tx,
             snaps,
             permits: Arc::new(Semaphore::new(MAX_RENDEZVOUS_CONCURRENT)),
+            self_id: None,
         }
+    }
+
+    /// 带上"我是谁"——响应里会把自己列进成员列表（roomd 用）。
+    pub fn with_self_id(mut self, id: EndpointId) -> Self {
+        self.self_id = Some(id);
+        self
     }
 }
 
@@ -2552,7 +2641,9 @@ impl RoomNode {
         // 两个服务端能力**各自的开关**：谁开谁装，互不牵连。
         // （今天 roomd 两个都开；将来想只做入口、不存历史，把 serve_history 关掉即可。）
         if opts.serve_rendezvous {
-            capabilities.register(RendezvousService::new(join_tx.clone(), snaps.clone()));
+            capabilities.register(
+                RendezvousService::new(join_tx.clone(), snaps.clone()).with_self_id(endpoint.id()),
+            );
         }
         let join_rx = if opts.serve_history {
             capabilities.register(HistoryService::new(store.clone(), join_tx.clone(), snaps.clone()));
@@ -2725,7 +2816,11 @@ impl RoomNode {
                 ids.push(id);
             }
         }
-        ids
+        // ⚠️ **剔除自己**：名册（或配置）里可能混进"我自己的 id" —— 同一身份重进房时，
+        //    常驻节点还记着你上一次会话的 id。留着它会让 `subscribe_and_join` 去连自己
+        //    （iroh 直接拒绝："Connecting to ourself is not supported"），进房的等待预算
+        //    被白烧满（实测 8s → 表现为"进房要等 10 秒 + 孤立提示"）。
+        drop_self(ids, &self.endpoint.id())
     }
 
     /// 问入口："这个房间现在有谁？"
@@ -4284,6 +4379,36 @@ mod security_tests {
 
     // ── V6.2：名片状态帧 ──────────────────────────────────────────
 
+    // ── 进房不要连"自己"（2026-10-13 用户报障"进房等 10 秒 + 孤立提示"）────
+
+    #[test]
+    fn 进房候选里不包含自己() {
+        let me = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+        let got = drop_self(vec![me, other], &me);
+        assert_eq!(got, vec![other], "自己必须从候选里剔掉（连自己会被 iroh 拒绝）");
+    }
+
+    #[test]
+    fn rendezvous_响应不把请求者自己报回去() {
+        let mk = |id: &str| MemberSnapshot {
+            id: id.to_string(),
+            nickname: id.to_string(),
+            last_seen_ms: 1,
+            files: Vec::new(),
+            epoch: 1,
+            bio: String::new(),
+            tags: Vec::new(),
+            profile_ts: 0,
+        };
+        let mut snap = RoomSnapshot::default();
+        snap.members.push(mk("me"));
+        snap.members.push(mk("other"));
+        let got = rendezvous_members_for(Some(&snap), "me");
+        assert_eq!(got, vec!["other".to_string()], "同身份重进房时不该把'你上次的 id'报给你");
+        assert_eq!(rendezvous_members_for(None, "me"), Vec::<String>::new());
+    }
+
     // ── 传输期间的 presence 鲁棒性（2026-10-12 用户报障）──────────────
 
     #[test]
@@ -5149,11 +5274,18 @@ mod multi_peer_tests {
         // ⚠️ 快照只记**别人**（自己不需要记在成员表里）：入口这一侧应当出现 1 个成员
         wait_members(&entry.snaps, "caps-room", 1).await?;
 
-        // ① 入口能回答"这房间里有谁"：报出刚进来的成员
-        let members = client.rendezvous_candidates("caps-room").await;
+        // ① 入口能回答"这房间里有谁"：**换一个客户端来问**，应当报出刚进来的成员；
+        //    而问的人**自己的 id 不能被报回去**（报回去会让客户端去连自己 ——
+        //    iroh 直接拒绝、进房预算白烧满，2026-10-13 用户报障的真实根因）。
+        let other = node(Some(&entry)).await?;
+        let members = other.rendezvous_candidates("caps-room").await;
         assert!(
             members.contains(&client.endpoint.id()),
             "入口应当报出刚进房的成员，实际拿到 {members:?}"
+        );
+        assert!(
+            !members.contains(&other.endpoint.id()),
+            "请求者自己不该出现在名册里：{members:?}"
         );
 
         // ② 组合出的候选里，**入口自己**也必须在 —— 否则会出现"问到了别人，却连不上入口"
@@ -5163,14 +5295,15 @@ mod multi_peer_tests {
             "固有候选必须包含入口自己（它是你总能找到的第一个人）"
         );
         assert!(
-            candidates.contains(&client.endpoint.id()),
-            "候选里应当带上入口报的成员"
+            !candidates.contains(&client.endpoint.id()),
+            "候选里绝不该有自己的 id（连自己会被拒、白等满预算）：{candidates:?}"
         );
 
         // ② 但历史能力没装 → 拉历史**必须报错**
         let history = client.fetch_history("caps-room", 10).await;
         assert!(history.is_err(), "没装历史能力时拉历史应当明确失败，而不是返回空页");
 
+        other.shutdown();
         client.shutdown();
         entry.shutdown();
         Ok(())

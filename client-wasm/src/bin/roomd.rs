@@ -205,8 +205,17 @@ async fn main() -> Result<()> {
     //   只是把几个能力注册进来 —— 加一个新能力不必改这段之外的任何组装逻辑。
     //   gossip 是**底座**（消息怎么传），不是能力。
     let mut capabilities = CapabilityRegistry::new();
-    capabilities.register(HistoryService::new(store.clone(), join_tx.clone(), snaps.clone()));
-    capabilities.register(RendezvousService::new(join_tx.clone(), snaps.clone()));
+    // `.with_self`：快照里也列上我们自己（客户端进房 0.5s 拉首页历史就能"看见常驻节点"，
+    // 不用等 presence 心跳或 DNS 发现 —— 见 HistoryService::with_self 的注释）。
+    capabilities.register(
+        HistoryService::new(store.clone(), join_tx.clone(), snaps.clone())
+            .with_self(endpoint.id(), &nickname),
+    );
+    // `.with_self_id`：名册响应里也列出我们自己 —— 重进房时客户端可以直接拨入口，
+    // 不必等 DNS/pkarr 慢发现（实测那一路要 6~9 秒才"看见人"）。
+    capabilities.register(
+        RendezvousService::new(join_tx.clone(), snaps.clone()).with_self_id(endpoint.id()),
+    );
     // 服务端能力都要听"谁在用哪个房间"（阶段 C′ 的显式加入声明）
     capabilities.register(AnnounceService::new(join_tx.clone()));
     info!("roomd 房间能力：{:?}", capabilities.names());
@@ -315,6 +324,10 @@ async fn main() -> Result<()> {
                 let store_c = store.clone();
                 let subs_c = subs.clone();
                 let snaps_c = snaps.clone();
+                // 消费任务里也要能广播（邻居上线时补播心跳）→ 先克隆一份。
+                let sender_c = sender.clone();
+                let key_c = key.clone();
+                let nickname_c = nickname.clone();
                 let mut receiver = receiver;
                 let t1 = task::spawn(async move {
                     while let Some(ev) = receiver.next().await {
@@ -394,7 +407,17 @@ async fn main() -> Result<()> {
                                     }
                                 }
                             }
-                            Ok(GossipEvent::NeighborUp(id)) => info!("[{}] 邻居上线 {id}", room_c),
+                            Ok(GossipEvent::NeighborUp(id)) => {
+                                info!("[{}] 邻居上线 {id}", room_c);
+                                // ★ 新邻居出现 → **立刻补播一次自己的心跳**。
+                                //   首次订阅时播的那条发生在"还没有邻居"的一刻，会丢；
+                                //   不补的话对方要等下一轮 15s 心跳才看得见我们 ——
+                                //   实测就是"进房后 10~15 秒房间里还显示没人"（用户报"进房慢"）。
+                                let bytes = encode_presence(&key_c, &nickname_c, &room_c);
+                                if !bytes.is_empty() {
+                                    let _ = sender_c.lock().await.broadcast(bytes.into()).await;
+                                }
+                            }
                             Ok(GossipEvent::NeighborDown(id)) => info!("[{}] 邻居下线 {id}", room_c),
                             Ok(GossipEvent::Lagged) => warn!("[{}] gossip 落后", room_c),
                             Err(e) => {
