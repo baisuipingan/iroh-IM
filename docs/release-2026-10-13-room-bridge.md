@@ -49,8 +49,14 @@ room-bridge --room patrick --nick 小派 --bio '会查代码' --tags ts,rust --b
 
 ## 发版与回滚
 
-- **GitHub Release `bridge-v0.1.0`**（六平台单文件 + 逐产物 sha256 + SHA256SUMS.txt）——
-  由 CI `release-room-bridge`（tag `bridge-v*`）构建。
+- **GitHub Release `bridge-v0.1.0`** 已发布（`2026-10-13T07:54:46Z`）：CI `release-room-bridge`
+  run `38365639173` **success**；资产齐全（darwin/linux × arm64/amd64 +
+  windows × amd64/arm64 `.exe`，各带逐产物 `.sha256`，另有 `SHA256SUMS.txt`）。
+- **端到端实装验证**（macOS arm64）：`PREFIX=/tmp/bridge-bin bash -c "$(curl -sSL
+  https://get.editor.vip/iroh/room-bridge-install.sh)"` → 下载 + **sha256 校验通过** +
+  安装 + 提示齐全；用这颗**从 Release 装出来的**二进制跑 `byoa-join.py`：**6/6**（真实链路）。
+- `get.editor.vip` 五条路径全部 200：`/iroh/install.sh`、`/iroh/agent-install.sh`、
+  `/iroh/agent-install.ps1`、`/iroh/room-bridge-install.sh`、`/iroh/room-bridge-install.ps1`。
 - **npm 分发（`iroh-room-bridge`）已备好**：本地预演全过；正式发布需要 npm 账号
   （本机 registry 现指向 npmmirror 镜像，发布要切回 registry.npmjs.org）。
 - 无需前端/roomd 改动；get.editor.vip Worker 已部署新版本。
