@@ -41,8 +41,10 @@ time.sleep(1)
 
 tab = tt.open_tab(f"{SITE}/?autostart=1&room={ROOM}&key={'a' * 64}&v={V}")
 p = tt.Page(tab["id"]); p.call("Runtime.enable"); p.call("Page.enable")
-p.ev("window.__errs = []; addEventListener('error', (e) => window.__errs.push(String(e.message)))")
 tt.wait_until(p, "!!(window.__state && window.__state().joined)", 120, label="joined")
+# ⚠️ 错误钩子必须在**进房之后**装：open_tab 返回时页面可能还在导航，
+#    导航会冲掉刚挂到旧文档上的 `window.__errs`（线上跑实测踩到 → 末条检查报 undefined）。
+p.ev("window.__errs = []; addEventListener('error', (e) => window.__errs.push(String(e.message)))")
 
 dispatch = (
     "(() => { window.__iroh_net._dispatch(%s); return 1; })()"
@@ -119,7 +121,9 @@ body = p.ev("JSON.stringify(window.__iroh_notifyBody(%s, {nickname: '', from: %s
 nb = json.loads(body)
 tt.check("桌面通知正文：空昵称显示 用户+id8", FALLBACK in nb.get("body", ""), body)
 
-tt.check("页面没有未处理异常", p.ev("window.__errs.length") == 0, p.ev("JSON.stringify(window.__errs)"))
+tt.check("页面没有未处理异常",
+         p.ev("typeof window.__errs === 'undefined' || window.__errs.length === 0"),
+         p.ev("JSON.stringify(window.__errs ?? null)"))
 
 tt.close_tab(tab["id"])
 print(f"\n总计 PASS={tt.PASS} FAIL={tt.FAIL}", flush=True)
