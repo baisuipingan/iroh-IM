@@ -239,7 +239,10 @@ iOS 端实现；UI 改版；性能压测；把 `!` 加回来（任何形式）�
     NO_PROXY=127.0.0.1,localhost …`
   - 套件：`bash scripts/e2e/run.sh`（14 个 python 用例，含新加的 `plugin-channel`）、
     `node scripts/smoke.mjs`、`bash scripts/verify.sh all`。
-- **常驻 agent**：`iroh-agent-pi.service`（非 root，房间 `patrick`，昵称"服务器助手"）。
+- **常驻 agent**：~~`iroh-agent-pi.service`（非 root，房间 `patrick`，昵称"服务器助手"）~~
+  —— **2026-10-13 所有者要求下线，已完整移除**（服务/单元/`/opt/iroh-agent`/系统账号全清）。
+  想让 agent 再进房间：走 BYOA（[`bring-your-own-agent.md`](bring-your-own-agent.md)），
+  或按 [`deploy/agent/README.md`](../deploy/agent/README.md) 的蓝图重新部署。
   适配器代码在 `/opt/iroh-agent/agent-pi/`（**部署 = scp `agent-pi/src/*.ts` + `systemctl restart`**）。
   ⚠️ **原生 agent 连中继需要 token**：写在 `/opt/iroh-agent/home/config.json`
   （临时起第二个 agent 时必须带上它，否则"连接中继超时"）。
