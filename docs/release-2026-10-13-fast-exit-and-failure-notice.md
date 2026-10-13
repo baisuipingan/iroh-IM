@@ -26,7 +26,7 @@
 
 ## 发版
 
-- `bridge-v0.2.2` + npm `iroh-room-bridge@0.2.2`（结果见下）。
+- `bridge-v0.2.2`：CI run **`38410416796` success**（六平台 + 逐产物 sha256）；npm `iroh-room-bridge@0.2.2` 已发布（`latest`=0.2.2）。
 
 ## 回滚
 
