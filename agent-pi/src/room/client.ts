@@ -62,6 +62,8 @@ export class AgentClient extends EventEmitter {
   #helloFrame: HelloFrame | null = null;
   /** 至少成功握手过一次（决定崩溃后是否值得自动重启：路径写错就别无限重试） */
   #everHello = false;
+  /** 子进程是否已经退出（`#onClose` 置位）——退出流程靠它跳过"白等 close" */
+  #childExited = true;
   #stopping = false;
   #restarts = 0;
   #pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -192,19 +194,28 @@ export class AgentClient extends EventEmitter {
     this.#stopWatchdog();
     const child = this.#child;
     if (!child) return;
-    try {
-      await this.request('shutdown', { reason: 'adapter stopping' }, 5_000);
-    } catch {
-      // 已经死了/超时：继续走退出确认
-    }
-    const exited = await Promise.race([
-      once(child, 'close').then(() => true),
-      sleep(5_000).then(() => false),
-    ]);
-    if (!exited) {
-      this.#log('[client] agent 进程 5s 未退出，SIGKILL');
-      child.kill('SIGKILL');
-      await Promise.race([once(child, 'close'), sleep(2_000)]);
+    // ⚠️ 子进程可能**早就退出了**：Ctrl-C 会发给整个进程组，`iroh-agent serve`
+    //    常常比我们先退。此时 `once(child,'close')` 永远不会再触发 —— 旧代码会
+    //    白等满 5s、再 SIGKILL、再等 2s，退出要 ~7 秒（用户实测："后台怎么退出这么慢"）。
+    if (!this.#childExited) {
+      try {
+        await this.request('shutdown', { reason: 'adapter stopping' }, 5_000);
+      } catch {
+        // 已经死了/超时：继续走退出确认
+      }
+      // ⚠️ 这里必须**同步**检查 + 注册监听（JS 单线程：中间不会有事件插进来），
+      //    否则 request 等待期间子进程退出后，又会掉进"等一个不会再来的 close"。
+      if (!this.#childExited) {
+        const closed = await Promise.race([
+          once(child, 'close').then(() => true),
+          sleep(5_000).then(() => false),
+        ]);
+        if (!closed) {
+          this.#log('[client] agent 进程 5s 未退出，SIGKILL');
+          child.kill('SIGKILL');
+          await Promise.race([once(child, 'close'), sleep(2_000)]);
+        }
+      }
     }
     this.#failPending(new AgentError('stopped', '客户端已停止'));
   }
@@ -220,6 +231,7 @@ export class AgentClient extends EventEmitter {
     });
     this.#child = child;
     this.#helloFrame = null;
+    this.#childExited = false;
 
     createInterface({ input: child.stdout }).on('line', (line) => this.#onLine(line));
     createInterface({ input: child.stderr }).on('line', (line) => this.#log(`[agent] ${line}`));
@@ -280,6 +292,7 @@ export class AgentClient extends EventEmitter {
   #onClose(code: number | null, signal: string | null): void {
     const wasRunning = this.#everHello;
     this.#log(`[client] agent 进程退出（code=${code} signal=${signal}）`);
+    this.#childExited = true;
     this.#child = null;
     this.#helloFrame = null;
     this.#stopWatchdog();

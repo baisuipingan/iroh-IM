@@ -117,6 +117,8 @@ export class ChatAdapter {
   /** 正在接收的 fileId（并发上限用） */
   #accepting = new Set<string>();
 
+  /** 上次把处理失败播报进房间的时间（限频，防刷屏） */
+  #lastFailureNoticeAt = 0;
   constructor(opts: AdapterOptions) {
     this.#opts = opts;
   }
@@ -363,7 +365,19 @@ export class ChatAdapter {
     try {
       reply = await this.#opts.brain.onMessage(incoming, ctx);
     } catch (error) {
+      const message = (error as Error).message.replace(/\s+/g, ' ').slice(0, 200);
       this.#log(`[adapter] brain 处理失败（本次不回）：${(error as Error).message}`);
+      // 房间里如实说一句（限频 120s）：否则用户只能"等了半天没回复"，
+      // 完全不知道是它出问题了 —— 与权限/预算被拒"都要说出来"的既有原则一致。
+      const now = Date.now();
+      if (now - this.#lastFailureNoticeAt >= 120_000) {
+        this.#lastFailureNoticeAt = now;
+        try {
+          await ctx.say(`⚠️ 我这轮没处理成功：${message}（稍后可以再 @ 我一次）`);
+        } catch {
+          // 尽力而为：播报失败不改变"这轮不回"的结果
+        }
+      }
       return;
     }
     if (typeof reply !== 'string') return;

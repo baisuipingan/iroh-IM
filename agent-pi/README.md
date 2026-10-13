@@ -192,6 +192,7 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 
 行为细节：同一 `message.id` 只处理一次；`mine` 消息不回；昵称以 `[bot]` 开头的
 消息不回（防机器人互相刷屏）；`serve` 崩溃后指数退避自动重启并重新进房。
+brain 失败会在**房间里如实说一句**（限频 120s），不是只写日志；
 `SIGINT`/`SIGTERM` 走优雅退出（leave → close → bye）；重复信号会被忽略——
 pi SDK 依赖的 `signal-exit` 清理时会重抛信号，不挡的话进程会被它带杀（实测 -15）。
 

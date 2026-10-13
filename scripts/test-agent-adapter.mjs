@@ -100,6 +100,31 @@ test('同一瞬间到达的多个触发只处理一轮（冷却必须在 await �
   assert.deepEqual(client.said, ['一'], '只应处理第一条');
 });
 
+test('brain 失败：房间里如实说一句（限频 120s，不刷屏）', async () => {
+  const client = makeClient();
+  const attempts = [];
+  const adapter = makeAdapter(client, {
+    cooldownMs: 0,
+    brain: {
+      onMessage: async (msg) => {
+        attempts.push(msg.text);
+        throw new Error('ACP 这一轮失败：Authentication required: provider authentication required');
+      },
+    },
+  });
+  adapter.start();
+  client.emit('event', message('f1', '@小助手 你好'));
+  await sleep(150);
+  assert.equal(client.said.length, 1, `失败应当播报一次：${JSON.stringify(client.said)}`);
+  assert.match(client.said[0], /⚠️ 我这轮没处理成功/);
+  assert.match(client.said[0], /Authentication required/);
+  client.emit('event', message('f2', '@小助手 再试'));
+  await sleep(150);
+  assert.equal(client.said.length, 1, '120s 窗口内不重复播报');
+  assert.equal(attempts.length, 2, '但每次触发都真的试过了');
+  await adapter.stop();
+});
+
 test('上一轮还没结束时到达的触发被丢弃（不排队）', async () => {
   const client = makeClient({ sayDelay: 300 });
   const adapter = makeAdapter(client, { cooldownMs: 0 });
