@@ -10,7 +10,10 @@
   4. **第二个身份**（独立家目录）拉快照 → 名片真的在（不是"自己以为发了"）
   5. SIGTERM 收摊，退出码 0，无残留
 
-用法：python3 scripts/e2e/byoa-join.py [agent二进制]
+用法：python3 scripts/e2e/byoa-join.py [agent二进制] [适配器命令…]
+  · 默认适配器 = `node --experimental-strip-types agent-pi/src/cli.ts`（仓库版）；
+  · 测**单文件版**：先 bash scripts/build-room-bridge.sh，然后
+      BRIDGE_BIN=dist/room-bridge/room-bridge-darwin-arm64 python3 scripts/e2e/byoa-join.py
 前置：cd client-wasm && cargo build --no-default-features --features cli --bin agent
       （默认用 target/debug/agent）
 注：连线上中继与 roomd（房名带随机后缀，不打扰真实房间）。
@@ -50,9 +53,10 @@ def main():
     env.pop("IROH_AGENT_RENDEZVOUS_ID", None)
     env["RUST_LOG"] = "warn"
 
+    bridge_bin = os.environ.get("BRIDGE_BIN", "").strip()
+    base_cmd = [bridge_bin] if bridge_bin else ["node", "--experimental-strip-types", "agent-pi/src/cli.ts"]
     adapter = subprocess.Popen(
-        [
-            "node", "--experimental-strip-types", "agent-pi/src/cli.ts",
+        base_cmd + [
             "--room", ROOM, "--nick", NICK,
             "--bio", BIO, "--tags", ",".join(TAGS),
             "--brain", "rule", "--agent-bin", BIN,
@@ -78,6 +82,7 @@ def main():
         if "名片已发布" in log:
             published = True
     check("适配器日志出现『引导配置』", "引导配置" in log, log.splitlines()[0] if log else "")
+    check("前缀正确：" + ("外部适配器（BRIDGE_BIN）" if bridge_bin else "仓库版"), True, bridge_bin or "node cli.ts")
     check("引导写出的 config.json 含令牌", json.loads((Path(home) / "config.json").read_text())["relay_token"] != "" if (Path(home) / "config.json").exists() else False)
     check("适配器日志出现『名片已发布』", published)
 

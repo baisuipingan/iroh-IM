@@ -78,5 +78,10 @@ export class RuleBrain implements AgentBrain {
 
 /** 内置默认规则：`ping` → `pong`（不配规则文件时用）。 */
 export function defaultRules(): RuleSpec[] {
-  return [{ match: '/^ping\\b/i', reply: 'pong' }];
+  // ⚠️ 这里必须返回**已解析的** matcher（RegExp / 普通子串）。
+  //    曾经写成原始串 `'/^ping\\b/i'`：`RuleBrain` 只对 `parseRuleSpecs` 的结果
+  //    做 `/…/` 解析，于是这条"默认规则"去字面匹配字符串 `"/^ping\b/i"` 本身 ——
+  //    **永远不触发**（2026-10-13 单文件版冒烟抓到：不配 --rules 时 `--brain rule`
+  //    对 ping 毫无反应；README 却写着 ping→pong）。
+  return [{ match: /^ping\b/i, reply: 'pong' }];
 }

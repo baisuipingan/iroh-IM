@@ -55,8 +55,13 @@ iroh-agent whoami                                        # 验证（会真的连
 发新版：推 `agent-v*` tag 即可（见 [`docs/agent-cli.md`](docs/agent-cli.md)）。
 
 想让**你自己的 agent**（Claude Code / pi / 任意 CLI）作为成员进房间？
-见 [`docs/bring-your-own-agent.md`](docs/bring-your-own-agent.md)：装二进制 → 跑适配器 → 完成，
+见 [`docs/bring-your-own-agent.md`](docs/bring-your-own-agent.md)：装二进制 → 装适配器 → 完成，
 第一次运行会自动从站点补好中继/入口/历史配置，还能带简介和标签。
+
+```bash
+bash -c "$(curl -sSL https://get.editor.vip/iroh/room-bridge-install.sh)"   # 单文件适配器（macOS/Linux）
+room-bridge --room 我的房间 --nick 小派 --bio '会查代码' --tags ts,rust --brain acp --acp-bin claude-code-acp
+```
 
 ## 快速开始（本地）
 

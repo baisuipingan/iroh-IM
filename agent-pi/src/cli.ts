@@ -25,7 +25,8 @@ const DEFAULT_SERVER = 'https://im.pinkstar.cc';
 const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
 
 用法：
-  node src/cli.ts --room <房间> [--nick 名字] [--brain rule|command] [选项]
+  room-bridge --room <房间> [--nick 名字] [--brain rule|command|pi-sdk|acp] [选项]
+  （仓库里跑同一条命令：node src/cli.ts --room <房间> …，参数完全一致）
 
 常用：
   --room X              房间名（必填；房间名就是访问凭据）
@@ -250,6 +251,34 @@ function parseJsonArray(value: string, what: string): unknown[] {
   return parsed;
 }
 
+/**
+ * 加载 pi SDK 相关模块（`pi-sdk` / `tools`）。
+ *
+ * ⚠️ 这里**故意用"计算出来的"动态 import**（而不是字面量字符串），三条路都顾上：
+ *   - 单文件版（bun --compile）构建时**看不到**这个依赖 ⇒ 不会把 pi SDK 打进单文件
+ *     （它带原生模块 `*.node`，打进单文件不可靠、体积还要涨几十 MB）；
+ *     运行时加载失败 → 抛出下面这句人话，而不是启动即崩。
+ *   - 仓库版（`node --experimental-strip-types` 跑源码）→ 命中同目录的 `.ts`；
+ *   - npm 版（`dist/cli.mjs`）→ 先试 `.ts`（node_modules 里禁用类型剥离，会失败），
+ *     再命中同目录的编译产物 `.mjs`（npm 包里随包分发）。
+ */
+async function loadPiSdkModule(name: 'pi-sdk' | 'tools'): Promise<unknown> {
+  const base = new URL('./agent-io/', import.meta.url);
+  const failures: string[] = [];
+  for (const ext of ['.ts', '.mjs']) {
+    try {
+      return await import(new URL(`${name}${ext}`, base).href);
+    } catch (error) {
+      failures.push(`${name}${ext}: ${(error as Error).message}`);
+    }
+  }
+  throw new Error(
+    `加载 ${name} 模块失败（pi-sdk 大脑需要 @earendil-works/pi-coding-agent）：` +
+      `${failures.join('；')}。单文件版刻意不带它 —— ` +
+      '改用 --brain acp / --brain command，或用仓库版（agent-pi 里先 npm ci）/ npm 版跑 pi-sdk',
+  );
+}
+
 function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
   const kind = flags.brain ?? 'rule';
   if (kind === 'rule') {
@@ -273,9 +302,12 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
   if (kind === 'pi-sdk') {
     // pi-sdk 是 async 工厂（创建 SDK 会话），单独走 AsyncBrain 包装
     return new AsyncBrain(async () => {
-      // ⚠️ 动态 import：不装 pi SDK 时，rule/command 两条路照常能用（零依赖保留）
-      const { createPiSdkBrain } = await import('./agent-io/pi-sdk.ts');
-      const { buildCustomTools, CUSTOM_TOOL_NAMES } = await import('./agent-io/tools.ts');
+      const { createPiSdkBrain } = (await loadPiSdkModule(
+        'pi-sdk',
+      )) as typeof import('./agent-io/pi-sdk.ts');
+      const { buildCustomTools, CUSTOM_TOOL_NAMES } = (await loadPiSdkModule(
+        'tools',
+      )) as typeof import('./agent-io/tools.ts');
 
       const tools = parsePiTools(flags.piTools);
       const wanted = (flags.tools ?? '')

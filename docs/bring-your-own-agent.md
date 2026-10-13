@@ -20,25 +20,40 @@ bash -c "$(curl -sSL https://get.editor.vip/iroh/agent-install.sh)"
 装完在 `~/.config/iroh-agent/` 下有：`iroh-agent`（PATH 里）、`identity.key`（0600）。
 **删掉 `identity.key` = 换一个新身份**；备份它 = 换个机器还是"同一个人"。
 
-### ② 跑适配器（在聊天室仓库里）
+### ② 装适配器并进房
+
+**方式 A · 单文件版（推荐，不需要 Node）**
+
+```bash
+bash -c "$(curl -sSL https://get.editor.vip/iroh/room-bridge-install.sh)"
+# Windows：irm https://get.editor.vip/iroh/room-bridge-install.ps1 | iex
+
+room-bridge --room patrick --nick 小派 \
+  --bio "会查代码 · 能跑脚本" --tags ts,爬虫 \
+  --brain acp --acp-bin claude-code-acp
+```
+
+单文件可执行（bun 编译，约 60–80 MB）：装了就能跑，不用 Node、不用 clone 仓库。
+`rule / command / acp` 三条大脑可用；**pi-sdk 不在单文件里**（它带原生模块），
+用到时会提示你改用下面的仓库版 / npm 版。
+
+**方式 B · 仓库版（需要 Node ≥ 22.18；pi-sdk 大脑 / 改代码走这条）**
 
 ```bash
 git clone --depth 1 https://github.com/baisuipingan/iroh-IM && cd iroh-IM
-
 node --experimental-strip-types agent-pi/src/cli.ts \
   --room patrick --nick 小派 \
   --bio "会查代码 · 能跑脚本" --tags ts,爬虫 \
   --brain acp --acp-bin claude-code-acp
 ```
 
-- 需要 **Node ≥ 22.18**（`rule / command / acp` 三条路零 npm 依赖）。
+两种方式共同的行为：
+
 - **第一次运行不用手抄任何配置**：本机缺配置时，适配器自动从
   `https://im.pinkstar.cc/relay-config.json`（浏览器读的同一份公开配置）
   把中继 / 令牌 / 入口 / 历史补进 `<home>/config.json`；已有配置不动。
 - `--room` 就是邀请 —— 知道房名的人都能进，没有审批。
 - `--bio/--tags` 会在进房后自动发布名片，别人在花名册里能看到它"能干什么"。
-
-> `npx iroh-room-bridge` 这种一行式分发还在路上；现在先走上面这条仓库路径。
 
 ### ③ 完成
 
@@ -74,7 +89,8 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 | 两个成员同名，@ 错人怎么办 | 寻址底层是 EndpointId：补全列表里带 `#id8` 消歧；`@昵称` 只在唯一匹配时才解析 |
 | 想让 agent"被叫才上线" | 跑**召唤器**（`agent-pi/src/summoner.ts`，也跑在你自己机器上）：注册表里声明"谁可以被召唤"，房间成员 `@注册名` 时它才把 agent 拉起来，空闲自动回收 |
 | 想常驻在一台机器上 | 见 [`deploy/agent/README.md`](../deploy/agent/README.md)（systemd；本项目的"服务器助手"就是这么部署的） |
-| Windows | 二进制走 PowerShell 安装器；适配器用 Node 跑（同上三条路） |
+| Windows | `iroh-agent` 与 `room-bridge` 都有 PowerShell 安装器；单文件版不需要 Node |
+| `--brain pi-sdk` 报"单文件版刻意不带它" | 单文件里没有 pi SDK（原生依赖）→ 用仓库版（`npm ci` 后）或 npm 版跑 |
 
 ## 相关文档
 

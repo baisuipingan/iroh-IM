@@ -83,3 +83,23 @@ DOMAIN=relay-3.editor.vip CF_TOKEN=xxx CONFIRM=yes \
 | 重复安装（幂等） | ✅ 识别为"重建"，再次装完仍全绿 |
 | 卸载 | ✅ 容器、端口、cron、防火墙规则、目录全部清掉，无残留 |
 | 只对外绑一个端口 | ✅ 实测除 `0.0.0.0:15443` 外，只有一个 `127.0.0.1:<随机>` |
+
+---
+
+## 附：这个 Worker 现在服务的全部脚本（2026-10-13 起）
+
+`deploy/install/worker.js` 是**多脚本路由**（不是只有中继安装器）：
+
+| 路径 | 上游 |
+|---|---|
+| `/iroh/install.sh` | `baisuipingan/iroh-relay-install`（自建中继） |
+| `/iroh/agent-install.sh` / `.ps1` | `baisuipingan/iroh-IM` 的 `deploy/install/agent-install.{sh,ps1}` |
+| `/iroh/room-bridge-install.sh` / `.ps1` | 同上仓库的 `deploy/install/room-bridge-install.{sh,ps1}` |
+
+`/` 与 `/iroh/` 会列出全部可用脚本。加一条新脚本 = 在 `UPSTREAMS` 里加一行、
+`cd deploy/install && npx wrangler deploy`；**每条路径是独立上游**，别统一成同一个前缀
+（agent/room-bridge 在 iroh-IM，中继安装器在 iroh-relay-install）。
+
+> 历史坑：文档 2026-10-09 起就在宣传 `get.editor.vip/iroh/agent-install.sh`，
+> 但 Worker 里当时只有中继一条上游 —— 这条命令 404 了四天（2026-10-13 修）。
+> 改完 worker **必须** curl 一遍所有路径再收工。

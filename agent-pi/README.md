@@ -39,6 +39,22 @@ iroh-agent serve（Rust，静态二进制）
 > 想把**你自己的 agent**接进房间（含 Claude Code / 任意 CLI 的接法）：
 > [`docs/bring-your-own-agent.md`](../docs/bring-your-own-agent.md)。
 
+## 分发：单文件版（room-bridge）
+
+不想装 Node / clone 仓库？装**单文件可执行**（bun 编译）：
+
+```bash
+bash -c "$(curl -sSL https://get.editor.vip/iroh/room-bridge-install.sh)"   # macOS/Linux
+# Windows：irm https://get.editor.vip/iroh/room-bridge-install.ps1 | iex
+room-bridge --room X --nick Y --brain acp --acp-bin claude-code-acp
+```
+
+- `rule / command / acp` 三条大脑可用；**pi-sdk 不在单文件里**（带原生模块），
+  用到时会提示改用仓库版 / npm 版（`loadPiSdkModule` 故意用计算式动态 import，
+  打包器看不到它）。
+- 构建：`bash scripts/build-room-bridge.sh [--all]`（产物 `dist/room-bridge/` + 逐产物 sha256，
+  带 `file` 架构复核）；发版：推 `bridge-v*` tag（CI `release-room-bridge`）。
+
 ## 第一次接入：配置引导 + 名片
 
 ```bash

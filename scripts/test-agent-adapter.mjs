@@ -72,6 +72,18 @@ const makeAdapter = (client, opts = {}) =>
     ...opts,
   });
 
+test('默认规则真的能用：ping → pong（曾经因为 /…/ 没被解析而永远不触发）', async () => {
+  const { defaultRules, RuleBrain } = await import('../agent-pi/src/agent-io/rule.ts');
+  const brain = new RuleBrain(defaultRules());
+  const msg = {
+    room: 'r', id: 'm1', from: 'd'.repeat(64), nickname: '人',
+    text: 'ping', ts: 1, agentNick: '小助手', raw: {},
+  };
+  assert.equal(await brain.onMessage(msg), 'pong');
+  assert.equal(await brain.onMessage({ ...msg, text: 'PING' }), 'pong');
+  assert.equal(await brain.onMessage({ ...msg, text: '没什么' }), null);
+});
+
 test('同一瞬间到达的多个触发只处理一轮（冷却必须在 await 之前占位）', async () => {
   const client = makeClient({ sayDelay: 120 });
   const adapter = makeAdapter(client, { cooldownMs: 3000 });
