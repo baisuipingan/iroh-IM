@@ -34,6 +34,9 @@ const request = (method, params) =>
 
 const SESSION = 'fake-session-1';
 let cancelled = false;
+// `--acp-model` 单测用：session/new 报一个默认模型，set_config_option 改它，
+// 之后的回复把当前模型带出来 —— 这样测试断言的是"真的切了"，不是"发了个请求"。
+let model = 'fake/model-default';
 
 async function prompt(params) {
   const text = String(params?.prompt?.[0]?.text ?? '');
@@ -53,6 +56,7 @@ async function prompt(params) {
 
   chunk('你好，');
   chunk('我是假 agent。');
+  chunk(`（model=${model}）`);
   notify('session/update', {
     sessionId: SESSION,
     update: { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Bash: echo hi', name: 'Bash', status: 'pending' },
@@ -101,7 +105,23 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     return;
   }
   if (frame.method === 'session/new') {
-    send({ jsonrpc: '2.0', id: frame.id, result: { sessionId: SESSION } });
+    send({
+      jsonrpc: '2.0',
+      id: frame.id,
+      result: {
+        sessionId: SESSION,
+        configOptions: [
+          { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model,
+            options: [{ value: 'fake/model-default', name: 'default' }, { value: 'fake/model-x', name: 'x' }] },
+        ],
+      },
+    });
+    return;
+  }
+  if (frame.method === 'session/set_config_option') {
+    // opencode v2 用的就是这条；老 `session/set_model` 已废弃（Method not found）
+    if (frame.params?.configId === 'model') model = String(frame.params?.value ?? model);
+    send({ jsonrpc: '2.0', id: frame.id, result: {} });
     return;
   }
   if (frame.method === 'session/prompt') {

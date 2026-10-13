@@ -95,6 +95,26 @@ test('agent 进程死了：下次说话重新拉起（不崩、不静默吞）',
   assert.match(reply ?? '', /你好，/, `重启后应当能正常回答：${reply}`);
 });
 
+test('--acp-model：走 session/set_config_option（opencode v2 只认这个），并在会话里真的生效', async (t) => {
+  const logs = [];
+  const brain = brainWith({ model: 'fake/model-x', log: (l) => logs.push(l) });
+  t.after(() => brain.close());
+  const { ctx } = makeCtx();
+  const reply = await brain.onMessage(message('你好'), ctx);
+  assert.match(reply ?? '', /（model=fake\/model-x）/, `模型应当真的切换：${reply}`);
+  assert.ok(logs.some((l) => l.includes('已指定模型')), logs.join('\n'));
+});
+
+test('没给 --acp-model：日志打出"当前模型"（不再靠猜）', async (t) => {
+  const logs = [];
+  const brain = brainWith({ log: (l) => logs.push(l) });
+  t.after(() => brain.close());
+  const { ctx } = makeCtx();
+  const reply = await brain.onMessage(message('你好'), ctx);
+  assert.match(reply ?? '', /（model=fake\/model-default）/, `应当用 agent 默认模型：${reply}`);
+  assert.ok(logs.some((l) => l.includes('当前模型：fake/model-default')), logs.join('\n'));
+});
+
 test('C1 allow-list：命中白名单才放行，其他一律拒绝（并说出命中/理由）', async (t) => {
   const brain = brainWith({
     permission: 'allow-list',

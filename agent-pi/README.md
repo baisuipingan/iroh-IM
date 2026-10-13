@@ -173,6 +173,7 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 | `--command` / `--args` / `--prompt-template` / `--input` / `--timeout-ms` | — | command 大脑 |
 | `--pi-system-prompt` / `--pi-append-prompt` / `--pi-prompt-template` / `--pi-cwd` / `--pi-tools` / `--pi-model` | — | pi-sdk 大脑（见上；`--pi-tools none\|read-only\|all\|逗号名单`） |
 | `--acp-bin` / `--acp-args` / `--acp-cwd` | `claude-code-acp` / — / 当前目录 | ACP 后端（首选接入口；换 agent = 换这份 spawn 配置）。`--acp-cwd` 就是**沙箱边界**（必须绝对路径、必须存在） |
+| `--acp-model` | agent 默认 | 指定会话模型（`provider/model`，如 `opencode-go/deepseek-v4-flash`）。走 ACP `session/set_config_option`（opencode v2 只认这条）；不指定也会把**当前模型打进日志** |
 | `--acp-permission` / `--acp-allow` | `deny` / — | 权限策略（C1）：`deny`（默认拒绝）/ `allow-list`（配 `--acp-allow Read,Grep`，匹配工具名或标题子串）/ `read-only`（只放行读类）/ `allow-all`（慎）。**批不批都会在房间里说，并说出理由** |
 | `--acp-narrate` / `--acp-timeout-ms` | `tools` / 300000 | 工具调用/权限请求播报（`off` 只发最终回复） / 单轮 prompt 硬超时 |
 | `--budget-turns` / `--budget-window-min` | 0（不限）/ 60 | 成本闸门（C3，全后端通用）：滑动窗口内最多起几轮；超限**不触模型**，在房间里如实说一句 |

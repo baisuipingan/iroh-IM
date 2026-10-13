@@ -91,6 +91,8 @@ pi-sdk 大脑（直接调 pi SDK；长会话，需 agent-pi 里装有 SDK）：
 
 acp 后端（首选接入口；agent 换一个 = 换一份 spawn 配置）：
   --acp-bin PATH        ACP agent 可执行文件（默认 claude-code-acp）
+  --acp-model ID        指定会话模型（如 opencode-go/deepseek-v4-flash）；不指定用
+                        agent 默认，但日志会打出"当前模型"便于排查
   --acp-args JSON       追加给它的参数
   --acp-cwd DIR         会话工作目录 = **沙箱边界**（必须绝对路径；给专用目录、低权限账号跑）
   --acp-permission deny|allow-all|allow-list|read-only
@@ -147,6 +149,7 @@ const VALUE_FLAGS = new Set([
   'acp-bin',
   'acp-args',
   'acp-cwd',
+  'acp-model',
   'acp-permission',
   'acp-allow',
   'acp-narrate',
@@ -197,6 +200,7 @@ interface Flags {
   acpBin?: string;
   acpArgs?: string;
   acpCwd?: string;
+  acpModel?: string;
   acpPermission?: string;
   acpAllow?: string;
   acpNarrate?: string;
@@ -412,7 +416,8 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
       log(
         `[cli] acp 后端：bin=${flags.acpBin ?? 'claude-code-acp'} cwd=${cwd} ` +
           `permission=${permission}${permission === 'allow-list' ? `（白名单：${allowList.join(',')}）` : ''} ` +
-          `narrate=${flags.acpNarrate === 'off' ? 'off' : 'tools'}`,
+          `narrate=${flags.acpNarrate === 'off' ? 'off' : 'tools'} ` +
+          `model=${flags.acpModel ?? '（agent 默认）'}`,
       );
       return await createAcpBrain({
         bin: flags.acpBin ?? 'claude-code-acp',
@@ -421,6 +426,7 @@ function buildBrain(flags: Flags, log: (line: string) => void): AgentBrain {
         permission,
         allowList,
         narrate: flags.acpNarrate === 'off' ? 'off' : 'tools',
+        model: flags.acpModel,
         promptTimeoutMs: num(flags.acpTimeoutMs, 5 * 60 * 1000),
         log: (...args2: unknown[]) => log(args2.map(String).join(' ')),
       });

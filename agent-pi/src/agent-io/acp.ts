@@ -63,6 +63,12 @@ export interface AcpBrainOptions {
   narrate?: 'tools' | 'off';
   /** 一轮 prompt 的硬超时（毫秒，默认 5 分钟） */
   promptTimeoutMs?: number;
+  /**
+   * 指定会话使用的模型（`provider/model`，如 `opencode-go/deepseek-v4-flash`）。
+   * 不指定就用 agent 自己的默认 —— 但**会把当前模型打进日志**，省掉
+   * "接上了却不回"时的一半排查（比如某个模型临时不可用）。
+   */
+  model?: string;
   log?: (line: string) => void;
 }
 
@@ -95,7 +101,8 @@ function hitsTool(patterns: string[], tool: { name: string; title: string }): st
 }
 
 export class AcpBrain implements AgentBrain {
-  #opts: Required<Omit<AcpBrainOptions, 'args' | 'log'>> & Pick<AcpBrainOptions, 'args' | 'log'>;
+  #opts: Required<Omit<AcpBrainOptions, 'args' | 'log' | 'model'>> &
+    Pick<AcpBrainOptions, 'args' | 'log' | 'model'>;
   /** ⚠️ 不是 `ChildProcessWithoutNullStreams`：stderr 是 `inherit`（agent 日志直接进我们这侧） */
   #proc: ChildProcessByStdio<Writable, Readable, null> | null = null;
   #lines: Interface | null = null;
@@ -122,6 +129,7 @@ export class AcpBrain implements AgentBrain {
       narrate: opts.narrate ?? 'tools',
       promptTimeoutMs: opts.promptTimeoutMs ?? 5 * 60 * 1000,
       args: opts.args,
+      model: opts.model,
       log: opts.log,
     };
   }
@@ -177,6 +185,32 @@ export class AcpBrain implements AgentBrain {
     }
     this.#sessionId = session.result.sessionId as string;
     this.#log(`[acp] 已连接 ${this.#agentName}（session=${String(this.#sessionId).slice(0, 8)}…，cwd=${this.#opts.cwd}）`);
+
+    // 模型：ACP 用 config options 表达（opencode v2 只认 `session/set_config_option`；
+    // 老的 `session/set_model` 已废弃、会回 Method not found —— 2026-10-13 实测）。
+    const modelOption = (
+      session.result?.configOptions as
+        | Array<{ id?: string; category?: string; currentValue?: string }>
+        | undefined
+    )?.find((o) => o?.category === 'model' || o?.id === 'model');
+    if (this.#opts.model) {
+      const res = await this.#request('session/set_config_option', {
+        sessionId: this.#sessionId,
+        configId: modelOption?.id ?? 'model',
+        value: this.#opts.model,
+      });
+      if (res.error) {
+        throw new Error(
+          `ACP 切换模型失败（--acp-model ${this.#opts.model}）：${res.error.message ?? JSON.stringify(res.error)}`,
+        );
+      }
+      this.#log(`[acp] 已指定模型：${this.#opts.model}`);
+    } else if (modelOption?.currentValue) {
+      this.#log(
+        `[acp] 当前模型：${modelOption.currentValue}（要换：--acp-model <provider/model>；` +
+          '可用模型列表用 agent 自己的命令查，如 opencode models）',
+      );
+    }
   }
 
   /* -------------------------------------------------------- JSON-RPC 收发 */

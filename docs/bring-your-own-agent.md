@@ -36,9 +36,10 @@ room-bridge --room patrick --nick 小派 \
   --bio "会查代码 · 能跑脚本" --tags ts,爬虫 \
   --brain acp --acp-bin claude-code-acp
 
-# 接 opencode 就用预设，一条顶一长串：
+# 接 opencode 就用预设，一条顶一长串（模型建议显式指定）：
 room-bridge --room patrick --nick 小开 --preset opencode \
-  --acp-cwd "$HOME/我的项目" --acp-permission read-only
+  --acp-cwd "$HOME/我的项目" --acp-permission read-only \
+  --acp-model opencode-go/deepseek-v4-flash      # 模型用 `opencode models` 里挑一个
 ```
 
 单文件可执行（bun 编译，约 60–80 MB）：装了就能跑，不用 Node、不用 clone 仓库。
@@ -110,7 +111,7 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 | 想常驻在一台机器上 | 见 [`deploy/agent/README.md`](../deploy/agent/README.md)（systemd 部署蓝图，按需重建） |
 | Windows | `iroh-agent` 与 `room-bridge` 都有 PowerShell 安装器；单文件版不需要 Node |
 | `--brain pi-sdk` 报"单文件版刻意不带它" | 单文件里没有 pi SDK（原生依赖）→ 用仓库版（`npm ci` 后）或 npm 版跑 |
-| 接上了 opencode 但 @ 它不回 | 终端里看它的报错：`Authentication required: provider authentication required` ⇒ 是 **opencode 自己的登录/模型**问题（`opencode auth login`），不是房间这侧 |
+| 接上了 opencode 但 @ 它不回 | 先看终端报错。若是 `Authentication required: provider authentication required` 或 `Endpoint is unavailable`：多半是**模型**问题——opencode 默认那个模型可能临时不可用；`opencode models` 挑一个，用 `--acp-model provider/model` 指定（适配器日志会打出"当前模型"） |
 
 ## 相关文档
 
