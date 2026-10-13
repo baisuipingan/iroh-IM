@@ -41,10 +41,15 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 | **新 e2e `scripts/e2e/byoa-join.py`** | **5/5**（真实链路）：空目录 → 自动引导（日志 + 文件双证）→ 名片已发布 → **第二个身份在快照里看到 bio/tags** → SIGTERM 退出码 0 |
 | `verify.sh all` | **退出码 0**（干净整轮）：file-recipients 34/34、redesign 128/128、profile 20/20、multi-peer 19/19、mention-id 18/18、review-frontend 19/19、nickname-fallback 9/9、dm-removed 15/15、plugin-channel 11/11 …全部 FAIL=0；polish 套件 52/52、38/38、12/12 全绿 |
 
-## 发版
+## 发版（已发）
 
-- **GitHub Release `agent-v1.4.0`**（二进制多平台产物 + 逐产物 sha256）：
-  `profile` 命令需要它（`agent-install.sh` 自动取最新 `agent-v*`）。
+- **GitHub Release `agent-v1.4.0`** 已发布（`2026-10-13T06:15:42Z`）：CI `release-agent`
+  run `38355161391` **success**（6 平台构建 + 上传），资产齐全：
+  darwin/linux × arm64/amd64（tar.gz + 逐产物 `.sha256`）、windows × amd64/arm64（zip + `.sha256`）、
+  `SHA256SUMS.txt`。`agent-install.sh` 自动取最新 `agent-v*`，无需改脚本。
+- 本机实测（macOS arm64）：`AGENT_VERSION=agent-v1.4.0` 跑安装脚本 → **校验和通过**、装出的
+  二进制可运行；`serve` 探针发 `profile` 返回 **`notJoined`**（而不是 `unsupportedCmd`）
+  —— 证明发布产物真的带这条命令。
 - 老二进制 + 新适配器：名片发布会被明确拒绝并提示升级，**对话功能不受影响**。
 - 前端 / roomd **本轮未动**，无需发版。
 - 回滚：适配器与文档 = `git revert`；二进制 = 安装脚本钉回 `AGENT_VERSION=agent-v1.3.0`。
