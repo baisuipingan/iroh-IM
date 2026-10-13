@@ -25,8 +25,26 @@
 set -euo pipefail
 
 BIN=iroh-agent
-DIR="${AGENT_DIR:-/root/.config/iroh-agent}"
-PREFIX="${AGENT_PREFIX:-/usr/local/bin}"
+# 配置/身份目录：必须与二进制自己的规则一致（`$XDG_CONFIG_HOME|$HOME/.config` 下的
+# iroh-agent；见 client-wasm/src/bin/agent.rs 的 home()）。
+# ⚠️ 这里原来写死 `/root/.config/iroh-agent` —— 在**非 root 的个人电脑**上
+#    `mkdir -p /root/...` 直接失败，整条一键安装命令跑不完（2026-10-13 修）。
+if [ -n "${AGENT_DIR:-}" ]; then
+  DIR="$AGENT_DIR"
+elif [ -n "${HOME:-}" ] && [ -w "$HOME" ]; then
+  DIR="${XDG_CONFIG_HOME:-$HOME/.config}/iroh-agent"
+else
+  DIR="/root/.config/iroh-agent"
+fi
+# 安装目录：显式 AGENT_PREFIX > 系统可写的 /usr/local/bin > ~/.local/bin
+# （同一个坑：个人电脑上 /usr/local/bin 往往不可写，install 会失败）
+if [ -n "${AGENT_PREFIX:-}" ]; then
+  PREFIX="$AGENT_PREFIX"
+elif [ -w /usr/local/bin ] 2>/dev/null; then
+  PREFIX="/usr/local/bin"
+else
+  PREFIX="$HOME/.local/bin"
+fi
 REPO="${AGENT_REPO:-baisuipingan/iroh-IM}"
 # 可自建镜像地址（把 Release 里的二进制挂上去也行）；留空则按 `AGENT_VERSION`
 # 或"最新的 agent-* Release"解析（见下面的 latest_tag）
@@ -190,7 +208,13 @@ esac
 c '0;36' "== iroh-agent · 无头命令行聊天室成员 =="
 detect >/dev/null && ok "平台 $(detect)"
 if install_binary; then
-  write_config
+  if [ "${SKIP_CONFIG:-}" = "1" ]; then
+    # 组合安装（room-bridge 安装器顺带装本脚本）走这里：配置交给适配器的
+    # `--server` 自动引导去写（它会填中继/令牌/入口/历史），这里别写半份空配置。
+    wa "SKIP_CONFIG=1：跳过 config.json（交给 room-bridge 的自动引导）"
+  else
+    write_config
+  fi
   echo
   ok "完成。试试："
   echo "     $BIN whoami"
@@ -198,6 +222,10 @@ if install_binary; then
   echo "     $BIN send  --room 我的项目 --file /tmp/pkg.tar.gz"
   echo "     $BIN watch --room 我的项目"
   echo
+  case ":$PATH:" in
+    *":$PREFIX:"*) ;;
+    *) wa "$PREFIX 不在 PATH 里，把它加进去：export PATH=\"$PREFIX:\$PATH\"（写进 ~/.zshrc / ~/.bashrc）" ;;
+  esac
   wa "发布新版本：在仓库里为该平台构建 $BIN-<os>-<arch>.tar.gz 并上传到 Release。"
 else
   c '0;33' "没装上，但你可以直接从源码构建（见上面的命令）。"

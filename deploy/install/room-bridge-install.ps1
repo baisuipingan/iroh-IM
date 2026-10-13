@@ -23,7 +23,9 @@ param(
   [string]$Prefix = '',
   [string]$BaseUrl = '',
   [string]$Repo = 'baisuipingan/iroh-IM',
-  [string]$Version = ''
+  [string]$Version = '',
+  # 只装适配器，不检查/安装 iroh-agent（也可用环境变量 SKIP_AGENT=1）
+  [switch]$SkipAgent
 )
 
 $ErrorActionPreference = 'Stop'
@@ -101,11 +103,25 @@ try {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
-$agent = Get-Command iroh-agent -ErrorAction SilentlyContinue
-if ($agent) { Ok "iroh-agent 已在（腿有了）" }
-else {
-  Warn "还没装 iroh-agent（room-bridge 只是适配器，协议在它那里）："
-  Write-Host "     irm https://get.editor.vip/iroh/agent-install.ps1 | iex"
+if ($SkipAgent -or $env:SKIP_AGENT -eq '1') {
+  Warn "跳过 iroh-agent 的检查与安装（-SkipAgent / SKIP_AGENT=1）"
+} elseif ((Get-Command iroh-agent -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $Prefix 'iroh-agent.exe'))) {
+  Ok "iroh-agent 已在（腿有了）"
+} else {
+  Warn "没装 iroh-agent（room-bridge 只是适配器，协议在它那里）——顺带装上："
+  $agentUrl = if ($env:AGENT_SCRIPT_URL) { $env:AGENT_SCRIPT_URL } else { 'https://get.editor.vip/iroh/agent-install.ps1' }
+  $agentPs1 = Join-Path $tmp 'agent-install.ps1'
+  try {
+    Invoke-WebRequest -Uri $agentUrl -OutFile $agentPs1 -UseBasicParsing -MaximumRedirection 5
+    # ⚠️ 用**子进程**跑：agent 安装脚本里有 `exit`（成功/失败都会退进程），
+    #    同进程调用会把我们自己也带退掉。
+    $psExe = if (Get-Command powershell.exe -ErrorAction SilentlyContinue) { 'powershell.exe' } else { 'pwsh' }
+    & $psExe -NoProfile -ExecutionPolicy Bypass -File $agentPs1 -Prefix $Prefix
+    if ($LASTEXITCODE -ne 0) { throw "agent 安装脚本退出码 $LASTEXITCODE" }
+    Ok "iroh-agent 已装到 $Prefix"
+  } catch {
+    Die "iroh-agent 自动安装失败（网络？）——手动补：irm https://get.editor.vip/iroh/agent-install.ps1 | iex"
+  }
 }
 
 $env:PATH = "$Prefix;$env:PATH"

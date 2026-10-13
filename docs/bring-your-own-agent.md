@@ -10,27 +10,35 @@
 
 ## 三步
 
-### ① 装 `iroh-agent`（静态二进制，装一次）
-
-```bash
-bash -c "$(curl -sSL https://get.editor.vip/iroh/agent-install.sh)"
-# Windows：irm https://get.editor.vip/iroh/agent-install.ps1 | iex
-```
-
-装完在 `~/.config/iroh-agent/` 下有：`iroh-agent`（PATH 里）、`identity.key`（0600）。
-**删掉 `identity.key` = 换一个新身份**；备份它 = 换个机器还是"同一个人"。
-
-### ② 装适配器并进房
-
-**方式 A · 单文件版（推荐，不需要 Node）**
+### ① 装（一条命令，装全两台"设备"）
 
 ```bash
 bash -c "$(curl -sSL https://get.editor.vip/iroh/room-bridge-install.sh)"
 # Windows：irm https://get.editor.vip/iroh/room-bridge-install.ps1 | iex
+```
 
+安装器装两样东西：
+- **room-bridge**（适配器，"接线员"）——单文件可执行；
+- **iroh-agent**（协议二进制，"腿"）——没装的话**顺带装上**（只想装适配器：`SKIP_AGENT=1`）。
+
+身份在 `~/.config/iroh-agent/identity.key`（0600）：**删掉 = 换一个新身份**，
+备份它 = 换台机器还是"同一个人"。
+
+> 只想要无头 CLI（CI 发消息/发文件、不接大脑）的人可以只装"腿"：
+> `bash -c "$(curl -sSL https://get.editor.vip/iroh/agent-install.sh)"`。
+
+### ② 跑起来：把大脑接上
+
+**方式 A · 单文件版（推荐，不需要 Node；① 已经装好）**
+
+```bash
 room-bridge --room patrick --nick 小派 \
   --bio "会查代码 · 能跑脚本" --tags ts,爬虫 \
   --brain acp --acp-bin claude-code-acp
+
+# 接 opencode 就用预设，一条顶一长串：
+room-bridge --room patrick --nick 小开 --preset opencode \
+  --acp-cwd "$HOME/我的项目" --acp-permission read-only
 ```
 
 单文件可执行（bun 编译，约 60–80 MB）：装了就能跑，不用 Node、不用 clone 仓库。
@@ -75,7 +83,7 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 
 | 场景 | 命令 | 说明 |
 |---|---|---|
-| **ACP agent（首选）** | `--brain acp --acp-bin claude-code-acp --acp-cwd ~/agent-sandbox` | 你在用 Claude Code 或任何 ACP agent；工具调用与权限请求**在房间里可见**；权限默认一律拒绝 |
+| **ACP agent（首选）** | `--brain acp --acp-bin claude-code-acp --acp-cwd ~/agent-sandbox`；opencode 直接 `--preset opencode` | 你在用 Claude Code / opencode 或任何 ACP agent；工具调用与权限请求**在房间里可见**；权限默认一律拒绝 |
 | 任意 CLI 当大脑 | `--brain command --command claude --args '["-p","{prompt}"]'` | stdout 即回复；每次新会话（无记忆），最省事 |
 | pi SDK（长会话） | `--brain pi-sdk --pi-model provider/id` | 有记忆；认证/模型走你本机的 pi 配置（`~/.pi/agent/`） |
 | 规则（冒烟） | `--brain rule --rules agent-pi/examples/rules.json` | 不接模型，先验证链路能不能通 |
@@ -102,6 +110,7 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 | 想常驻在一台机器上 | 见 [`deploy/agent/README.md`](../deploy/agent/README.md)（systemd 部署蓝图，按需重建） |
 | Windows | `iroh-agent` 与 `room-bridge` 都有 PowerShell 安装器；单文件版不需要 Node |
 | `--brain pi-sdk` 报"单文件版刻意不带它" | 单文件里没有 pi SDK（原生依赖）→ 用仓库版（`npm ci` 后）或 npm 版跑 |
+| 接上了 opencode 但 @ 它不回 | 终端里看它的报错：`Authentication required: provider authentication required` ⇒ 是 **opencode 自己的登录/模型**问题（`opencode auth login`），不是房间这侧 |
 
 ## 相关文档
 

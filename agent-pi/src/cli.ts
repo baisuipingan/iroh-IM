@@ -6,7 +6,8 @@
  * 用法见 README；协议见 docs/agent-daemon-protocol.md。
  * ==========================================================================*/
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import process from 'node:process';
 import { ChatAdapter } from './room/adapter.ts';
 import type { AgentBrain } from './agent-io/index.ts';
@@ -15,6 +16,7 @@ import { CommandBrain } from './agent-io/command.ts';
 import { defaultRules, parseRuleSpecs, RuleBrain } from './agent-io/rule.ts';
 import { ensureLocalConfig } from './room/bootstrap.ts';
 import { announceProfileOnJoin } from './room/profile.ts';
+import { applyPreset } from './room/presets.ts';
 
 /**
  * 默认接入站点：本机缺配置时从这里拉 relay-config.json。
@@ -40,6 +42,10 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
   --respond-to-all      所有消息都触发（噪音大，慎用）
   --cooldown-ms 3000    两次回复的最小间隔
   --ping-interval-ms 45000  serve 看门狗（0 = 关）
+
+常用预设（把一类大脑的 spawn 配置压成一个名字；显式参数永远优先）：
+  --preset opencode     → --brain acp --acp-bin opencode --acp-args '["acp"]'
+  --preset claude-code  → --brain acp --acp-bin claude-code-acp
 
 接入引导（第一次用建议带着）：
   --server URL          本机缺配置时，从这个站点拉 relay-config.json 自动补好
@@ -99,6 +105,10 @@ acp 后端（首选接入口；agent 换一个 = 换一份 spawn 配置）：
   --budget-window-min M 窗口长度（分钟，默认 60）
 
 示例：
+  # opencode 一行接入（配只读权限最稳）
+  room-bridge --room 我的房间 --nick 小开 --preset opencode \
+    --acp-cwd "$PWD" --acp-permission read-only
+
   # 第一次接入（本机没配置也能直接进房）
   node src/cli.ts --room 我的房间 --nick 小助手 --bio '会查代码' --tags ts,rust \\
     --brain acp --acp-bin claude-code-acp
@@ -148,6 +158,7 @@ const VALUE_FLAGS = new Set([
   'tools',
   'fetch-allow',
   'server',
+  'preset',
   'bio',
   'tags',
   'files',
@@ -195,6 +206,7 @@ interface Flags {
   tools?: string;
   fetchAllow?: string;
   server?: string;
+  preset?: string;
   bio?: string;
   tags?: string;
   refreshConfig?: boolean;
@@ -249,6 +261,26 @@ function parseJsonArray(value: string, what: string): unknown[] {
   const parsed = JSON.parse(value);
   if (!Array.isArray(parsed)) throw new Error(`${what} 必须是 JSON 数组`);
   return parsed;
+}
+
+/**
+ * 默认的 `iroh-agent` 路径：环境变量优先；否则看**自己旁边**有没有
+ * （一键安装器会把两个二进制装进同一个目录，而那个目录常常还没进 PATH）——
+ * 最后才回落到 PATH 里的 `iroh-agent`。
+ */
+function defaultAgentBin(): string {
+  const fromEnv = process.env.IROH_AGENT_BIN?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const dir = path.dirname(process.execPath);
+    for (const name of ['iroh-agent', 'iroh-agent.exe']) {
+      const candidate = path.join(dir, name);
+      if (existsSync(candidate)) return candidate;
+    }
+  } catch {
+    // 取不到 execPath 就按老规矩走 PATH
+  }
+  return 'iroh-agent';
 }
 
 /**
@@ -484,8 +516,13 @@ async function main(): Promise<void> {
   if (!room) throw new Error(`缺少 --room（房间名就是访问凭据）\n\n${USAGE}`);
 
   const log = (line: string): void => console.error(`[agent-pi] ${line}`);
+  // 预设：只填没显式给的开关（显式参数优先）。未知 preset 直接抛错。
+  const preset = applyPreset(flags);
+  if (preset) {
+    log(`[cli] preset=${preset} → brain=${flags.brain}${flags.acpBin ? ` acp-bin=${flags.acpBin}` : ''}${flags.acpArgs ? ` acp-args=${flags.acpArgs}` : ''}`);
+  }
   const nick = flags.nick;
-  const bin = flags.agentBin ?? process.env.IROH_AGENT_BIN ?? 'iroh-agent';
+  const bin = flags.agentBin ?? defaultAgentBin();
   const serveArgs = ['--room', room, ...(nick ? ['--nick', nick] : [])];
   if (flags.agentArgs) {
     serveArgs.push(...(parseJsonArray(flags.agentArgs, '--agent-args') as string[]));

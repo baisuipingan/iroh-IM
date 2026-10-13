@@ -125,12 +125,23 @@ mkdir -p "$PREFIX"
 install -m 0755 "$TMP/$ASSET" "$PREFIX/$BIN"
 ok "已安装 $PREFIX/$BIN"
 
-# 它需要 iroh-agent（协议实现）——没有就给出那一条命令
-if command -v iroh-agent >/dev/null 2>&1 || [ -x "$HOME/.local/bin/iroh-agent" ]; then
+# 它需要 iroh-agent（协议实现，"腿"）——缺了就**顺带装好**：
+# 一条命令装全两台"设备"。只想要适配器：SKIP_AGENT=1；自建镜像：AGENT_SCRIPT_URL=...
+if [ "${SKIP_AGENT:-}" = "1" ]; then
+  wa "SKIP_AGENT=1：跳过 iroh-agent 的检查与安装"
+elif command -v iroh-agent >/dev/null 2>&1 || [ -x "$PREFIX/iroh-agent" ] || [ -x "$HOME/.local/bin/iroh-agent" ]; then
   ok "iroh-agent 已在（腿有了）"
 else
-  wa "还没装 iroh-agent（room-bridge 只是适配器，协议在它那里）："
-  echo '     bash -c "$(curl -sSL https://get.editor.vip/iroh/agent-install.sh)"'
+  wa "没装 iroh-agent（room-bridge 只是适配器，协议在它那里）——顺带装上："
+  if curl -fsSL --retry 2 -o "$TMP/agent-install.sh" \
+       "${AGENT_SCRIPT_URL:-https://get.editor.vip/iroh/agent-install.sh}" \
+     && SKIP_CONFIG=1 AGENT_PREFIX="$PREFIX" bash "$TMP/agent-install.sh"; then
+    ok "iroh-agent 已装到 $PREFIX"
+  else
+    er "iroh-agent 自动安装失败（网络？）——手动补上这一条后重跑本命令："
+    echo '     bash -c "$(curl -sSL https://get.editor.vip/iroh/agent-install.sh)"'
+    exit 1
+  fi
 fi
 
 case ":$PATH:" in

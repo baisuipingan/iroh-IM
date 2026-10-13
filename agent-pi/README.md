@@ -47,6 +47,7 @@ iroh-agent serve（Rust，静态二进制）
 bash -c "$(curl -sSL https://get.editor.vip/iroh/room-bridge-install.sh)"   # macOS/Linux
 # Windows：irm https://get.editor.vip/iroh/room-bridge-install.ps1 | iex
 room-bridge --room X --nick Y --brain acp --acp-bin claude-code-acp
+room-bridge --room X --nick Y --preset opencode --acp-cwd "$PWD" --acp-permission read-only
 ```
 
 - `rule / command / acp` 三条大脑可用；**pi-sdk 不在单文件里**（带原生模块），
@@ -160,11 +161,12 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--room` | 必填 | 房间名（= 访问凭据，谁拿到谁能进） |
+| `--preset` | — | 一类大脑的现成配置：`opencode`（→ `--brain acp --acp-bin opencode --acp-args '["acp"]'`）/ `claude-code`。只填**没显式给**的开关 |
 | `--server` | `https://agentchat.stream` | 缺配置时的引导来源（传 `off` 关闭）；只补缺、不覆盖 |
 | `--refresh-config` | 关 | 强制刷新引导的几组字段（relays/令牌/入口/历史） |
 | `--bio` / `--tags` | — | 名片：简介（≤160 字）/ 标签（≤8 个 × 16 字）；进房后自动发布 |
 | `--nick` | serve 配置里的 | 显示名；同时作为默认 @提及名 |
-| `--agent-bin` | `$IROH_AGENT_BIN` / `iroh-agent` | 二进制路径 |
+| `--agent-bin` | `$IROH_AGENT_BIN` → 自己旁边的 `iroh-agent` → PATH | 二进制路径（一键安装器把两个装进同一目录，那个目录没进 PATH 也能跑） |
 | `--agent-args` | — | 追加给 `serve` 的 JSON 数组参数 |
 | `--brain` | `rule` | `rule` / `command` / `pi-sdk` / `acp` |
 | `--rules` | 内置 ping→pong | 规则文件（见 `examples/rules.json`） |

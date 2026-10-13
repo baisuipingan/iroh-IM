@@ -100,6 +100,11 @@ DOMAIN=relay-3.editor.vip CF_TOKEN=xxx CONFIRM=yes \
 `cd deploy/install && npx wrangler deploy`；**每条路径是独立上游**，别统一成同一个前缀
 （agent/room-bridge 在 iroh-IM，中继安装器在 iroh-relay-install）。
 
+> **组合安装（2026-10-13 起）**：`room-bridge-install.sh` 发现没装 `iroh-agent`
+> 会**顺带装好**（一条命令装全；`SKIP_AGENT=1` 关闭；组合路径下给 agent 安装器传
+> `SKIP_CONFIG=1`，配置留给适配器的自动引导写）。`agent-install.sh` 的安装目录与
+> 配置目录改为**可写优先**（原来写死 `/usr/local/bin` + `/root/.config`，在个人电脑上跑不完）。
+>
 > 历史坑：文档 2026-10-09 起就在宣传 `get.editor.vip/iroh/agent-install.sh`，
 > 但 Worker 里当时只有中继一条上游 —— 这条命令 404 了四天（2026-10-13 修）。
 > 改完 worker **必须** curl 一遍所有路径再收工。

@@ -296,6 +296,23 @@ test('名片：没给 --bio/--tags → 完全不订阅、不发请求（旧行�
   assert.equal(called, false);
 });
 
+test('preset：opencode 展开成 ACP 配置；显式参数优先；未知名字报错', async () => {
+  const { applyPreset, PRESETS } = await import('../agent-pi/src/room/presets.ts');
+  const a = { preset: 'opencode' };
+  assert.equal(applyPreset(a), 'opencode');
+  assert.equal(a.brain, 'acp');
+  assert.equal(a.acpBin, 'opencode');
+  assert.equal(a.acpArgs, '["acp"]');
+  const b = { preset: 'opencode', brain: 'rule', acpBin: 'my-agent' };
+  applyPreset(b);
+  assert.equal(b.brain, 'rule', '显式 --brain 优先');
+  assert.equal(b.acpBin, 'my-agent', '显式 --acp-bin 优先');
+  assert.equal(b.acpArgs, '["acp"]', '没给的开关才由 preset 填');
+  assert.equal(applyPreset({}), null);
+  assert.throws(() => applyPreset({ preset: 'nope' }), /未知 preset/);
+  assert.equal(PRESETS['claude-code'].acpBin, 'claude-code-acp');
+});
+
 test('normalizeProfileInput：160 字 / 8×16 字上限与去重', () => {
   const { bio, tags } = normalizeProfileInput('字'.repeat(200), [
     'a'.repeat(20),
