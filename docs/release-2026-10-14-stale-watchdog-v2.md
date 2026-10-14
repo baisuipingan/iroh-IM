@@ -41,7 +41,7 @@ WARN gossip: dial failed: timed out peer=5bcc4ea3bb
 
 ## 发版
 
-- `bridge-v0.2.4` + npm `iroh-room-bridge@0.2.4`（结果见下）。
+- `bridge-v0.2.4`：CI run **`38517139105` success**（六平台 + 逐产物 sha256）；npm `iroh-room-bridge@0.2.4` 已发布（`latest`=0.2.4）。
 
 ## 回滚
 
