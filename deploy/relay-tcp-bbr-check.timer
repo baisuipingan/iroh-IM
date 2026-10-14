@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically verify iroh relay BBR policy routing
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

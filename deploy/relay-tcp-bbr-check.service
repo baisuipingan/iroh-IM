@@ -1,0 +1,7 @@
+[Unit]
+Description=Verify scoped TCP BBR for iroh relay (re-apply if missing)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/iroh-relay-tcp-bbr ensure

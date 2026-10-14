@@ -29,17 +29,57 @@ OPFS 每块写入与 Worker 调度不足以解释约 36–38 KiB/s 的持续低�
 ```sh
 install -m755 scripts/relay-tcp-bbr.sh /usr/local/sbin/iroh-relay-tcp-bbr
 install -m644 deploy/relay-tcp-bbr.service /etc/systemd/system/relay-tcp-bbr.service
+install -m644 deploy/relay-tcp-bbr-check.service /etc/systemd/system/relay-tcp-bbr-check.service
+install -m644 deploy/relay-tcp-bbr-check.timer   /etc/systemd/system/relay-tcp-bbr-check.timer
 systemctl daemon-reload
-systemctl enable --now relay-tcp-bbr
+systemctl enable --now relay-tcp-bbr relay-tcp-bbr-check.timer
+```
+
+⚠️ **必须同时装"反清道夫"配置**（见下节），否则规则会被 systemd-networkd 悄悄删掉：
+
+```sh
+mkdir -p /etc/systemd/networkd.conf.d
+cat > /etc/systemd/networkd.conf.d/95-manage-foreign.conf <<'EOF'
+[Network]
+ManageForeignRoutingPolicyRules=no
+ManageForeignRoutes=no
+EOF
+systemctl restart systemd-networkd
 ```
 
 上线前保存 `ip rule show`、`ip route show table all` 和全局拥塞算法；本次备份在服务器 `/opt/iroh/relay/backups/tcp-bbr-20261005/`。
 脚本发现策略优先级或路由表占用、多条默认路由时拒绝猜测，失败时撤销新增规则。
 
+## 2026-10-14 复盘：规则被系统静默清掉（已修 + 已加自愈）
+
+**症状**：用户传大文件时速度锯齿、界面频繁"断开→瞬间连上"；中继日志里同一时段
+**7392 条 `failed to forward packet: Full`（转发队列满→丢包）** 与 **473 条建连超时**，
+且全部来自用户 IP；而中继进程本身空闲（CPU 0.09%）、ICMP 到中继 0 丢包 40–64ms。
+
+**根因（实测钉死）**：`relay-tcp-bbr` 服务显示 active，但 `ip rule` 里 15442/15443
+两条规则和 table 15443 都**已经不存在**（全局退回 CUBIC）。实验：
+`systemctl restart systemd-networkd` → 规则当场消失。原因：systemd-networkd 默认
+**清理"外来"策略路由**（`ManageForeignRoutingPolicyRules=yes`），
+任何一次重配置（networkd 重启/reload、netplan apply 等）都会把 BBR 规则一起删掉。
+之前 2026-10-05 的 BBR 改善因此静默失效。
+
+**修复**：
+1. 根因：`/etc/systemd/networkd.conf.d/95-manage-foreign.conf`
+   （`ManageForeignRoutingPolicyRules=no` + `ManageForeignRoutes=no`）——
+   实测"重启 networkd 后规则存活"。
+2. 兜底：`relay-tcp-bbr-check.timer` 每 2 分钟跑 `iroh-relay-tcp-bbr ensure`
+   （幂等逐项修补；演练：删掉规则 → timer 服务单跑一次即恢复；并发 ensure 不再
+   撞 `RTNETLINK File exists`）。
+3. 脚本新增 `ensure` / `status` 子命令；`status` 可直接用于巡检：
+   `iroh-relay-tcp-bbr status`（applied / MISSING）。
+
+**生效范围提醒**：只有**新建立的** TCP 连接吃到 BBR；已存在的长连接保持原算法 ——
+改完/恢复后需要客户端**刷新页面**（或重连）才能受益。
+
 回滚：
 
 ```sh
-systemctl disable --now relay-tcp-bbr
+systemctl disable --now relay-tcp-bbr relay-tcp-bbr-check.timer
 ```
 
 回滚不改全局算法。已有 BBR 连接需客户端重新连接才恢复 CUBIC；无需清理浏览器数据或 roomd 历史。
