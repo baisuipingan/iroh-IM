@@ -671,8 +671,12 @@ impl Actor {
         } else {
             debug!(?event, "handle in_event");
         };
-        let out = self.state.handle(event, now, Some(&self.metrics));
-        for event in out {
+        // ⚠️ 用显式队列而不是惰性迭代器：下面"死发送半 → PeerDisconnected"的分支要
+        //    在**同一轮**里把新事件续进来（递归调用 handle_in_event 会触发
+        //    "recursion in an async fn" E0733）。顺序用 push_back/pop_front 保持。
+        let mut queue: std::collections::VecDeque<_> =
+            self.state.handle(event, now, Some(&self.metrics)).collect();
+        while let Some(event) = queue.pop_front() {
             if matches!(event, OutEvent::ScheduleTimer(_, _)) {
                 trace!(?event, "handle out_event");
             } else {
@@ -681,15 +685,11 @@ impl Actor {
             match event {
                 OutEvent::SendMessage(peer_id, message) => {
                     let state = self.peers.entry(peer_id).or_default();
+                    let mut send_loop_dead = false;
                     match state {
                         PeerState::Active { active_send_tx, .. } => {
                             if let Err(_err) = active_send_tx.send(message).await {
-                                // Removing the peer is handled by the in_event PeerDisconnected sent
-                                // in [`Self::handle_connection_task_finished`].
-                                warn!(
-                                    peer = %peer_id.fmt_short(),
-                                    "failed to send: connection task send loop terminated",
-                                );
+                                send_loop_dead = true;
                             }
                         }
                         PeerState::Pending { queue } => {
@@ -699,6 +699,26 @@ impl Actor {
                             }
                             queue.push(message);
                         }
+                    }
+                    if send_loop_dead {
+                        // ⚠️ 2026-10-14 修复：这里原来只 warn，并注明"清理交给
+                        //    handle_connection_task_finished"——但连接任务的**发送半**
+                        //    先终止、任务本身还挂着时（读半没有超时），那个清理永远
+                        //    不会来：实测同一个 peer 每 10s 刷一条、持续一小时，直连
+                        //    永不恢复（消息只能绕常驻节点，日志被刷爆）。
+                        //    发送通道关闭 = 这条连接已经不可用：直接按"断连"处理，
+                        //    让协议状态机走 NeighborDown → 从 passive view 补位/重拨。
+                        warn!(
+                            peer = %peer_id.fmt_short(),
+                            "failed to send: connection task send loop terminated; marking peer disconnected",
+                        );
+                        // 把"断连"事件产生的后续事件续进同一轮队列（含
+                        // OutEvent::DisconnectPeer → self.peers.remove）
+                        queue.extend(self.state.handle(
+                            InEvent::PeerDisconnected(peer_id),
+                            Instant::now(),
+                            Some(&self.metrics),
+                        ));
                     }
                 }
                 OutEvent::EmitEvent(topic_id, event) => {
