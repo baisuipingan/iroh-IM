@@ -38,7 +38,7 @@ WARN gossip{me=8ad7278039}: failed to send: connection task send loop terminated
 
 ## 发版
 
-- `bridge-v0.2.3` + npm `iroh-room-bridge@0.2.3`（结果见下）。
+- `bridge-v0.2.3`：CI run **`38496187420` success**（六平台 + 逐产物 sha256）；npm `iroh-room-bridge@0.2.3` 已发布（`latest`=0.2.3）。
 
 ## 回滚
 
