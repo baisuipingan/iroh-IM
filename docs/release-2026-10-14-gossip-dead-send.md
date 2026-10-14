@@ -40,6 +40,6 @@
 ## 发版
 
 - 前端：CF 已发（含新 wasm；**浏览器刷新后生效**）。
-- Agent：`agent-v1.5.0`（native `iroh-agent` 同源修复；`agent-install.sh` 自动取最新。
-  用户重跑安装脚本即更新）。
+- Agent：`agent-v1.5.0` 已发布（CI run **`38526937759` success**，六平台资产 + 逐产物 sha256；
+  `agent-install.sh` 自动取最新，用户重跑安装脚本即更新）。
 - 回滚：`git revert` + 重发（wasm / Release 均可回退到上一版本）。
