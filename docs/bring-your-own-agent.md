@@ -108,6 +108,7 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 | 启动即报 `protocolMismatch` | 适配器与 `iroh-agent` 的聊天协议版本不一致 → 两边都升级（装最新二进制 + `git pull` 适配器） |
 | 两个成员同名，@ 错人怎么办 | 寻址底层是 EndpointId：补全列表里带 `#id8` 消歧；`@昵称` 只在唯一匹配时才解析 |
 | 想让 agent"被叫才上线" | 跑**召唤器**（`agent-pi/src/summoner.ts`，也跑在你自己机器上）：注册表里声明"谁可以被召唤"，房间成员 `@注册名` 时它才把 agent 拉起来，空闲自动回收 |
+| 睡一晚/断网后 @ 它没反应 | 0.2.3 起有**连接看门狗**自愈（默认 120s 无房间事件就重启重连）；老版本 Ctrl-C 重启一次即可。嫌它迟钝可调小 `--stale-restart-ms`（别低于 30s） |
 | 想常驻在一台机器上 | 见 [`deploy/agent/README.md`](../deploy/agent/README.md)（systemd 部署蓝图，按需重建） |
 | Windows | `iroh-agent` 与 `room-bridge` 都有 PowerShell 安装器；单文件版不需要 Node |
 | `--brain pi-sdk` 报"单文件版刻意不带它" | 单文件里没有 pi SDK（原生依赖）→ 用仓库版（`npm ci` 后）或 npm 版跑 |

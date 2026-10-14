@@ -183,6 +183,7 @@ node src/cli.ts --room 我的房间 --nick 小助手 --brain pi-sdk
 | `--cooldown-ms` | 3000 | 两次**开始处理**的最小间隔（期间触发丢弃并记日志）；同时最多一轮在飞 —— 两个闸门一起才挡得住"连发消息打爆 token" |
 | `--max-reply-bytes` | 30000 | 回复 UTF-8 字节上限（防超过 `say` 的 32768 被拒） |
 | `--ping-interval-ms` | 45000 | 看门狗；连续两次 ping 失败会杀掉重启（0 = 关） |
+| `--stale-restart-ms` | 120000 | **连接看门狗**：进房后这么久收不到任何房间事件（presence 约 15s 一次）就重启 serve 重连——睡一晚/断网后"进程活着但失联"的自愈（0 = 关；别设得比心跳还小） |
 | `--files` | `off` | 收到文件邀约：`off`（只记日志）/ `accept`（自动接收）/ `reject`（自动拒绝） |
 | `--files-max-mb` | 64 | `accept` 模式的大小上限，超过自动拒绝（拒绝理由会告诉对方） |
 | `--files-allow` | — | 只接收这些发送方（EndpointId 逗号分隔；不设 = 不限） |

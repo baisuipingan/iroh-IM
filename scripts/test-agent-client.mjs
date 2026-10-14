@@ -1,27 +1,44 @@
 /* ============================================================================
- * agent-pi · AgentClient 退出速度回归
+ * agent-pi · AgentClient 稳定性回归（退出速度 + 连接看门狗）
  *
- * 真实踩到的问题：Ctrl-C 会发给整个**进程组**，`iroh-agent serve` 常常比适配器先退；
- * 旧 `stop()` 在这种情况下还会 `once(child,'close')` —— 事件早就放过了，于是白等
- * 满 5s、再 SIGKILL、再等 2s，退出要 ~7 秒（用户："这个后台怎么退出这么慢"）。
+ * 两个真实踩到的坑：
+ *   1. Ctrl-C 会发给整个**进程组**，`iroh-agent serve` 常常比适配器先退；旧
+ *      `stop()` 还在等一个永远不会再触发的 close 事件 → 白等 5s+SIGKILL+2s，
+ *      退出要 ~7 秒（用户："这个后台怎么退出这么慢"）。
+ *   2. 笔记本睡一晚后 gossip/中继连接没恢复：**进程活着、ping 也通**（那只是同一
+ *      进程的 stdin/stdout），但再也收不到任何房间消息（用户："打开它好像不行了"）→
+ *      新增"连接看门狗"：进房后长时间没有事件就重启 serve 重连。
  *
  * 用法：node --experimental-strip-types --test scripts/test-agent-client.mjs
  *      （已并入根 package.json 的 npm test）
  * ==========================================================================*/
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { AgentClient } from '../agent-pi/src/room/client.ts';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const FAKE_SRC = `
+const fs = require('node:fs');
 const mode = process.env.FAKE_MODE ?? 'stay';
+if (process.env.FAKE_COUNT_FILE) fs.appendFileSync(process.env.FAKE_COUNT_FILE, mode + '\\n');
 const hello = { v: 1, type: 'hello', agent: 'fake/1', endpointId: 'c'.repeat(64),
                 chatProtocol: 'v6', nickname: 't', relay: null };
 process.stdout.write(JSON.stringify(hello) + '\\n');
 if (mode === 'die') setTimeout(() => process.exit(0), 300);
+const ev = (seq, event) => process.stdout.write(JSON.stringify({ v: 1, type: 'event', seq, event }) + '\\n');
+if (mode === 'quiet' || mode === 'healthy') {
+  setTimeout(() => ev(1, { type: 'joined', room: 'r' }), 20);
+  setTimeout(() => ev(2, { type: 'presence', room: 'r', peers: [] }), 40);
+}
+if (mode === 'healthy') {
+  let n = 3;
+  setInterval(() => ev(n++, { type: 'presence', room: 'r', peers: [] }), 100);
+}
 const rl = require('node:readline').createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   let m; try { m = JSON.parse(line); } catch { return; }
@@ -32,7 +49,7 @@ rl.on('line', (line) => {
 });
 `;
 
-function makeClient(mode) {
+function makeClient(mode, opts = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'fake-agent-'));
   const fake = join(dir, 'fake-agent.cjs');
   writeFileSync(fake, FAKE_SRC);
@@ -40,14 +57,23 @@ function makeClient(mode) {
   const wrapper = join(dir, 'fake-agent');
   writeFileSync(wrapper, `#!/bin/sh\nexec ${process.execPath} ${fake}\n`);
   chmodSync(wrapper, 0o755);
+  const env = { FAKE_MODE: mode };
+  if (opts.countFile) env.FAKE_COUNT_FILE = opts.countFile;
   return new AgentClient({
     bin: wrapper,
-    env: { FAKE_MODE: mode },
+    env,
     pingIntervalMs: 0,
-    restartBackoffMs: [60_000], // 测试窗口内不要自动重启
+    restartBackoffMs: [60_000], // 默认测试窗口内不要自动重启
     log: () => {},
+    ...opts,
+    env,
   });
 }
+
+const startsOf = (countFile) =>
+  readFileSync(countFile, 'utf8').trim().split('\n').filter(Boolean).length;
+
+/* ------------------------------------------------------------ 退出速度 */
 
 test('正常退出：发 shutdown → 子进程退出 → stop() 快速返回', async () => {
   const client = makeClient('stay');
@@ -66,4 +92,40 @@ test('子进程先退出（Ctrl-C 进程组场景）：stop() 不再白等 5s+2s
   await client.stop();
   const dt = Date.now() - t0;
   assert.ok(dt < 1000, `子进程已退出时 stop() 应立刻返回（实际 ${dt}ms；旧代码 ~7000ms）`);
+});
+
+/* -------------------------------------------------------- 连接看门狗 */
+
+test('连接看门狗：进房后长时间没有事件 → 重启 serve 重连（睡一晚失联场景）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stale-'));
+  const count = join(dir, 'count.txt');
+  const logs = [];
+  const client = makeClient('quiet', {
+    countFile: count,
+    staleRestartMs: 400,
+    restartBackoffMs: [200],
+    log: (l) => logs.push(l),
+  });
+  await client.start();
+  await sleep(3000);
+  assert.ok(startsOf(count) >= 2, `应当重启过 serve（实际启动 ${startsOf(count)} 次）`);
+  assert.ok(
+    logs.some((l) => l.includes('强制重启 agent 进程重连')),
+    `应有明确的"重启"日志：${logs.join(' | ')}`,
+  );
+  await client.stop();
+});
+
+test('连接看门狗：事件持续正常 → 不误杀', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'healthy-'));
+  const count = join(dir, 'count.txt');
+  const client = makeClient('healthy', {
+    countFile: count,
+    staleRestartMs: 400,
+    restartBackoffMs: [200],
+  });
+  await client.start();
+  await sleep(2500);
+  assert.equal(startsOf(count), 1, '事件不断流就不该重启');
+  await client.stop();
 });

@@ -30,6 +30,13 @@ export interface AgentClientOptions {
   requestTimeoutMs?: number;
   /** ping 看门狗间隔；连续两次失败就 SIGKILL 走重启流程。0 = 关（默认 45000） */
   pingIntervalMs?: number;
+  /**
+   * **连接看门狗**：进房后若超过这么久收不到任何房间事件（presence 心跳约 15s 一次），
+   * 判定"进程活着、连接已死"（典型：笔记本睡一晚，gossip/中继连接没恢复 —— 实测踩到），
+   * SIGKILL 子进程走重启流程（重启会重新进房、重连）。0 = 关（默认 120000）。
+   * ⚠️ ping 看门狗只看**本地进程**活不活，这条才看**连接**活不活 —— 两者互补。
+   */
+  staleRestartMs?: number;
   /** 重启退避（默认 1s→2s→4s…封顶 30s） */
   restartBackoffMs?: number[];
   log?: (line: string) => void;
@@ -64,6 +71,11 @@ export class AgentClient extends EventEmitter {
   #everHello = false;
   /** 子进程是否已经退出（`#onClose` 置位）——退出流程靠它跳过"白等 close" */
   #childExited = true;
+  /** 最近一次收到任何房间事件的时间（连接看门狗的"心跳"） */
+  #lastRoomEventAt = 0;
+  /** 是否见过 joined 事件（没进房之前不做连接看门狗判定） */
+  #joinedSeen = false;
+  #staleTimer: ReturnType<typeof setInterval> | null = null;
   #stopping = false;
   #restarts = 0;
   #pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -100,6 +112,7 @@ export class AgentClient extends EventEmitter {
       throw new AgentError('protocolMismatch', `线协议 v${hello.v} != v${IPC_VERSION}`);
     }
     this.#startWatchdog();
+    this.#startStaleWatchdog();
     return hello;
   }
 
@@ -232,6 +245,8 @@ export class AgentClient extends EventEmitter {
     this.#child = child;
     this.#helloFrame = null;
     this.#childExited = false;
+    this.#joinedSeen = false;
+    this.#lastRoomEventAt = Date.now();
 
     createInterface({ input: child.stdout }).on('line', (line) => this.#onLine(line));
     createInterface({ input: child.stderr }).on('line', (line) => this.#log(`[agent] ${line}`));
@@ -264,9 +279,14 @@ export class AgentClient extends EventEmitter {
       case 'reply':
         this.#onReply(frame);
         break;
-      case 'event':
-        this.emit('event', frame.event as RoomEvent);
+      case 'event': {
+        const event = frame.event as RoomEvent;
+        // 连接看门狗的"心跳"：不管什么事件（presence/消息/peerUp…）都算活着
+        this.#lastRoomEventAt = Date.now();
+        if (event?.type === 'joined') this.#joinedSeen = true;
+        this.emit('event', event);
         break;
+      }
       default:
         this.#log(`[client] 未知帧类型：${JSON.stringify(frame).slice(0, 200)}`);
     }
@@ -389,6 +409,46 @@ export class AgentClient extends EventEmitter {
     if (this.#pingTimer) {
       clearInterval(this.#pingTimer);
       this.#pingTimer = null;
+    }
+    this.#stopStaleWatchdog();
+  }
+
+  /**
+   * 连接看门狗：进程活着，但"和房间失联"时把子进程杀掉让它重连。
+   *
+   * 为什么需要（2026-10-14 实测）：笔记本睡一晚后，iroh 的 gossip/中继连接没恢复；
+   * 本地 ping 照常成功（那只是同一进程的 stdin/stdout），适配器却再收不到任何消息 ——
+   * 表现为"打开它好像不行了"。presence 心跳正常约 15s 一次，所以"进房后 2 分钟
+   * 一条事件都没有"几乎一定是连接死了。
+   */
+  #startStaleWatchdog(): void {
+    const staleMs = this.#opts.staleRestartMs ?? 120_000;
+    if (staleMs <= 0) return;
+    this.#stopStaleWatchdog();
+    // 检查频率：取 staleMs/4，夹在 1s..30s（测试里能传很小的值）
+    const checkMs = Math.max(1000, Math.min(30_000, Math.floor(staleMs / 4)));
+    this.#staleTimer = setInterval(() => {
+      if (this.#stopping || !this.#joinedSeen) return;
+      // 有在途请求（比如正在接收文件，可能跑 10 分钟）就先不动它，下一轮再看
+      if (this.#pending.size > 0) return;
+      const idle = Date.now() - this.#lastRoomEventAt;
+      if (idle <= staleMs) return;
+      this.#log(
+        `[client] 进房后 ${Math.round(idle / 1000)}s 收不到任何房间事件` +
+          '（睡眠/断网后连接卡死？）→ 强制重启 agent 进程重连',
+      );
+      // 先复位，避免重启完成前被重复判定
+      this.#joinedSeen = false;
+      this.#lastRoomEventAt = Date.now();
+      this.#child?.kill('SIGKILL');
+    }, checkMs);
+    this.#staleTimer.unref?.();
+  }
+
+  #stopStaleWatchdog(): void {
+    if (this.#staleTimer) {
+      clearInterval(this.#staleTimer);
+      this.#staleTimer = null;
     }
   }
 }

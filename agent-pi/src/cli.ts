@@ -42,6 +42,9 @@ const USAGE = `agent-pi · 把 Agent 接进 iroh 聊天室（常驻成员）
   --respond-to-all      所有消息都触发（噪音大，慎用）
   --cooldown-ms 3000    两次回复的最小间隔
   --ping-interval-ms 45000  serve 看门狗（0 = 关）
+  --stale-restart-ms 120000 连接看门狗：进房后这么久收不到任何房间事件就重启
+                            serve 重连（睡一晚/断网后"进程活着但失联"的自愈；
+                            0 = 关）
 
 常用预设（把一类大脑的 spawn 配置压成一个名字；显式参数永远优先）：
   --preset opencode     → --brain acp --acp-bin opencode --acp-args '["acp"]'
@@ -142,6 +145,7 @@ const VALUE_FLAGS = new Set([
   'cooldown-ms',
   'max-reply-bytes',
   'ping-interval-ms',
+  'stale-restart-ms',
   'pi-system-prompt',
   'pi-append-prompt',
   'pi-prompt-template',
@@ -191,6 +195,7 @@ interface Flags {
   cooldownMs?: string;
   maxReplyBytes?: string;
   pingIntervalMs?: string;
+  staleRestartMs?: string;
   piSystemPrompt?: string;
   piAppendPrompt?: string;
   piPromptTemplate?: string;
@@ -553,6 +558,7 @@ async function main(): Promise<void> {
     bin,
     args: serveArgs,
     pingIntervalMs: num(flags.pingIntervalMs, 45_000),
+    staleRestartMs: num(flags.staleRestartMs, 120_000),
     log,
   });
   // 名片：进房即发布（没给 --bio/--tags 就不订阅、不发请求，行为与以前一致）
