@@ -31,13 +31,19 @@ const hello = { v: 1, type: 'hello', agent: 'fake/1', endpointId: 'c'.repeat(64)
 process.stdout.write(JSON.stringify(hello) + '\\n');
 if (mode === 'die') setTimeout(() => process.exit(0), 300);
 const ev = (seq, event) => process.stdout.write(JSON.stringify({ v: 1, type: 'event', seq, event }) + '\\n');
-if (mode === 'quiet' || mode === 'healthy') {
+if (mode === 'quiet' || mode === 'healthy' || mode === 'relay-spam' || mode === 'relay-dead') {
   setTimeout(() => ev(1, { type: 'joined', room: 'r' }), 20);
   setTimeout(() => ev(2, { type: 'presence', room: 'r', peers: [] }), 40);
 }
 if (mode === 'healthy') {
   let n = 3;
   setInterval(() => ev(n++, { type: 'presence', room: 'r', peers: [] }), 100);
+}
+if (mode === 'relay-spam' || mode === 'relay-dead') {
+  // 复刻真实场景：家庭中继在 iroh1/2/3 之间横跳，relayStatus 几秒一条 —— 但它
+  // **不证明房间连通**；旧版把任何事件都当心跳，于是看门狗被骗过。
+  let n = 3;
+  setInterval(() => ev(n++, { type: 'relayStatus', relays: [{ url: 'https://r.example:15443', connected: mode !== 'relay-dead' }] }), 100);
 }
 const rl = require('node:readline').createInterface({ input: process.stdin });
 rl.on('line', (line) => {
@@ -113,6 +119,40 @@ test('连接看门狗：进房后长时间没有事件 → 重启 serve 重连�
     logs.some((l) => l.includes('强制重启 agent 进程重连')),
     `应有明确的"重启"日志：${logs.join(' | ')}`,
   );
+  await client.stop();
+});
+
+test('连接看门狗：relayStatus 刷屏 ≠ 连通（中继横跳骗过看门狗的那次）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relayspam-'));
+  const count = join(dir, 'count.txt');
+  const logs = [];
+  const client = makeClient('relay-spam', {
+    countFile: count,
+    staleRestartMs: 400,
+    restartBackoffMs: [200],
+    log: (l) => logs.push(l),
+  });
+  await client.start();
+  await sleep(3000);
+  assert.ok(startsOf(count) >= 2, `relayStatus 刷屏也应当判定失联并重启（实际启动 ${startsOf(count)} 次）`);
+  assert.ok(
+    logs.some((l) => l.includes('强制重启 agent 进程重连') && l.includes('relayStatus')),
+    `日志应说明中继事件不算数：${logs.join(' | ')}`,
+  );
+  await client.stop();
+});
+
+test('连接看门狗：中继全断（硬证据）→ 不到 staleMs 也提前重启', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relaydead-'));
+  const count = join(dir, 'count.txt');
+  const client = makeClient('relay-dead', {
+    countFile: count,
+    staleRestartMs: 6000, // 主阈值 6s；中继全断的早退阈值 = max(5s, 3s) = 5s
+    restartBackoffMs: [200],
+  });
+  await client.start();
+  await sleep(9000);
+  assert.ok(startsOf(count) >= 2, `中继全断应触发重启（实际启动 ${startsOf(count)} 次）`);
   await client.stop();
 });
 

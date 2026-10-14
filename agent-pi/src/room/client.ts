@@ -75,6 +75,8 @@ export class AgentClient extends EventEmitter {
   #lastRoomEventAt = 0;
   /** 是否见过 joined 事件（没进房之前不做连接看门狗判定） */
   #joinedSeen = false;
+  /** 最近一次 relayStatus 里"至少一台中继连着"；null = 还没收到过 */
+  #relaysConnected: boolean | null = null;
   #staleTimer: ReturnType<typeof setInterval> | null = null;
   #stopping = false;
   #restarts = 0;
@@ -281,9 +283,7 @@ export class AgentClient extends EventEmitter {
         break;
       case 'event': {
         const event = frame.event as RoomEvent;
-        // 连接看门狗的"心跳"：不管什么事件（presence/消息/peerUp…）都算活着
-        this.#lastRoomEventAt = Date.now();
-        if (event?.type === 'joined') this.#joinedSeen = true;
+        this.#noteEvent(event);
         this.emit('event', event);
         break;
       }
@@ -414,6 +414,27 @@ export class AgentClient extends EventEmitter {
   }
 
   /**
+   * 连接看门狗的"心跳"判定：**只有能证明"和房间还连着"的事件才算数**。
+   *
+   * ⚠️ 2026-10-14 实测踩到：`relayStatus` 在"家庭中继反复横跳"时会几秒一条
+   *    （日志里 `home is now relay iroh1→iroh2→…`）；把任何事件都当心跳的话，
+   *    它会一直把心跳续上，看门狗被骗成"一切正常"——用户中午回来发现又断了、
+   *    而且**没有触发任何自愈**。`isolated: true` 同理：那是"联系不上"的声明，不是活着。
+   */
+  #noteEvent(event: RoomEvent): void {
+    if (!event) return;
+    if (event.type === 'relayStatus') {
+      // 只记中继侧的整体状态（全断时看门狗可以更早介入——见 #startStaleWatchdog）
+      this.#relaysConnected = (event.relays ?? []).some((r) => r.connected);
+      return;
+    }
+    if (event.type === 'error') return; // 本地错误，不证明连通
+    if (event.type === 'isolated' && (event as { isolated?: boolean }).isolated === true) return;
+    this.#lastRoomEventAt = Date.now();
+    if (event.type === 'joined') this.#joinedSeen = true;
+  }
+
+  /**
    * 连接看门狗：进程活着，但"和房间失联"时把子进程杀掉让它重连。
    *
    * 为什么需要（2026-10-14 实测）：笔记本睡一晚后，iroh 的 gossip/中继连接没恢复；
@@ -425,21 +446,26 @@ export class AgentClient extends EventEmitter {
     const staleMs = this.#opts.staleRestartMs ?? 120_000;
     if (staleMs <= 0) return;
     this.#stopStaleWatchdog();
-    // 检查频率：取 staleMs/4，夹在 1s..30s（测试里能传很小的值）
-    const checkMs = Math.max(1000, Math.min(30_000, Math.floor(staleMs / 4)));
+    // 检查频率：取 staleMs/4，夹在 1s..5s（测试里能传很小的值）
+    const checkMs = Math.max(1000, Math.min(5_000, Math.floor(staleMs / 4)));
+    // 中继全断时的更快阈值（有硬证据就不用等满 staleMs）
+    const relayDeadMs = Math.max(5_000, Math.floor(staleMs / 2));
     this.#staleTimer = setInterval(() => {
       if (this.#stopping || !this.#joinedSeen) return;
       // 有在途请求（比如正在接收文件，可能跑 10 分钟）就先不动它，下一轮再看
       if (this.#pending.size > 0) return;
       const idle = Date.now() - this.#lastRoomEventAt;
-      if (idle <= staleMs) return;
+      const relayDead = this.#relaysConnected === false && idle > relayDeadMs;
+      if (idle <= staleMs && !relayDead) return;
       this.#log(
-        `[client] 进房后 ${Math.round(idle / 1000)}s 收不到任何房间事件` +
-          '（睡眠/断网后连接卡死？）→ 强制重启 agent 进程重连',
+        `[client] 进房后 ${Math.round(idle / 1000)}s 收不到任何"能证明连通"的事件` +
+          `${relayDead ? '（且中继全部断开）' : '（relayStatus 之类的中继事件不算数）'}` +
+          ' → 强制重启 agent 进程重连',
       );
       // 先复位，避免重启完成前被重复判定
       this.#joinedSeen = false;
       this.#lastRoomEventAt = Date.now();
+      this.#relaysConnected = null;
       this.#child?.kill('SIGKILL');
     }, checkMs);
     this.#staleTimer.unref?.();
