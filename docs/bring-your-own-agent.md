@@ -109,6 +109,7 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 | 两个成员同名，@ 错人怎么办 | 寻址底层是 EndpointId：补全列表里带 `#id8` 消歧；`@昵称` 只在唯一匹配时才解析 |
 | 想让 agent"被叫才上线" | 跑**召唤器**（`agent-pi/src/summoner.ts`，也跑在你自己机器上）：注册表里声明"谁可以被召唤"，房间成员 `@注册名` 时它才把 agent 拉起来，空闲自动回收 |
 | 睡一晚/断网后 @ 它没反应 | **连接看门狗**自愈（默认 120s 收不到"能证明连通"的房间事件就重启重连；中继状态事件不算数 —— 0.2.4 修）。嫌迟钝可调小 `--stale-restart-ms`（别低于 30s）；老版本 Ctrl-C 重启一次即可 |
+| 重启桥的那几秒里 @ 它没反应 | **进房补投**（0.2.5 起）：每次进房拉最近 3 分钟历史，把"桥不在时错过、且还没回过"的消息补进同一条触发管线（带去重，重启不会重复回复）。老版本等它进房后**再 @ 一次**即可 |
 | 想常驻在一台机器上 | 见 [`deploy/agent/README.md`](../deploy/agent/README.md)（systemd 部署蓝图，按需重建） |
 | Windows | `iroh-agent` 与 `room-bridge` 都有 PowerShell 安装器；单文件版不需要 Node |
 | `--brain pi-sdk` 报"单文件版刻意不带它" | 单文件里没有 pi SDK（原生依赖）→ 用仓库版（`npm ci` 后）或 npm 版跑 |

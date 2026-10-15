@@ -17,6 +17,7 @@ import { defaultRules, parseRuleSpecs, RuleBrain } from './agent-io/rule.ts';
 import { ensureLocalConfig } from './room/bootstrap.ts';
 import { announceProfileOnJoin } from './room/profile.ts';
 import { applyPreset } from './room/presets.ts';
+import { attachJoinBackfill } from './room/backfill.ts';
 
 /**
  * 默认接入站点：本机缺配置时从这里拉 relay-config.json。
@@ -572,6 +573,11 @@ async function main(): Promise<void> {
       : [],
     log,
   });
+  // 进房补投（2026-10-15 实测踩到）：桥重启/崩溃重拉的那几秒里别人 @ 它的消息
+  // 会永远丢失 —— 适配器在消息之后才进房，而 gossip 不补历史。这里进房后拉
+  // 最近一页历史，把"窗口内、没见过、不是我发的"补进同一条事件管线。
+  // ⚠️ 必须在 `client.start()` **之前**挂上：joined 事件可能紧随 hello 到达。
+  const detachBackfill = attachJoinBackfill(client, { log });
   const hello = await client.start();
   const relay = hello.relay
     ? `${hello.relay.url}${hello.relay.connected ? '' : '（未连接）'}`
@@ -623,6 +629,7 @@ async function main(): Promise<void> {
   const signal = await waitForSignal();
   log(`[cli] 收到 ${signal}，优雅退出中…`);
   detachProfile();
+  detachBackfill();
   await adapter.stop();
   await client.stop();
   log('[cli] 已退出');
