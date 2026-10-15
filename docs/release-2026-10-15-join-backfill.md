@@ -18,6 +18,16 @@
 
 第 2 条是这一次要修的东西（第 1 条前端修复昨日已发，只需强刷）。
 
+标签页状态的时间线（roomd 日志，端点 `26ff3891…` = 用户身份）：
+
+- `01:17–03:12Z`（09:17–11:12 CST）：以真名 `用户7454` 心跳；
+- `07:00–10:33Z`（15:00–18:33 CST）：以**空昵称**心跳（旧页面的空昵称
+  rejoin bug 实锤；UI 靠 localStorage 显示名字，看不出异常）；
+- `10:23–10:33Z`：邻居反复上下线；`10:33:58Z` 起**彻底静默** ——
+  发送方向连接死亡（死邻居 never-redial），但接收方向仍活（截图里
+  `2 人`/`在线` 是真的，OPENCODE 的心跳还在进来）→ 于是"界面一切正常、
+  发出去的消息原地蒸发"。
+
 ## 修复：进房补投（`agent-pi/src/room/backfill.ts`）
 
 每次看到 `joined` 事件做一次补投：
@@ -39,8 +49,12 @@
 | 项 | 结果 |
 |---|---|
 | 单测 `scripts/test-agent-backfill.mjs`（进 npm test） | **7/7**：窗口内升序重放、窗口外不补、自己的不补、跨"重启"持久去重、实时消息入 seen、ageMs=0 关闭、history 失败不抛 |
-| 真机 e2e（room `bf-1792066949`） | 桥下线 → 探针发 `@<id8> ping`（结构化 mentions）→ 桥重启：`[backfill] 补投 1 条` → 回复 `pong`；**再次重启：不重复补投、不重复回复**；历史里 `pong` 恰好 1 条 |
-| `verify.sh all` | 退出码 0 |
+| 真机 e2e ×3（node 源版 / npm bundle / **Release 产物本体**） | 桥下线 → 探针发 `@<id8> ping`（结构化 mentions）→ 桥重启：`[backfill] 补投 1 条` → 回复 `pong`；**再次重启：不重复补投、不重复回复**；历史里 `pong` 恰好 1 条。三次均 PASS |
+| `verify.sh all` | 退出码 0（30 处套件 FAIL=0） |
+| CI | run **`38741367680` success** → `bridge-v0.2.5`（六平台 + 逐产物 sha256） |
+| npm | `iroh-room-bridge@0.2.5` 已发布（`latest`=0.2.5，staged publishing 已验证可查） |
+| 线上前端复核（经隧道） | `js/net.js` sha256 `c2dfa5bc…`、`pkg/iroh_web_bg.wasm` sha256 `0ac1d1c6…` 与本地一致（今天的两个前端修复都在线上） |
+| 用户本机 | `~/.local/bin/room-bridge` 已原子替换为 0.2.5（sha256 `926b8dfb…`，与 Release 逐产物校验和一致；旧版备份 `room-bridge.bak-0.2.4`）；正在跑的进程不受影响，**重启后生效** |
 
 ## 用户操作
 
