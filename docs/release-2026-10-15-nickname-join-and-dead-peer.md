@@ -51,7 +51,7 @@
 | e2e `nickname-fallback`（新增 3 条双页检查） | **12/12**：空昵称 join 后**别的成员仍看到真名**、本端 store 不变、前提（B 能看到 A）成立 |
 | `verify.sh all` | **退出码 0**（30 处套件/子套件全 `FAIL=0`） |
 | 前端 | CF 已发（Version `32f8b18b-bbd9-409b-8fa1-a298df8034c5`）；`js/net.js`、`pkg/iroh_web_bg.wasm` 线上哈希与本地一致 |
-| Agent | `agent-v1.5.1`（CI 见下） |
+| Agent | `agent-v1.5.1` 已发布（CI run **`38707222695` success**，六平台资产 + 逐产物 sha256） |
 
 ## 用户操作（两步）
 
