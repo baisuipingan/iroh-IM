@@ -14,6 +14,8 @@
   C. 连接状态页成员行 → `用户+id8`
   D. 桌面通知正文 → `用户+id8`
   E. 回归面：有昵称的消息/成员照旧显示昵称（没有被兜底改掉）
+  F. **进房路径**的空昵称兜底：以空昵称再 join 一次，别的成员看到的仍是真名
+     （2026-10-15 实测 bug：刷新后的"自动回房"会拿空 `_nick` 去 join）
 
 注入走 `window.__iroh_net._dispatch`：和 Worker 推事件是同一条路径
 （`net._dispatch` → `EV.MSG`/`EV.PRESENCE`），不是测试专用旁路。
@@ -120,6 +122,29 @@ body = p.ev("JSON.stringify(window.__iroh_notifyBody(%s, {nickname: '', from: %s
             % (json.dumps(ROOM), json.dumps(EMPTY_ID)))
 nb = json.loads(body)
 tt.check("桌面通知正文：空昵称显示 用户+id8", FALLBACK in nb.get("body", ""), body)
+
+# ── F. 进房路径：以空昵称 join，别把自己的名字弄丢 ────────────────────
+# 回归的是真实事故：刷新后 `_goOnline` 的自动回房用空 `_nick` join，
+# 页面上看名字正常（store 里有），房间里别人看到的是空白。
+nick_a = p.ev("window.__state().nick")
+tab_b = tt.open_tab(f"{SITE}/?autostart=1&room={ROOM}&key={'b' * 64}&v={V}b")
+pb = tt.Page(tab_b["id"]); pb.call("Runtime.enable"); pb.call("Page.enable")
+tt.wait_until(pb, "!!(window.__state && window.__state().joined)", 120, label="B joined")
+seen_a = False
+for _ in range(40):
+    time.sleep(0.5)
+    if nick_a in pb.ev("window.__state().peers"):
+        seen_a = True
+        break
+tt.check("前提：B 能看到 A 的名字", seen_a, pb.ev("window.__state().peers"))
+
+p.ev("window.__iroh_net.joinRoom(%s, '')" % json.dumps(ROOM))
+time.sleep(2)
+peers_after = pb.ev("window.__state().peers")
+tt.check("空昵称 join 被兜底：B 仍看到 A 的真名（没有被清成空白）",
+         nick_a in peers_after, f"nick_a={nick_a!r} peers={peers_after!r}")
+tt.check("A 自己的 store 昵称没变", p.ev("window.__state().nick") == nick_a)
+tt.close_tab(tab_b["id"])
 
 tt.check("页面没有未处理异常",
          p.ev("typeof window.__errs === 'undefined' || window.__errs.length === 0"),

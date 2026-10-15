@@ -589,8 +589,13 @@ export const net = {
       }
     }
     this._room = room; // 记下来，断线重连后要自动回到这个房间
-    this._nick = nickname;
-    await this.client.call('join', room, nickname);
+    // ⚠️ 空昵称兜底（2026-10-15 实测）：重连自动回房那条路（`_goOnline`）拿的是
+    //    `this._nick`——**新页面还没真正 join 过时它是空串**，于是会以空昵称 join：
+    //    UI 里显示的名字来自 localStorage（看起来正常），但房间里别人看到的是一片空白
+    //    （10-13 那批"空昵称成员"的源头就是它）。这里做最后一道兜底。
+    const nick = String(nickname || '').trim() || store.nick();
+    this._nick = nick;
+    await this.client.call('join', room, nick);
 
     // ⚠️ 慢的 join 会被别人抢先：底层已经切到别的房间了，
     //    这里必须**追回**最终状态（否则界面停在错的房间）。

@@ -712,13 +712,19 @@ impl Actor {
                             peer = %peer_id.fmt_short(),
                             "failed to send: connection task send loop terminated; marking peer disconnected",
                         );
-                        // 把"断连"事件产生的后续事件续进同一轮队列（含
-                        // OutEvent::DisconnectPeer → self.peers.remove）
+                        // ① 通知协议状态机（它可能产生 DisconnectPeer 等后续事件）
                         queue.extend(self.state.handle(
                             InEvent::PeerDisconnected(peer_id),
                             Instant::now(),
                             Some(&self.metrics),
                         ));
+                        // ② ⚠️ **必须自己把本地 Active 条目删掉**（2026-10-15 实测）：
+                        //    协议状态机很可能早就不认识这个 peer 了（它不在 active view
+                        //    里时，PeerDisconnected 不产生任何 OutEvent），于是条目永远
+                        //    留着死通道 —— 每次广播都重演一遍"失败→标记"，实测持续
+                        //    一小时以上、永不重拨（对端直连永远修不回来）。
+                        //    删掉之后，下一次 SendMessage 会走 Pending：排队 + 重新拨号。
+                        self.peers.remove(&peer_id);
                     }
                 }
                 OutEvent::EmitEvent(topic_id, event) => {
