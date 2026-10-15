@@ -14,6 +14,7 @@ import { store } from '../store.js';
 import { segments, currentMembers } from '../mention.js';
 import { isProfileText, parseProfile, learn as learnProfiles } from '../profile.js';
 import { avatar } from './primitives.js';
+import * as MD from './markdown.js';
 import * as U from '../util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -43,6 +44,8 @@ export const timeline = {
   _syncedMessage: null,
   _oldestMessage: null,
   _filePositions: new Map(),
+  /** Markdown 消息里被切到「原文」的消息 id（会话内有效；重渲染/翻历史不丢） */
+  _rawMd: new Set(),
   _prepending: false,
   /** 本次加载过的最近消息（花名册的"他最近说过什么"用；上限 200 条） */
   _recent: [],
@@ -884,7 +887,8 @@ export const timeline = {
          }</div>
          <div class="bubble"></div>
        </div>`;
-    this._fillBubble(el.querySelector('.bubble'), m.text);
+    const mdCapable = this._fillBubble(el.querySelector('.bubble'), m.text, m.id);
+    if (mdCapable) this._mountRawToggle(el.querySelector('.msg__meta'), el.querySelector('.bubble'), m);
 
     // 右键菜单：复制（文本消息）/ 删除本地
     el.addEventListener('contextmenu', (e) => {
@@ -929,45 +933,97 @@ export const timeline = {
   },
 
   /** 内联格式：`[img]data:...[/img]` 渲染成图片，其余按纯文本（旧消息兼容） */
-  _fillBubble(box, text) {
-    const m = /^\[img\]([\s\S]+?)\[\/img\]\n?([\s\S]*)$/.exec(text || '');
-    if (!m) {
-      this._fillMentions(box, text || '');
-      return;
-    }
-    // ⚠️ `[img]` 里的地址是**对端可控**的（composer 早就不再产生这种消息了，
-    //    所以任何 `[img]` 都是手工构造的）。放任任意 URL 会让房间里每个客户端
-    //    在气泡进入视口时向攻击者服务器发起请求：泄露 IP/在线时间/房间归属，
-    //    还能拿 `http://127.0.0.1:...` 做内网盲探测（F14）。
-    //    所以白名单只放 `data:image/*` 与 `blob:`（旧消息用的就是这两种）。
-    const src = String(m[1] || '').trim();
-    const allowed = /^data:image\//i.test(src) || /^blob:/i.test(src);
-    if (!allowed) {
-      const blocked = document.createElement('div');
-      blocked.className = 'bubble__blocked';
-      blocked.textContent = '已阻止一张外部图片（可能用于追踪）';
-      box.appendChild(blocked);
+  /**
+   * 填充气泡内容。返回"这条消息是否支持 Markdown 排版"（调用方据此挂「原文」开关）。
+   *
+   * 渲染规则（2026-10-15）：
+   *   · `[img]` → 原有白名单通道，不变；
+   *   · 带 `@<id8>` 的消息 → 走 chip 路径（Markdown 与 chip 混排暂不支持，
+   *     agent 输出里两者基本不同时出现）；
+   *   · 其余：`looksLikeMarkdown()` 命中才渲染 Markdown，否则维持纯文本
+   *     （普通聊天里 "2*3=6"、"- 好的" 不该被改排版）。
+   *   · 用户切过「原文」的消息（`_rawMd`）直接按纯文本渲染。
+   */
+  _fillBubble(box, text, id) {
+    const raw = String(text || '');
+    const m = /^\[img\]([\s\S]+?)\[\/img\]\n?([\s\S]*)$/.exec(raw);
+    if (m) {
+      box.classList.remove('bubble--md');
+      delete box.dataset.mentionSrc;
+      // ⚠️ `[img]` 里的地址是**对端可控**的（composer 早就不再产生这种消息了，
+      //    所以任何 `[img]` 都是手工构造的）。放任任意 URL 会让房间里每个客户端
+      //    在气泡进入视口时向攻击者服务器发起请求：泄露 IP/在线时间/房间归属，
+      //    还能拿 `http://127.0.0.1:...` 做内网盲探测（F14）。
+      //    所以白名单只放 `data:image/*` 与 `blob:`（旧消息用的就是这两种）。
+      const src = String(m[1] || '').trim();
+      const allowed = /^data:image\//i.test(src) || /^blob:/i.test(src);
+      if (!allowed) {
+        const blocked = document.createElement('div');
+        blocked.className = 'bubble__blocked';
+        blocked.textContent = '已阻止一张外部图片（可能用于追踪）';
+        box.appendChild(blocked);
+      } else {
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = '图片';
+        img.loading = 'lazy';
+        img.referrerPolicy = 'no-referrer';
+        img.onclick = () => this.viewImage(src); // 内部查看器，不再开新标签（src 已白名单校验）
+        box.appendChild(img);
+      }
       if (m[2]) {
         const cap = document.createElement('div');
         cap.style.marginTop = '4px';
         this._fillMentions(cap, m[2]);
         box.appendChild(cap);
       }
-      return;
+      return false;
     }
-    const img = document.createElement('img');
-    img.src = src;
-    img.alt = '图片';
-    img.loading = 'lazy';
-    img.referrerPolicy = 'no-referrer';
-    img.onclick = () => this.viewImage(src); // 内部查看器，不再开新标签（src 已白名单校验）
-    box.appendChild(img);
-    if (m[2]) {
-      const cap = document.createElement('div');
-      cap.style.marginTop = '4px';
-      this._fillMentions(cap, m[2]);
-      box.appendChild(cap);
+
+    // 带 @<id8> 的消息走 chip 路径（Markdown 与 chip 混排暂不支持——agent 输出里
+    // 两者基本不同时出现）；其余：**像 Markdown 才渲染**，普通聊天维持纯文本
+    //（"2*3=6"、"- 好的" 不该被改排版）。用户切过「原文」的消息按纯文本渲染。
+    const self = { id: net.endpoint_id?.() ?? '', nickname: net.myNickname?.() ?? store.nick() };
+    const mdCapable =
+      MD.looksLikeMarkdown(raw) &&
+      !segments(raw, currentMembers(), self).some((seg) => seg.type === 'mention');
+    if (mdCapable && !this._rawMd.has(id)) {
+      box.replaceChildren();
+      box.classList.add('bubble--md');
+      delete box.dataset.mentionSrc;
+      MD.renderMarkdownInto(box, raw);
+    } else {
+      box.classList.remove('bubble--md');
+      this._fillMentions(box, raw);
     }
+    return mdCapable;
+  },
+
+  /**
+   * 「原文 / 排版」开关。挂在 `.msg__meta` 的**右端**（正好在气泡右上角上方）：
+   * 放进气泡内部会遮正文/时间，也会污染 `.bubble` 的 textContent
+   * （e2e 的 `__state().messages` 直接读它做断言）。
+   */
+  _mountRawToggle(meta, box, m) {
+    if (!meta) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'bubble__md-toggle';
+    const sync = () => {
+      const isRaw = this._rawMd.has(m.id);
+      btn.classList.toggle('is-raw', isRaw);
+      btn.title = isRaw ? '切回 Markdown 排版' : '切到原文（方便原样复制）';
+      btn.setAttribute('aria-label', isRaw ? '查看排版' : '查看原文');
+    };
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this._rawMd.has(m.id)) this._rawMd.delete(m.id);
+      else this._rawMd.add(m.id);
+      this._fillBubble(box, m.text, m.id);
+      sync();
+    });
+    sync();
+    meta.appendChild(btn);
   },
 
   /**

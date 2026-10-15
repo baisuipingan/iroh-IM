@@ -97,4 +97,6 @@ run_case "mention-id"      scripts/e2e/mention-id.py
 run_case "profile"         scripts/e2e/profile.py
 # 昵称兜底：空昵称的消息/成员不能再显示成"空白名字 + ? 头像"（只兜显示层，不动协议）
 run_case "nickname-fallback" scripts/e2e/nickname-fallback.py
+# Markdown 气泡：渲染 / 「原文」开关 / XSS 安全 / 普通消息不误渲染（2026-10-15）
+run_case "markdown"        scripts/e2e/markdown.py
 exit "$fail"
