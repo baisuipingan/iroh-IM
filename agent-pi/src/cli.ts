@@ -14,10 +14,11 @@ import type { AgentBrain } from './agent-io/index.ts';
 import { AgentClient } from './room/client.ts';
 import { CommandBrain } from './agent-io/command.ts';
 import { defaultRules, parseRuleSpecs, RuleBrain } from './agent-io/rule.ts';
-import { ensureLocalConfig } from './room/bootstrap.ts';
+import { agentHomeDir, ensureLocalConfig } from './room/bootstrap.ts';
 import { announceProfileOnJoin } from './room/profile.ts';
 import { applyPreset } from './room/presets.ts';
 import { attachJoinBackfill } from './room/backfill.ts';
+import { acquireProcessLock } from './room/process-lock.ts';
 
 /**
  * 默认接入站点：本机缺配置时从这里拉 relay-config.json。
@@ -527,11 +528,15 @@ async function main(): Promise<void> {
   const room = flags.room ?? '';
   if (!room) throw new Error(`缺少 --room（房间名就是访问凭据）\n\n${USAGE}`);
 
+  const lock = acquireProcessLock(agentHomeDir());
+  process.once('exit', () => lock.release());
   const log = (line: string): void => console.error(`[agent-pi] ${line}`);
   // 预设：只填没显式给的开关（显式参数优先）。未知 preset 直接抛错。
   const preset = applyPreset(flags);
   if (preset) {
-    log(`[cli] preset=${preset} → brain=${flags.brain}${flags.acpBin ? ` acp-bin=${flags.acpBin}` : ''}${flags.acpArgs ? ` acp-args=${flags.acpArgs}` : ''}`);
+    log(
+      `[cli] preset=${preset} → brain=${flags.brain}${flags.acpBin ? ` acp-bin=${flags.acpBin}` : ''}${flags.acpArgs ? ` acp-args=${flags.acpArgs}` : ''}`,
+    );
   }
   const nick = flags.nick;
   const bin = flags.agentBin ?? defaultAgentBin();

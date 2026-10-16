@@ -81,6 +81,8 @@ export class AgentClient extends EventEmitter {
   #restarts = 0;
   /** 同一时刻只能有一个自动重启循环，避免多个 serve 同时持有同一身份。 */
   #restartLoopRunning = false;
+  /** 子进程在重启循环中又退出时，延后到当前循环结束后补跑一次。 */
+  #restartRequested = false;
   #pingTimer: ReturnType<typeof setInterval> | null = null;
   #pingFailures = 0;
   #log: (line: string) => void;
@@ -102,26 +104,28 @@ export class AgentClient extends EventEmitter {
   /** 启动并等到 hello（含连中继，最多 60s）。协议不匹配会直接抛错。 */
   async start(): Promise<HelloFrame> {
     this.#stopping = false;
+    this.#restartRequested = false;
     const child = this.#spawn();
     let hello: HelloFrame;
     try {
       hello = await this.#waitHello(child, 60_000);
+      // 协议不匹配时不能留下一个仍占用 identity.key 的 serve。
+      if (hello.chatProtocol !== CHAT_PROTOCOL) {
+        throw new AgentError(
+          'protocolMismatch',
+          `agent 报告 chatProtocol=${hello.chatProtocol}，适配器只支持 ${CHAT_PROTOCOL}；请同步升级（见 docs/deploy.md）`,
+        );
+      }
+      if (hello.v !== IPC_VERSION) {
+        throw new AgentError('protocolMismatch', `线协议 v${hello.v} != v${IPC_VERSION}`);
+      }
     } catch (error) {
+      if ((error as AgentError).code === 'protocolMismatch') this.#stopping = true;
       if (this.#child === child && !this.#childExited) {
         child.kill('SIGKILL');
         await Promise.race([once(child, 'close'), sleep(2_000)]);
       }
       throw error;
-    }
-    // ⚠️ 聊天协议版本不匹配必须拒绝：跨版本互认的结果是验签失败、消息静默丢失。
-    if (hello.chatProtocol !== CHAT_PROTOCOL) {
-      throw new AgentError(
-        'protocolMismatch',
-        `agent 报告 chatProtocol=${hello.chatProtocol}，适配器只支持 ${CHAT_PROTOCOL}；请同步升级（见 docs/deploy.md）`,
-      );
-    }
-    if (hello.v !== IPC_VERSION) {
-      throw new AgentError('protocolMismatch', `线协议 v${hello.v} != v${IPC_VERSION}`);
     }
     this.#startWatchdog();
     this.#startStaleWatchdog();
@@ -216,7 +220,9 @@ export class AgentClient extends EventEmitter {
   /** 优雅停止：shutdown → 等退出 → 兜底 SIGKILL。幂等。 */
   async stop(): Promise<void> {
     this.#stopping = true;
+    this.#restartRequested = false;
     this.#stopWatchdog();
+    this.#failHelloWaiters(new AgentError('stopped', '客户端已停止'));
     const child = this.#child;
     if (!child) return;
     // ⚠️ 子进程可能**早就退出了**：Ctrl-C 会发给整个进程组，`iroh-agent serve`
@@ -325,7 +331,11 @@ export class AgentClient extends EventEmitter {
       pending.reject(new AgentError(frame.error?.code ?? 'internal', frame.error?.message ?? ''));
   }
 
-  #onClose(child: ChildProcessWithoutNullStreams, code: number | null, signal: string | null): void {
+  #onClose(
+    child: ChildProcessWithoutNullStreams,
+    code: number | null,
+    signal: string | null,
+  ): void {
     // 旧子进程的 close 不能清空新子进程的引用，也不能再开一条重启循环。
     if (child !== this.#child) {
       this.#log(`[client] 忽略旧 agent 子进程退出（code=${code} signal=${signal}）`);
@@ -344,52 +354,62 @@ export class AgentClient extends EventEmitter {
   }
 
   #scheduleRestart(): void {
-    if (this.#restartLoopRunning || this.#stopping) return;
+    if (this.#stopping) return;
+    if (this.#restartLoopRunning) {
+      this.#restartRequested = true;
+      return;
+    }
     this.#restartLoopRunning = true;
     void this.#restartLoop().finally(() => {
       this.#restartLoopRunning = false;
+      if (this.#restartRequested && !this.#stopping) {
+        this.#restartRequested = false;
+        this.#scheduleRestart();
+      }
     });
   }
 
   async #restartLoop(): Promise<void> {
-    try {
-      while (!this.#stopping) {
-        const backoff = this.#opts.restartBackoffMs ?? DEFAULT_BACKOFF;
-        const wait = backoff[Math.min(this.#restarts, backoff.length - 1)];
-        this.#restarts += 1;
-        this.#log(`[client] ${wait}ms 后重启（第 ${this.#restarts} 次）`);
+    while (!this.#stopping) {
+      const backoff = this.#opts.restartBackoffMs ?? DEFAULT_BACKOFF;
+      const wait = backoff[Math.min(this.#restarts, backoff.length - 1)];
+      this.#restarts += 1;
+      this.#log(`[client] ${wait}ms 后重启（第 ${this.#restarts} 次）`);
+      await sleep(wait);
+      if (this.#stopping) return;
+      let child: ChildProcessWithoutNullStreams;
+      try {
+        child = this.#spawn();
+      } catch (error) {
+        this.#log(`[client] 重启前发现已有 agent 子进程：${(error as Error).message}`);
         await sleep(wait);
-        if (this.#stopping) return;
-        let child: ChildProcessWithoutNullStreams;
-        try {
-          child = this.#spawn();
-        } catch (error) {
-          this.#log(`[client] 重启前发现已有 agent 子进程：${(error as Error).message}`);
-          await sleep(wait);
+        continue;
+      }
+      try {
+        const hello = await this.#waitHello(child, 60_000);
+        // close 可能紧跟在 hello 后到达。不能把一个已退出的子进程当作
+        // 重启成功，否则本次 onClose 会看到 restartLoop 正在运行而丢掉下一轮。
+        if (this.#child !== child || this.#childExited || !this.#helloFrame) {
+          this.#log('[client] 重启后 agent 立即退出，继续重启');
           continue;
         }
-        try {
-          const hello = await this.#waitHello(child, 60_000);
-          this.#log(`[client] 已重启并重新握手：endpointId=${hello.endpointId}`);
-          this.#restarts = 0;
-          // #onClose 会先停掉看门狗；重启成功后必须完整恢复，否则第一次
-          // 自动重连之后就失去“睡醒后自愈”的能力。
-          this.#startWatchdog();
-          this.#startStaleWatchdog();
-          this.emit('restarted', hello);
-          return;
-        } catch (error) {
-          this.#log(`[client] 重启失败：${(error as Error).message}`);
-          // 握手超时不能把一个没有协议输出的旧 serve 留在后台；否则下一轮
-          // restart 会和它共用 identity.key，relay 看到的就是 same endpoint id。
-          if (this.#child === child && !this.#childExited) {
-            child.kill('SIGKILL');
-            await Promise.race([once(child, 'close'), sleep(2_000)]);
-          }
+        this.#log(`[client] 已重启并重新握手：endpointId=${hello.endpointId}`);
+        this.#restarts = 0;
+        // #onClose 会先停掉看门狗；重启成功后必须完整恢复，否则第一次
+        // 自动重连之后就失去“睡醒后自愈”的能力。
+        this.#startWatchdog();
+        this.#startStaleWatchdog();
+        this.emit('restarted', hello);
+        return;
+      } catch (error) {
+        this.#log(`[client] 重启失败：${(error as Error).message}`);
+        // 握手超时不能把一个没有协议输出的旧 serve 留在后台；否则下一轮
+        // restart 会和它共用 identity.key，relay 看到的就是 same endpoint id。
+        if (this.#child === child && !this.#childExited) {
+          child.kill('SIGKILL');
+          await Promise.race([once(child, 'close'), sleep(2_000)]);
         }
       }
-    } finally {
-      this.#restartLoopRunning = false;
     }
   }
 
@@ -416,6 +436,15 @@ export class AgentClient extends EventEmitter {
   #rejectHello(child: ChildProcessWithoutNullStreams, error: Error): void {
     const waiters = this.#helloWaiters.filter((w) => w.child === child);
     this.#helloWaiters = this.#helloWaiters.filter((w) => w.child !== child);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+  }
+
+  #failHelloWaiters(error: Error): void {
+    const waiters = this.#helloWaiters;
+    this.#helloWaiters = [];
     for (const waiter of waiters) {
       clearTimeout(waiter.timer);
       waiter.reject(error);

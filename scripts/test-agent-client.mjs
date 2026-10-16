@@ -14,7 +14,7 @@
  * ==========================================================================*/
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { appendFileSync, chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -48,6 +48,7 @@ const hello = { v: 1, type: 'hello', agent: 'fake/1', endpointId: 'c'.repeat(64)
 if (mode !== 'restart-race' || priorStarts === 0) process.stdout.write(JSON.stringify(hello) + '\\n');
 if (mode === 'die') setTimeout(() => process.exit(0), 300);
 if (mode === 'restart-race') setTimeout(() => process.exit(0), priorStarts === 0 ? 120 : 80);
+if (mode === 'restart-after-hello') setTimeout(() => process.exit(0), 80);
 const ev = (seq, event) => process.stdout.write(JSON.stringify({ v: 1, type: 'event', seq, event }) + '\\n');
 if (mode === 'quiet' || mode === 'healthy' || mode === 'relay-spam' || mode === 'relay-dead') {
   setTimeout(() => ev(1, { type: 'joined', room: 'r' }), 20);
@@ -86,7 +87,6 @@ function makeClient(mode, opts = {}) {
   if (opts.eventFile) env.FAKE_EVENT_FILE = opts.eventFile;
   return new AgentClient({
     bin: wrapper,
-    env,
     pingIntervalMs: 0,
     restartBackoffMs: [60_000], // 默认测试窗口内不要自动重启
     log: () => {},
@@ -177,6 +177,30 @@ test('重启子进程在握手前崩溃：不会因旧 hello 状态启动第二�
   assert.equal(maxConcurrent, 1, `同一时刻只能有一个 serve：${lifecycle.join(',')}`);
 });
 
+test('重启子进程刚握手就退出：不会吞掉下一轮重启', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'restart-after-hello-'));
+  const count = join(dir, 'count.txt');
+  const events = join(dir, 'events.txt');
+  const client = makeClient('restart-after-hello', {
+    countFile: count,
+    eventFile: events,
+    restartBackoffMs: [100],
+  });
+  await client.start();
+  await sleep(900);
+  await client.stop();
+
+  const lifecycle = readFileSync(events, 'utf8').trim().split('\n').filter(Boolean);
+  let current = 0;
+  let maxConcurrent = 0;
+  for (const entry of lifecycle) {
+    current += entry.startsWith('+') ? 1 : -1;
+    maxConcurrent = Math.max(maxConcurrent, current);
+  }
+  assert.ok(startsOf(count) >= 3, `应当继续重启（实际启动 ${startsOf(count)} 次）`);
+  assert.equal(maxConcurrent, 1, `同一时刻只能有一个 serve：${lifecycle.join(',')}`);
+});
+
 test('连接看门狗：relayStatus 刷屏 ≠ 连通（中继横跳骗过看门狗的那次）', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'relayspam-'));
   const count = join(dir, 'count.txt');
@@ -189,7 +213,10 @@ test('连接看门狗：relayStatus 刷屏 ≠ 连通（中继横跳骗过看门
   });
   await client.start();
   await sleep(3000);
-  assert.ok(startsOf(count) >= 2, `relayStatus 刷屏也应当判定失联并重启（实际启动 ${startsOf(count)} 次）`);
+  assert.ok(
+    startsOf(count) >= 2,
+    `relayStatus 刷屏也应当判定失联并重启（实际启动 ${startsOf(count)} 次）`,
+  );
   assert.ok(
     logs.some((l) => l.includes('强制重启 agent 进程重连') && l.includes('relayStatus')),
     `日志应说明中继事件不算数：${logs.join(' | ')}`,
