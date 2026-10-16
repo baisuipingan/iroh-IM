@@ -25,11 +25,29 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const FAKE_SRC = `
 const fs = require('node:fs');
 const mode = process.env.FAKE_MODE ?? 'stay';
-if (process.env.FAKE_COUNT_FILE) fs.appendFileSync(process.env.FAKE_COUNT_FILE, mode + '\\n');
+const countPath = process.env.FAKE_COUNT_FILE;
+const priorStarts = countPath && fs.existsSync(countPath)
+  ? fs.readFileSync(countPath, 'utf8').trim().split('\\n').filter(Boolean).length
+  : 0;
+if (countPath) fs.appendFileSync(countPath, mode + '\\n');
+const eventPath = process.env.FAKE_EVENT_FILE;
+let active = 0;
+if (eventPath) {
+  const statePath = eventPath + '.active';
+  active = Number(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : 0) + 1;
+  fs.writeFileSync(statePath, String(active));
+  fs.appendFileSync(eventPath, '+' + active + '\\n');
+  process.on('exit', () => {
+    const current = Number(fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : 1);
+    fs.writeFileSync(statePath, String(Math.max(0, current - 1)));
+    fs.appendFileSync(eventPath, '-' + Math.max(0, current - 1) + '\\n');
+  });
+}
 const hello = { v: 1, type: 'hello', agent: 'fake/1', endpointId: 'c'.repeat(64),
                 chatProtocol: 'v6', nickname: 't', relay: null };
-process.stdout.write(JSON.stringify(hello) + '\\n');
+if (mode !== 'restart-race' || priorStarts === 0) process.stdout.write(JSON.stringify(hello) + '\\n');
 if (mode === 'die') setTimeout(() => process.exit(0), 300);
+if (mode === 'restart-race') setTimeout(() => process.exit(0), priorStarts === 0 ? 120 : 80);
 const ev = (seq, event) => process.stdout.write(JSON.stringify({ v: 1, type: 'event', seq, event }) + '\\n');
 if (mode === 'quiet' || mode === 'healthy' || mode === 'relay-spam' || mode === 'relay-dead') {
   setTimeout(() => ev(1, { type: 'joined', room: 'r' }), 20);
@@ -65,6 +83,7 @@ function makeClient(mode, opts = {}) {
   chmodSync(wrapper, 0o755);
   const env = { FAKE_MODE: mode };
   if (opts.countFile) env.FAKE_COUNT_FILE = opts.countFile;
+  if (opts.eventFile) env.FAKE_EVENT_FILE = opts.eventFile;
   return new AgentClient({
     bin: wrapper,
     env,
@@ -131,6 +150,31 @@ test('并发 start 只允许一个 serve 子进程，避免同一身份互相顶
   await first;
   assert.equal(startsOf(count), 1, '并发 start 不能留下第二个 serve');
   await client.stop();
+});
+
+test('重启子进程在握手前崩溃：不会因旧 hello 状态启动第二条重启循环', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'restart-race-'));
+  const count = join(dir, 'count.txt');
+  const events = join(dir, 'events.txt');
+  const client = makeClient('restart-race', {
+    countFile: count,
+    eventFile: events,
+    restartBackoffMs: [100],
+  });
+  await client.start();
+  await once(client, 'exit');
+  await sleep(1200);
+  await client.stop();
+
+  const lifecycle = readFileSync(events, 'utf8').trim().split('\\n').filter(Boolean);
+  let current = 0;
+  let maxConcurrent = 0;
+  for (const entry of lifecycle) {
+    current += entry.startsWith('+') ? 1 : -1;
+    maxConcurrent = Math.max(maxConcurrent, current);
+  }
+  assert.ok(startsOf(count) >= 3, `应当持续串行重试（实际启动 ${startsOf(count)} 次）`);
+  assert.equal(maxConcurrent, 1, `同一时刻只能有一个 serve：${lifecycle.join(',')}`);
 });
 
 test('连接看门狗：relayStatus 刷屏 ≠ 连通（中继横跳骗过看门狗的那次）', async () => {

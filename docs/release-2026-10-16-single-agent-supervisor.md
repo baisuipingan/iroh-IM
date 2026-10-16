@@ -32,7 +32,7 @@
 
 | 项 | 结果 |
 |---|---|
-| `scripts/test-agent-client.mjs` | 7/7：退出速度、连续两次失联恢复、relayStatus 误导、并发 start 单实例、正常连接不误杀 |
+| `scripts/test-agent-client.mjs` | 8/8：退出速度、连续两次失联恢复、relayStatus 误导、并发 start 单实例、握手前崩溃不累积、正常连接不误杀 |
 | agent-pi TypeScript 类型检查 | 通过 |
 | 真实 Release 二进制 | 发布后复跑隔离房间 e2e：桥重启窗口补投回复 `pong`，第二次重启不重复回复 |
 | 当前本机进程 | 旧版重复子进程已清理，room-bridge 重启后只保留 1 个 `iroh-agent serve` |
