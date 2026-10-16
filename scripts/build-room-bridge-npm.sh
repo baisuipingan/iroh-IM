@@ -19,7 +19,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUN="${BUN:-bun}"
 STAGE="$ROOT/dist/npm-room-bridge"
-VERSION="${VERSION:-0.2.5}"
+VERSION="${VERSION:-0.2.6}"
 
 command -v "$BUN" >/dev/null 2>&1 || { echo "❌ 找不到 bun（curl -fsSL https://bun.sh/install | bash）" >&2; exit 1; }
 

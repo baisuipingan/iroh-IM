@@ -114,11 +114,22 @@ test('连接看门狗：进房后长时间没有事件 → 重启 serve 重连�
   });
   await client.start();
   await sleep(3000);
-  assert.ok(startsOf(count) >= 2, `应当重启过 serve（实际启动 ${startsOf(count)} 次）`);
+  assert.ok(startsOf(count) >= 3, `重启成功后看门狗仍应继续工作（实际启动 ${startsOf(count)} 次）`);
   assert.ok(
     logs.some((l) => l.includes('强制重启 agent 进程重连')),
     `应有明确的"重启"日志：${logs.join(' | ')}`,
   );
+  await client.stop();
+});
+
+test('并发 start 只允许一个 serve 子进程，避免同一身份互相顶掉', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'single-start-'));
+  const count = join(dir, 'count.txt');
+  const client = makeClient('stay', { countFile: count });
+  const first = client.start();
+  await assert.rejects(client.start(), /已有 agent 子进程在运行/);
+  await first;
+  assert.equal(startsOf(count), 1, '并发 start 不能留下第二个 serve');
   await client.stop();
 });
 

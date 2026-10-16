@@ -49,6 +49,7 @@ interface Pending {
 }
 
 interface HelloWaiter {
+  child: ChildProcessWithoutNullStreams;
   resolve: (hello: HelloFrame) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -67,8 +68,6 @@ export class AgentClient extends EventEmitter {
   #helloWaiters: HelloWaiter[] = [];
   #seq = 0;
   #helloFrame: HelloFrame | null = null;
-  /** 至少成功握手过一次（决定崩溃后是否值得自动重启：路径写错就别无限重试） */
-  #everHello = false;
   /** 子进程是否已经退出（`#onClose` 置位）——退出流程靠它跳过"白等 close" */
   #childExited = true;
   /** 最近一次收到任何房间事件的时间（连接看门狗的"心跳"） */
@@ -80,6 +79,8 @@ export class AgentClient extends EventEmitter {
   #staleTimer: ReturnType<typeof setInterval> | null = null;
   #stopping = false;
   #restarts = 0;
+  /** 同一时刻只能有一个自动重启循环，避免多个 serve 同时持有同一身份。 */
+  #restartLoopRunning = false;
   #pingTimer: ReturnType<typeof setInterval> | null = null;
   #pingFailures = 0;
   #log: (line: string) => void;
@@ -101,8 +102,17 @@ export class AgentClient extends EventEmitter {
   /** 启动并等到 hello（含连中继，最多 60s）。协议不匹配会直接抛错。 */
   async start(): Promise<HelloFrame> {
     this.#stopping = false;
-    this.#spawn();
-    const hello = await this.#waitHello(60_000);
+    const child = this.#spawn();
+    let hello: HelloFrame;
+    try {
+      hello = await this.#waitHello(child, 60_000);
+    } catch (error) {
+      if (this.#child === child && !this.#childExited) {
+        child.kill('SIGKILL');
+        await Promise.race([once(child, 'close'), sleep(2_000)]);
+      }
+      throw error;
+    }
     // ⚠️ 聊天协议版本不匹配必须拒绝：跨版本互认的结果是验签失败、消息静默丢失。
     if (hello.chatProtocol !== CHAT_PROTOCOL) {
       throw new AgentError(
@@ -237,7 +247,10 @@ export class AgentClient extends EventEmitter {
 
   // ------------------------------------------------------------------ 内部
 
-  #spawn(): void {
+  #spawn(): ChildProcessWithoutNullStreams {
+    if (this.#child && !this.#childExited) {
+      throw new AgentError('alreadyRunning', '已有 agent 子进程在运行，拒绝重复启动');
+    }
     const args = ['serve', ...(this.#opts.args ?? [])];
     this.#log(`[client] 启动：${this.#opts.bin} ${args.join(' ')}`);
     const child = spawn(this.#opts.bin, args, {
@@ -250,17 +263,21 @@ export class AgentClient extends EventEmitter {
     this.#joinedSeen = false;
     this.#lastRoomEventAt = Date.now();
 
-    createInterface({ input: child.stdout }).on('line', (line) => this.#onLine(line));
+    createInterface({ input: child.stdout }).on('line', (line) => this.#onLine(child, line));
     createInterface({ input: child.stderr }).on('line', (line) => this.#log(`[agent] ${line}`));
 
     child.on('error', (error) => {
       this.#log(`[client] 进程错误：${error.message}`);
-      this.#rejectHello(new AgentError('spawnFailed', error.message));
+      this.#rejectHello(child, new AgentError('spawnFailed', error.message));
     });
-    child.on('close', (code, signal) => this.#onClose(code, signal));
+    child.on('close', (code, signal) => this.#onClose(child, code, signal));
+    return child;
   }
 
-  #onLine(line: string): void {
+  #onLine(child: ChildProcessWithoutNullStreams, line: string): void {
+    // 一个旧子进程的管道可能在新子进程启动后才关闭。它的任何协议帧都必须丢弃，
+    // 否则旧 hello/reply 会污染当前子进程的状态。
+    if (child !== this.#child) return;
     const text = line.trim();
     if (!text) return;
     let frame: Frame;
@@ -274,8 +291,7 @@ export class AgentClient extends EventEmitter {
     switch (frame.type) {
       case 'hello':
         this.#helloFrame = frame;
-        this.#everHello = true;
-        this.#resolveHello(frame);
+        this.#resolveHello(child, frame);
         this.emit('hello', frame);
         break;
       case 'reply':
@@ -309,63 +325,97 @@ export class AgentClient extends EventEmitter {
       pending.reject(new AgentError(frame.error?.code ?? 'internal', frame.error?.message ?? ''));
   }
 
-  #onClose(code: number | null, signal: string | null): void {
-    const wasRunning = this.#everHello;
+  #onClose(child: ChildProcessWithoutNullStreams, code: number | null, signal: string | null): void {
+    // 旧子进程的 close 不能清空新子进程的引用，也不能再开一条重启循环。
+    if (child !== this.#child) {
+      this.#log(`[client] 忽略旧 agent 子进程退出（code=${code} signal=${signal}）`);
+      return;
+    }
+    const wasRunning = this.#helloFrame !== null;
     this.#log(`[client] agent 进程退出（code=${code} signal=${signal}）`);
     this.#childExited = true;
     this.#child = null;
     this.#helloFrame = null;
     this.#stopWatchdog();
     this.#failPending(new AgentError('processExited', 'agent 进程已退出'));
-    this.#rejectHello(new AgentError('processExited', 'agent 进程已退出'));
+    this.#rejectHello(child, new AgentError('processExited', 'agent 进程已退出'));
     this.emit('exit', { code, signal });
-    if (!this.#stopping && wasRunning) void this.#restartLoop();
+    if (!this.#stopping && wasRunning) this.#scheduleRestart();
+  }
+
+  #scheduleRestart(): void {
+    if (this.#restartLoopRunning || this.#stopping) return;
+    this.#restartLoopRunning = true;
+    void this.#restartLoop().finally(() => {
+      this.#restartLoopRunning = false;
+    });
   }
 
   async #restartLoop(): Promise<void> {
-    while (!this.#stopping) {
-      const backoff = this.#opts.restartBackoffMs ?? DEFAULT_BACKOFF;
-      const wait = backoff[Math.min(this.#restarts, backoff.length - 1)];
-      this.#restarts += 1;
-      this.#log(`[client] ${wait}ms 后重启（第 ${this.#restarts} 次）`);
-      await sleep(wait);
-      if (this.#stopping) return;
-      this.#spawn();
-      try {
-        const hello = await this.#waitHello(60_000);
-        this.#log(`[client] 已重启并重新握手：endpointId=${hello.endpointId}`);
-        this.#restarts = 0;
-        this.emit('restarted', hello);
-        return;
-      } catch (error) {
-        this.#log(`[client] 重启失败：${(error as Error).message}`);
+    try {
+      while (!this.#stopping) {
+        const backoff = this.#opts.restartBackoffMs ?? DEFAULT_BACKOFF;
+        const wait = backoff[Math.min(this.#restarts, backoff.length - 1)];
+        this.#restarts += 1;
+        this.#log(`[client] ${wait}ms 后重启（第 ${this.#restarts} 次）`);
+        await sleep(wait);
+        if (this.#stopping) return;
+        let child: ChildProcessWithoutNullStreams;
+        try {
+          child = this.#spawn();
+        } catch (error) {
+          this.#log(`[client] 重启前发现已有 agent 子进程：${(error as Error).message}`);
+          await sleep(wait);
+          continue;
+        }
+        try {
+          const hello = await this.#waitHello(child, 60_000);
+          this.#log(`[client] 已重启并重新握手：endpointId=${hello.endpointId}`);
+          this.#restarts = 0;
+          // #onClose 会先停掉看门狗；重启成功后必须完整恢复，否则第一次
+          // 自动重连之后就失去“睡醒后自愈”的能力。
+          this.#startWatchdog();
+          this.#startStaleWatchdog();
+          this.emit('restarted', hello);
+          return;
+        } catch (error) {
+          this.#log(`[client] 重启失败：${(error as Error).message}`);
+          // 握手超时不能把一个没有协议输出的旧 serve 留在后台；否则下一轮
+          // restart 会和它共用 identity.key，relay 看到的就是 same endpoint id。
+          if (this.#child === child && !this.#childExited) {
+            child.kill('SIGKILL');
+            await Promise.race([once(child, 'close'), sleep(2_000)]);
+          }
+        }
       }
+    } finally {
+      this.#restartLoopRunning = false;
     }
   }
 
-  #waitHello(timeoutMs: number): Promise<HelloFrame> {
-    if (this.#helloFrame) return Promise.resolve(this.#helloFrame);
+  #waitHello(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<HelloFrame> {
+    if (this.#child === child && this.#helloFrame) return Promise.resolve(this.#helloFrame);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#helloWaiters = this.#helloWaiters.filter((w) => w.timer !== timer);
         reject(new AgentError('helloTimeout', `${timeoutMs}ms 内没有收到 hello`));
       }, timeoutMs);
-      this.#helloWaiters.push({ resolve, reject, timer });
+      this.#helloWaiters.push({ child, resolve, reject, timer });
     });
   }
 
-  #resolveHello(hello: HelloFrame): void {
-    const waiters = this.#helloWaiters;
-    this.#helloWaiters = [];
+  #resolveHello(child: ChildProcessWithoutNullStreams, hello: HelloFrame): void {
+    const waiters = this.#helloWaiters.filter((w) => w.child === child);
+    this.#helloWaiters = this.#helloWaiters.filter((w) => w.child !== child);
     for (const waiter of waiters) {
       clearTimeout(waiter.timer);
       waiter.resolve(hello);
     }
   }
 
-  #rejectHello(error: Error): void {
-    const waiters = this.#helloWaiters;
-    this.#helloWaiters = [];
+  #rejectHello(child: ChildProcessWithoutNullStreams, error: Error): void {
+    const waiters = this.#helloWaiters.filter((w) => w.child === child);
+    this.#helloWaiters = this.#helloWaiters.filter((w) => w.child !== child);
     for (const waiter of waiters) {
       clearTimeout(waiter.timer);
       waiter.reject(error);
