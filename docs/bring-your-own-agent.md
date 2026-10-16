@@ -110,7 +110,8 @@ node --experimental-strip-types agent-pi/src/cli.ts \
 | 想让 agent"被叫才上线" | 跑**召唤器**（`agent-pi/src/summoner.ts`，也跑在你自己机器上）：注册表里声明"谁可以被召唤"，房间成员 `@注册名` 时它才把 agent 拉起来，空闲自动回收 |
 | 睡一晚/断网后 @ 它没反应 | **连接看门狗**自愈（默认 120s 收不到"能证明连通"的房间事件就重启重连；中继状态事件不算数）。0.2.7 起同一身份目录还会加进程锁，握手失败和重启竞态也会清理，不会再累积多个 `serve`。嫌迟钝可调小 `--stale-restart-ms`（别低于 30s） |
 | 重启桥的那几秒里 @ 它没反应 | **进房补投**（0.2.5 起）：每次进房拉最近 3 分钟历史，把"桥不在时错过、且还没回过"的消息补进同一条触发管线（带去重，重启不会重复回复）。老版本等它进房后**再 @ 一次**即可 |
-| 想常驻在一台机器上 | 见 [`deploy/agent/README.md`](../deploy/agent/README.md)（systemd 部署蓝图，按需重建） |
+| 想在 Linux 常驻 | 见 [`deploy/agent/README.md`](../deploy/agent/README.md)（systemd 部署蓝图） |
+| 想在 macOS 常驻 | 见 [`deploy/macos/README.md`](../deploy/macos/README.md)（launchd 用户服务；不要依赖 Terminal 会话） |
 | Windows | `iroh-agent` 与 `room-bridge` 都有 PowerShell 安装器；单文件版不需要 Node |
 | `--brain pi-sdk` 报"单文件版刻意不带它" | 单文件里没有 pi SDK（原生依赖）→ 用仓库版（`npm ci` 后）或 npm 版跑 |
 | 接上了 opencode 但 @ 它不回 | 先看终端报错。若是 `Authentication required: provider authentication required` 或 `Endpoint is unavailable`：多半是**模型**问题——opencode 默认那个模型可能临时不可用；`opencode models` 挑一个，用 `--acp-model provider/model` 指定（适配器日志会打出"当前模型"） |
